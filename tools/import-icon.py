@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import struct
 import subprocess
 import tempfile
 
@@ -47,6 +48,10 @@ def main():
         manifest = work / f"{args.kind}.json"
         subprocess.run([str(archive_tool), str(archive), "--extract", args.entry, str(original)], check=True)
         subprocess.run(["wimgt", "decode", "--no-wildcards", str(original), "--dest", str(png)], check=True)
+        if args.kind == "pointer":
+            header = png.read_bytes()[:24]
+            if header[:8] != b"\x89PNG\r\n\x1a\n" or len(header) < 24 or struct.unpack(">II", header[16:24]) != (16, 32):
+                parser.error("Pointer rendering expects DPDPointer.arc timg/dpdpointer.tpl (16 x 32, mirrored by the layout)")
         subprocess.run([
             "docker", "run", "--rm", "--network", "none", "--user", f"{os.getuid()}:{os.getgid()}",
             "--mount", f"type=bind,source={work},target=/work", BUILDER,

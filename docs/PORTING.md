@@ -12,14 +12,23 @@ completion does not make those interfaces portable to ARM11/PICA200.
 ## Integrated in the native bootstrap
 
 - Original `Nerve`, `Spine`, `ActorStateBase`, `ActorStateKeeper`, `NerveExecutor`,
-  `TriggerChecker`, and JGadget `hashcode` translation units compile for ARM11 without editing their sources.
+  `TriggerChecker`, `WPadButton`, `WPadStick`, and JGadget `hashcode` translation units
+  compile for ARM11 without editing their sources.
 - Original `JMapInfo` compiles through generated GCC-compatible source/header copies. These fix
   switch/goto initialization scopes, inline definitions, and unnecessarily broad SDK includes.
-  `Bcsv` validates and converts raw Wii records into aligned native-endian storage before
+  `Bcsv` validates and repacks raw Wii records into aligned native-endian storage before
   attaching that storage to the original reader. Tests exercise its actual lookup functions.
 - `compat/revolution/types.h` supplies fixed-width types without redefining C++ keywords.
 - `Input` samples logical actions through Petari's `TriggerChecker`; `toWiiInput`
   translates actions to the original Wii button bitmasks and explicit shake state.
+- `NativePad` supplies bounded KPAD samples to the original button and stick classes;
+  `MR::getWPad` resolves the owned controller. The diagnostic displays their actual output.
+  Repeat flags use elapsed time without fabricating button edges. Digital spin and stylus
+  data remain explicit boundary values until the swing/pointer and GamePadUtil work is finished.
+- Generated math headers supply real non-Metrowerks implementations for vector copying,
+  assignment, dot products, square roots, and Hermite interpolation. Scalar vector/quaternion
+  helpers preserve in-place calls. The original trig tables run with a GCC declaration fix
+  and an explicit endpoint lookup instead of indexing beyond an array into its next member.
 - Two native render targets display the touchscreen interface and a platform diagnostic.
 - Stylus gesture ownership prevents UI presses from generating shots, and allows
   aiming across 50%-transparent buttons. Touch coordinates cover the entire upper screen.
@@ -27,16 +36,19 @@ completion does not make those interfaces portable to ARM11/PICA200.
   The bootstrap probes the original star-bit layout archive and the Good Egg scenario table
   if they are present on the SD card.
 
-The `WiiInput` result is an integration boundary; it is not yet wired into `MR::getWPad`.
-No silent Wii SDK stubs are used to make gameplay appear to work.
+The WPad pointer, accelerometer, swing, and rumble device members are not installed yet.
+Do not compile callers that dereference them until their native implementations exist.
+No silent Wii SDK stubs are used to make gameplay appear to work. Native WPadReadDataInfo
+borrows its owner's sample storage rather than allocating the Wii's 120-sample IR buffer.
 
 ## Next engine work
 
 1. **Portable math and SDK surface.** Audit every Metrowerks-only function before using it.
-   For example, `JMAFastSqrt`, `JMAHermiteInterpolation`, and `gekko_ps_copy*` in
-   `JSystem/JMath/JMath.hpp` contain missing non-Metrowerks implementations; merely compiling
-   them with GCC would introduce wrong results. Replace PowerPC paired-single math with
-   tested scalar/VFP implementations. Preserve original coordinate and matrix conventions.
+   The first vector/interpolation paths are implemented and tested; matrices, projection,
+   and the remaining SDK functions still need real replacements. Scalar/VFP math does not
+   reproduce Gekko estimate rounding bit for bit. Preserve original coordinate and matrix
+   conventions, and validate camera/collision behavior with real stages. Other uncompiled
+   headers may still contain empty non-Metrowerks branches.
 2. **Endianness and resource loading.** Connect SD-backed archives to JKR resource lookup.
    Validate the BCSV/JMap adapter on actual game data, then adapt BMD/BDL, animation,
    collision, effects, layouts, and audio readers;
@@ -55,7 +67,8 @@ No silent Wii SDK stubs are used to make gameplay appear to work.
 6. **Hardware validation and optimization.** Frame time, draw count, texture/material limits,
    heap peaks, streaming stalls, suspend/resume, and input accuracy on a real 3DS.
 
-Initial performance work will assume New 3DS unless the hardware target is clarified.
+Both original and New Nintendo 3DS are targets, with New 3DS first for engine bring-up
+and initial performance work. Original 3DS needs separate memory and frame-time validation.
 The bootstrap uses ARMv6K/libctru APIs and has no New-3DS-only controls. This does not establish
 that full Galaxy gameplay can fit or run acceptably on either model.
 
@@ -79,3 +92,20 @@ holding A does not create a second jump edge, and releasing one does not release
 - Real original icon provenance and visual readability at 3DS resolution.
 - Original Mario movement and planet transitions before calling any build a gameplay port.
 - Boot and frame-time evidence on hardware before making performance claims.
+
+## Current USA disc validation
+
+The RMGE01 disc provides the original purple star-bit, camera, and mirrored half-star
+pointer textures. They load on emulated ARM through the external TPL-to-T3X pipeline.
+The actual Good Egg scenario archive is `StageData/EggStarGalaxy/EggStarGalaxyScenario.arc`;
+its six scenario records and first scenario number 1 have been read through original JMapInfo
+on emulated ARM. A boot probe is not stage execution.
+
+An ASan/UBSan host audit indexed 2,228 RARC archives with 24,788 resources and converted
+all 1,405 contained BCSV tables (10,891 records). Forty-nine animation tables required
+repacking unaligned fields; regression tests cover packed offsets and odd record strides.
+The four remaining `.arc` files are U8-format Wii HOME Menu resources, currently unsupported.
+`resource_audit` reports them and returns failure rather than counting them as validated.
+
+The portable math tests check tolerances and conventions, not bit-identical Gekko rounding.
+The native validation app has passed in Azahar; no physical console has been tested.

@@ -24,7 +24,7 @@ void Session::exeBoot() {
             assetStatus_ = "Star-bit archive: " + std::to_string(entries.size()) + " resources";
         else assetStatus_ = error;
 
-        const std::string scenarioPath = dataRoot_ + "/StageData/GoodEggGalaxy/GoodEggGalaxyScenario.arc";
+        const std::string scenarioPath = dataRoot_ + "/StageData/EggStarGalaxy/EggStarGalaxyScenario.arc";
         if (readArchive(scenarioPath.c_str(), storage, entries, bootstrapArchiveBudget, error)) {
             for (const auto& entry : entries) {
                 if (!MR::isEqualStringCase(entry.path.c_str(), "ScenarioData.bcsv")) continue;

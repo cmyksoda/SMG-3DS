@@ -20,7 +20,7 @@ void field(std::vector<std::uint8_t>& bytes,unsigned i,const char* name,unsigned
     bytes[at+8]=offset>>8;bytes[at+9]=offset;bytes[at+10]=shift;bytes[at+11]=type;
 }
 }
-int main() {
+int runBcsvTests() {
     check(JGadget::getHashCode("name")==3373707u,"original field hashing");
     constexpr unsigned dataOffset=100;
     std::vector<std::uint8_t> bytes(dataOffset+48+6,0);
@@ -51,12 +51,30 @@ int main() {
     bad=bytes;put32(bad,8,0xfffffffc);
     check(!bcsv.load({bad.data(),bad.size()},error),"invalid record offset");
     bad=bytes;bad[24]=0;bad[25]=1;
-    check(!bcsv.load({bad.data(),bad.size()},error),"misaligned numeric field rejected");
+    check(!bcsv.load({bad.data(),bad.size()},error),"incompatible numeric overlap rejected");
     bad=bytes;bad[26]=32;
     check(!bcsv.load({bad.data(),bad.size()},error),"invalid shift rejected");
     bad=bytes;bad.back()='x';
     check(!bcsv.load({bad.data(),bad.size()},error),"unterminated string table rejected");
     for(std::size_t i=0;i<bytes.size();++i)
         check(!bcsv.load({bytes.data(),i},error),"truncated table rejected");
+    std::vector<std::uint8_t> packed(56+18+6,0);
+    put32(packed,0,2); put32(packed,4,3); put32(packed,8,56); put32(packed,12,9);
+    field(packed,0,"flag",0,5,255); field(packed,1,"name",1,6); field(packed,2,"speed",5,2);
+    packed[56]=4; packed[65]=7;
+    put32(packed,57,0); put32(packed,66,2);
+    put32(packed,61,0x3fc00000); put32(packed,70,0xc0200000);
+    std::memcpy(packed.data()+74,"A\0BCD",6);
+    check(bcsv.load({packed.data(),packed.size()},error),"packed fields and odd record stride repacked");
+    check(info.getValue(0,"flag",&integer) && integer==4,"packed first row byte");
+    check(info.getValue(1,"flag",&integer) && integer==7,"packed second row byte");
+    check(info.getValue(0,"name",&string) && std::strcmp(string,"A")==0,"repacked string base");
+    check(info.getValue(1,"name",&string) && std::strcmp(string,"BCD")==0,"repacked second row string");
+    check(info.getValue(0,"speed",&real) && real==1.5f,"unaligned float decoded");
+    check(info.getValue(1,"speed",&real) && real==-2.5f,"odd-stride second row float decoded");
     std::printf("%u original JMap/BCSV checks passed\n",checks);
+    return 0;
 }
+#ifndef SMG_TEST_RUNNER
+int main() { return runBcsvTests(); }
+#endif

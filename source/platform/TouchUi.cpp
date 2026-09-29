@@ -1,4 +1,5 @@
 #include <smg/TouchUi.hpp>
+#include <smg/NativePad.hpp>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -14,6 +15,19 @@ void image(C2D_SpriteSheet sheet, float x, float y, float size, float alpha) {
     C2D_ImageTint tint;
     C2D_AlphaImageTint(&tint, alpha);
     C2D_DrawImageAt(img, x - img.subtex->width*scale/2, y - img.subtex->height*scale/2, 0, &tint, scale, scale);
+}
+void starPointer(C2D_SpriteSheet sheet, float x, float y, bool shooting) {
+    const C2D_Image left = C2D_SpriteSheetGetImage(sheet, 0);
+    // DPDPointer.brlyt: PicPointer samples DPDPointer.tpl with scale S=2, mirror S.
+    Tex3DS_SubTexture reflected = *left.subtex;
+    std::swap(reflected.left, reflected.right);
+    C2D_Image right = left;
+    right.subtex = &reflected;
+    const float scale = 28.0f / left.subtex->height;
+    C2D_ImageTint tint;
+    C2D_PlainImageTint(&tint, shooting ? color(255, 190, 80) : color(10, 110, 250), 0.55f);
+    C2D_DrawImageAt(left, x-left.subtex->width*scale, y-14, 0, &tint, scale, scale);
+    C2D_DrawImageAt(right, x, y-14, 0, &tint, scale, scale);
 }
 C2D_SpriteSheet loadIcon(const char* path) {
     C2D_SpriteSheet sheet = C2D_SpriteSheetLoad(path);
@@ -80,7 +94,7 @@ void TouchUi::button(const Rect& b, bool active, bool pressed, float alpha, C2D_
         b.x + b.width/2.0f, b.y+30.0f, 0.30f, edge, true);
 }
 
-void TouchUi::draw(const InputFrame& input, bool coreReady, const char* assetStatus) {
+void TouchUi::draw(const InputFrame& input, const NativePad& pad, bool coreReady, const char* assetStatus) {
     C2D_TextBufClear(text_);
     C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
     C2D_TargetClear(top_, color(4, 9, 26));
@@ -92,15 +106,16 @@ void TouchUi::draw(const InputFrame& input, bool coreReady, const char* assetSta
     label(coreReady ? "Petari state machine running" : "Starting Petari core...", 42, 91, 0.5f, color(151, 223, 205));
     label("Gameplay engine integration pending", 42, 113, 0.46f, color(226, 230, 244));
     char status[128];
-    std::snprintf(status, sizeof(status), "Move %+.2f  %+.2f   %s %s %s", input.moveX, input.moveY,
-        input.jump.held ? "JUMP" : "", input.spin.held ? "SPIN" : "", input.crouch.held ? "CROUCH" : "");
+    const auto& buttons = pad.buttons();
+    std::snprintf(status, sizeof(status), "WPad %+.2f  %+.2f   %s %s %s", pad.stick().mStick.x, pad.stick().mStick.y,
+        buttons.testButtonA() ? "JUMP" : "", pad.sample().swing ? "SPIN" : "", buttons.testButtonZ() ? "CROUCH" : "");
     label(status, 42, 139, 0.37f, color(192, 201, 225));
-    label(input.camera.held ? "Camera recenter input" : (input.shoot.held ? "Star-bit fire input" : "Touch to test the star pointer"),
+    label(buttons.testButtonC() ? "Camera recenter input" : (buttons.testButtonB() ? "Star-bit fire input" : "Touch to test the star pointer"),
         42, 161, 0.42f, color(230, 203, 133));
     label(assetStatus, 200, 193, 0.34f, color(173, 183, 206), true);
     label("START + SELECT: exit", 200, 216, 0.36f, color(148, 166, 195), true);
     if (input.pointer.visible) {
-        if (pointer_) image(pointer_, input.pointer.x, input.pointer.y, 28, 1.0f);
+        if (pointer_) starPointer(pointer_, input.pointer.x, input.pointer.y, input.shootMode);
         else {
             // A diagnostic reticle until the user's original pointer texture is imported.
             const auto c = input.shootMode ? color(255, 204, 112) : color(138, 221, 255);

@@ -1,4 +1,5 @@
 #include <smg/Input.hpp>
+#include <smg/NativePad.hpp>
 #include <smg/Session.hpp>
 #include <smg/TouchUi.hpp>
 #include <3ds.h>
@@ -43,16 +44,22 @@ int main() {
     smg::TouchUi ui;
     if (!ui.init()) { ui.shutdown(); C2D_Fini(); C3D_Fini(); gfxExit(); return 1; }
     smg::Input input;
+    smg::NativePad pad;
     smg::Session session("sdmc:/3ds/SMG-3DS/game");
     aptHookCookie hook;
     aptHook(&hook, aptCallback, nullptr);
+    u64 previousTime = osGetTime();
     while (aptMainLoop()) {
         const auto raw = readInput();
         if ((raw.held & (smg::Start | smg::Select)) == (smg::Start | smg::Select)) break;
-        if (suspendInput) { input.cancelGesture(); suspendInput = false; }
+        const u64 now = osGetTime();
+        double elapsed = now >= previousTime ? (now-previousTime)/1000.0 : 0.0;
+        previousTime = now;
+        if (suspendInput) { input.cancelGesture(); suspendInput = false; elapsed = 0; }
         const auto& frame = input.update(raw);
+        pad.update(frame, elapsed);
         session.updateNerve();
-        ui.draw(frame, session.booted(), session.assetStatus().c_str());
+        ui.draw(frame, pad, session.booted(), session.assetStatus().c_str());
     }
     aptUnhook(&hook);
     ui.shutdown();

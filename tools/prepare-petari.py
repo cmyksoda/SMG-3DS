@@ -23,6 +23,106 @@ text = "// Adapted from Petari: switch/goto scope fixes for GCC; no logic change
 if not destination.exists() or destination.read_text() != text:
     destination.write_text(text)
 
+
+def adapt(relative, target, replacements):
+    text = (root / relative).read_text()
+    for before, after, expected in replacements:
+        if text.count(before) != expected:
+            raise SystemExit(f"Upstream changed; review {relative}: {before!r}")
+        text = text.replace(before, after)
+    destination = output / target
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    text = "// Generated Petari adaptation; see tools/prepare-petari.py.\n" + text
+    if not destination.exists() or destination.read_text() != text:
+        destination.write_text(text)
+
+
+adapt("libs/JSystem/include/JSystem/JMath/JMath.hpp", "include/JSystem/JMath/JMath.hpp", [
+    ("#include <revolution/types.h>", "#include <revolution/types.h>\n#include <cmath>\n#include <cstring>", 1),
+    ("        return input;\n    }\n#endif", "        return input;\n    }\n#else\n    return input > 0.0f ? std::sqrt(input) : input;\n#endif", 1),
+    ("    return ff25;\n#endif", """    return ff25;
+#else
+    const f32 dt = p5 - p2;
+    const f32 t = (p1 - p2) / dt;
+    const f32 t2 = t * t;
+    const f32 t3 = t2 * t;
+    return (2*t3 - 3*t2 + 1)*p3 + (t3 - 2*t2 + t)*dt*p4
+         + (-2*t3 + 3*t2)*p6 + (t3 - t2)*dt*p7;
+#endif""", 1),
+    ("            stfs y, 8(dest)\n        }\n#endif", "            stfs y, 8(dest)\n        }\n#else\n        std::memmove(dest, src, 3*sizeof(f32));\n#endif", 1),
+    ("            psq_st z, 16(dest), 0, 0\n        }\n#endif", "            psq_st z, 16(dest), 0, 0\n        }\n#else\n        std::memmove(dest, src, 6*sizeof(f32));\n#endif", 1),
+    ("                psq_st    f_5, 0x28(pDest), 0, 0\n        }\n        ;\n#endif", "                psq_st    f_5, 0x28(pDest), 0, 0\n        }\n        ;\n#else\n        std::memmove(pDest, pSrc, 12*sizeof(f32));\n#endif", 1),
+    ("                psq_st    f_7, 0x38(pDest), 0, 0\n        }\n        ;\n#endif", "                psq_st    f_7, 0x38(pDest), 0, 0\n        }\n        ;\n#else\n        std::memmove(pDest, pSrc, 16*sizeof(f32));\n#endif", 1),
+])
+
+adapt("include/math_types.hpp", "include/math_types.hpp", [
+    ("namespace std {\n    inline f32 atan2(f32 x, f32 y) {\n        return ::atan2(x, y);\n    }\n};  // namespace std", "// Use the standard library's float atan2 overload.", 1),
+])
+
+adapt("libs/JSystem/include/JSystem/JMath/JMATrigonometric.hpp", "include/JSystem/JMath/JMATrigonometric.hpp", [
+    ("namespace std {", "namespace JMath {", 1),
+    ("struct pair {", "struct TablePair {", 1),
+    ("        pair() {", "        TablePair() {", 1),
+    ("}  // namespace std", "}  // namespace JMath", 1),
+    ("std::pair< T, T >", "TablePair< T, T >", 1),
+    ("v & LEN - 1", "v & (LEN - 1)", 2),
+    ("inline f32 JMAAcosRadian(f32 v) NO_INLINE", "NO_INLINE inline f32 JMAAcosRadian(f32 v)", 1),
+    ("inline f32 JMAAsinRadian(f32 v) NO_INLINE", "NO_INLINE inline f32 JMAAsinRadian(f32 v)", 1),
+    ("    extern TSinCosTable< 14, f32 >", "    template <> f32 TAtanTable<1024, f32>::atan2_(f32, f32) const;\n\n    extern TSinCosTable< 14, f32 >", 1),
+])
+
+adapt("src/JSystem/JMath/JMATrigonometric.cpp", "JSystem/JMath/JMATrigonometric.cpp", [
+    ("        return mTable[static_cast< s32 >(0.5f + Len * y / x)];", "        const s32 index = static_cast<s32>(0.5f + Len * y / x);\n        return index == Len ? _1000 : mTable[index];", 1),
+])
+
+adapt("libs/JSystem/include/JSystem/JGeometry/TUtil.hpp", "include/JSystem/JGeometry/TUtil.hpp", [
+    ("#include <cmath>", "#include <cmath>\n#include <cfloat>", 1),
+    ("            float outVal = __frsqrte(val);\n            return (val * (0.5f * outVal * (3.0f - (val * (outVal * outVal)))));", "            return std::sqrt(val);", 2),
+    ("            f32 outVal = (f32)__frsqrte(val);\n            return outVal * 0.5f * (3.0f - outVal * outVal * val);", "            return 1.0f / std::sqrt(val);", 1),
+])
+
+adapt("libs/JSystem/include/JSystem/JGeometry/TVec.hpp", "include/JSystem/JGeometry/TVec.hpp", [
+    ("TVec3< T >(", "TVec3(", 2),
+    ("TVec2< f32 >::TVec2()", "inline TVec2< f32 >::TVec2()", 1),
+    ("void set(const JGeometry::TVec2< A >& rSrc) NO_INLINE", "NO_INLINE void set(const JGeometry::TVec2< A >& rSrc)", 1),
+    ("void set(T _x, T _y, T _z) NO_INLINE", "NO_INLINE void set(T _x, T _y, T _z)", 1),
+    ("void setAll(f32 value) NO_INLINE", "NO_INLINE void setAll(f32 value)", 1),
+    ("void set(A _x, A _y, A _z, A _w) NO_INLINE", "NO_INLINE void set(A _x, A _y, A _z, A _w)", 1),
+    ("                set< f32 >(0.0f, 0.0f, 0.0f, 1.0f);", "                this->template set< f32 >(0.0f, 0.0f, 0.0f, 1.0f);", 1),
+    ("inline void negateInternal(const f32* rSrc, f32* rDest);", "inline void negateInternal(const f32* rSrc, f32* rDest) {\n        const f32 x = -rSrc[0], y = -rSrc[1], z = -rSrc[2];\n        rDest[0] = x; rDest[1] = y; rDest[2] = z;\n    }", 1),
+    ("static void subInternal(const f32* vec1, const f32* vec2, f32* dst);", "void subInternal(const f32* vec1, const f32* vec2, f32* dst); // Unused; not implemented on ARM.", 1),
+    ("void mulInternal(const f32* vec1, const f32* vec2, f32* dst);", "inline void mulInternal(const f32* a, const f32* b, f32* dst) {\n        const f32 x = a[0]*b[0], y = a[1]*b[1], z = a[2]*b[2];\n        dst[0] = x; dst[1] = y; dst[2] = z;\n    }", 1),
+    ("inline TVec2& addInline", "inline TVec2 addInline", 1),
+    ("inline const TVec2& addOperatorInline", "inline TVec2 addOperatorInline", 1),
+    ("        TVec3(const Vec& vec);", "        TVec3(const Vec& vec) : Vec(vec) {}", 1),
+    ("        TVec3(const TVec3< f32 >& vec);", "        TVec3(const TVec3< f32 >& vec) : Vec(vec) {}", 1),
+    ("            stfs b_x, 8(v_b)\n            }\n            ;\n#endif", "            stfs b_x, 8(v_b)\n            }\n            ;\n#else\n            static_cast<Vec&>(*this) = static_cast<const Vec&>(vec);\n#endif", 1),
+    ("        void setPSZeroVec();", "        void setPSZeroVec() { zero(); }", 1),
+    ("            return _fp1;\n#endif", "            return _fp1;\n#else\n            return JMathInlineVEC::PSVECDotProduct(this, &rOther);\n#endif", 1),
+    ("void scaleAdd(register f32 scale", "void scaleAdd(f32 scale", 1),
+    ("        f32 squared(const TVec3& rB) const;", "        f32 squared(const TVec3& rB) const { return JMathInlineVEC::PSVECSquareDistance(this, &rB); }", 1),
+    ("__fabsf(JMAATan2", "std::fabs(JMAATan2", 1),
+    ("                    f32 estimate = __frsqrte(length);\n                    inverse = (0.5f * estimate) * (3.0f - length * (estimate * estimate));", "                    inverse = 1.0f / std::sqrt(length);", 1),
+])
+
+adapt("include/Game/System/WPadButton.hpp", "include/Game/System/WPadButton.hpp", [
+    ("#include <revolution.h>", "#include <revolution/kpad.h>", 1),
+])
+
+adapt("libs/RVL_SDK/include/revolution/hbm/HBMBase.h", "include/revolution/hbm/HBMBase.h", [
+    ("#include \"revolution/mem.h\"", "typedef struct MEMAllocator MEMAllocator;", 1),
+])
+
+adapt("libs/RVL_SDK/include/revolution/wpad.h", "include/revolution/wpad.h", [
+    ('#include "revolution/os.h"', '#include "revolution/os/OSThread.h"\n#include "revolution/os/OSTime.h"', 1),
+    ('#include "revolution/sc.h"', '', 1),
+    ('static void WPADiShutdown(BOOL);', 'void WPADiShutdown(BOOL);', 1),
+])
+
+adapt("libs/RVL_SDK/include/revolution/os/OSTime.h", "include/revolution/os/OSTime.h", [
+    ("vu32 OS_BUS_CLOCK_SPEED;", "extern vu32 OS_BUS_CLOCK_SPEED;", 1),
+])
+
 for relative_source, relative_output in [
     ("include/Game/Util/StringUtil.hpp", "Game/Util/StringUtil.hpp"),
     ("libs/JSystem/include/JSystem/JGadget/hashcode.hpp", "JSystem/JGadget/hashcode.hpp"),

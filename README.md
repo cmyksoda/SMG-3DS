@@ -3,11 +3,12 @@
 A native Nintendo 3DS port project based on [SMGCommunity/Petari](https://github.com/SMGCommunity/Petari).
 
 **Status: platform bring-up. The current executable does not run Super Mario Galaxy gameplay.**
-It builds for ARM11 using devkitARM, libctru, Citro3D, and Citro2D. Eight Petari
-source files provide the running state machine, input transition detection, field hashing,
-and level-table lookup. Seven compile unchanged; JMapInfo has narrow GCC syntax adaptations
-applied to generated copies outside the checkout.
+It builds for ARM11 using devkitARM, libctru, Citro3D, and Citro2D. Eleven Petari
+source files provide the running state machine, original button/stick handling, field hashing,
+level-table lookup, and trigonometric tables. Nine compile unchanged; JMapInfo and the
+trigonometric table source have adaptations applied to generated copies outside the checkout.
 The Wii renderer, Mario/actor simulation, levels, audio, saves, and game menus still need integration.
+Both original and New Nintendo 3DS are targets, starting with New 3DS.
 
 ## Controls and touchscreen
 
@@ -55,7 +56,7 @@ cmake -S . -B /path/outside/checkout/3ds -G Ninja \
 cmake --build /path/outside/checkout/3ds
 ```
 
-For portable input, archive, and original core tests:
+For portable math, input, archive, and original core tests:
 
 ```sh
 cmake -S . -B /path/outside/checkout/host -G Ninja -DCMAKE_BUILD_TYPE=Debug
@@ -63,10 +64,25 @@ cmake --build /path/outside/checkout/host
 ctest --test-dir /path/outside/checkout/host --output-on-failure
 ```
 
+Configure the 3DS build with `-DSMG_BUILD_VALIDATION=ON` to also build
+`native_validation.3dsx`. This separate app runs the math and original controller
+tests on ARM and displays their result; it exits with Start.
+
 ## Game assets
 
 Petari contains no game assets. Keep your extracted disc data outside this checkout.
 No copyrighted textures, models, levels, or audio are included in this project.
+
+For an ISO, [Wiimms ISO Tools](https://wit.wiimm.de/wit/cmd-extract.html) can extract
+the data partition into a new external directory:
+
+```sh
+wit extract /path/to/galaxy.iso /path/to/extracted --psel data --pmode none
+```
+
+The resulting `files` directory is the game-data root. The host `resource_audit`
+tool checks its RARC archives and BCSV tables; currently it reports the four U8-format
+Wii HOME Menu archives as unsupported.
 
 The runtime expects the contents of the disc's `files` directory at:
 
@@ -79,7 +95,7 @@ sdmc:/3ds/SMG-3DS/game/
 ```
 
 On boot, it validates `LayoutData/StarPieceCounter.arc` using the native Yaz0/RARC
-reader. If `StageData/GoodEggGalaxy/GoodEggGalaxyScenario.arc` is also present, it reads
+reader. If `StageData/EggStarGalaxy/EggStarGalaxyScenario.arc` is also present, it reads
 `ScenarioData.bcsv` through the original JMapInfo and reports the record count.
 These are resource probes, not a full-game data validation or playable stage.
 The readers decode big-endian fields explicitly and check bounds before use.
@@ -100,10 +116,19 @@ python3 tools/import-icon.py star-bit /path/to/archive.arc exact/texture.tpl \
   --archive-tool /path/to/host/archive_tool --output /path/to/sd-staging/3ds/SMG-3DS/ui
 ```
 
-Repeat using kind `camera` and optionally `pointer` with their own original textures.
+For the USA disc, the visually verified selections are:
+
+| Kind | Archive in LayoutData | Entry |
+| --- | --- | --- |
+| `star-bit` | `StarPieceCounter.arc` | `timg/myiconstarpiece.tpl` |
+| `camera` | `CameraInfo.arc` | `timg/myiconcamera.tpl` |
+| `pointer` | `DPDPointer.arc` | `timg/dpdpointer.tpl` |
+
+The pointer renderer mirrors the 16×32 half-star horizontally, matching the original
+layout's texture addressing, and tints it blue or amber for the selected touch mode.
 The importer preserves a PNG preview and source hashes next to each `.t3x` texture.
 Copy `ui/star-bit.t3x`, `ui/camera.t3x`, and `ui/pointer.t3x` to the same paths under
-`sdmc:/3ds/SMG-3DS/`. Actual icon selection and validation require the original game data.
+`sdmc:/3ds/SMG-3DS/`. Original textures must come from your game data.
 
 ## Port architecture
 
