@@ -1,6 +1,7 @@
 #include <smg/Input.hpp>
 #include <smg/NativePad.hpp>
 #include <smg/Session.hpp>
+#include <smg/SceneRenderer.hpp>
 #include <smg/TouchUi.hpp>
 #include <3ds.h>
 #include <citro2d.h>
@@ -46,6 +47,8 @@ int main() {
     smg::Input input;
     smg::NativePad pad;
     smg::Session session("sdmc:/3ds/SMG-3DS/game");
+    smg::SceneRenderer scene;
+    scene.load("sdmc:/3ds/SMG-3DS/game/ObjectData/BroadBeanPlanetB.arc","broadbeanplanetb.bdl");
     aptHookCookie hook;
     aptHook(&hook, aptCallback, nullptr);
     u64 previousTime = osGetTime();
@@ -59,9 +62,11 @@ int main() {
         const auto& frame = input.update(raw);
         pad.update(frame, elapsed);
         session.updateNerve();
-        ui.draw(frame, pad, session.booted(), session.assetStatus().c_str());
+        scene.update(frame,static_cast<float>(elapsed));
+        ui.draw(frame, pad, scene, session.booted(), session.assetStatus().c_str());
     }
     aptUnhook(&hook);
+    scene.shutdown();
     ui.shutdown();
     C2D_Fini();
     C3D_Fini();

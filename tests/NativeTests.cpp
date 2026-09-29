@@ -4,6 +4,7 @@
 int runMathTests();
 int runPadTests();
 int runBcsvTests();
+int runModelTests();
 
 int main() {
     gfxInitDefault();
@@ -12,7 +13,8 @@ int main() {
     runMathTests();
     runPadTests();
     runBcsvTests();
-    std::puts("\nPASS: math, WPad and BCSV\n\nSTART: exit");
+    runModelTests();
+    std::puts("\nPASS: math, WPad, BCSV and J3D\n\nSTART: exit");
     while (aptMainLoop()) {
         hidScanInput();
         if (hidKeysDown() & KEY_START) break;

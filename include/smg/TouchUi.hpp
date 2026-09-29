@@ -4,11 +4,12 @@
 
 namespace smg {
 class NativePad;
+class SceneRenderer;
 class TouchUi {
 public:
     bool init();
     void shutdown();
-    void draw(const InputFrame& input, const NativePad& pad, bool coreReady, const char* assetStatus);
+    void draw(const InputFrame& input, const NativePad& pad, SceneRenderer& scene, bool coreReady, const char* assetStatus);
 private:
     void background(float width, unsigned phase);
     void label(const char* text, float x, float y, float size, u32 color, bool center = false);

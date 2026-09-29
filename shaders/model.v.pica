@@ -1,0 +1,25 @@
+.fvec projection[4], modelView[4], materialColor
+.constf constants(0.0, 1.0, 0.0, 0.0)
+.out outpos position
+.out outcolor color
+.out outuv texcoord0
+.alias position v0
+.alias color v2
+.alias uv v3
+
+.proc main
+    mov r0.xyz, position
+    mov r0.w, constants.y
+    dp4 r1.x, modelView[0], r0
+    dp4 r1.y, modelView[1], r0
+    dp4 r1.z, modelView[2], r0
+    dp4 r1.w, modelView[3], r0
+    dp4 outpos.x, projection[0], r1
+    dp4 outpos.y, projection[1], r1
+    dp4 outpos.z, projection[2], r1
+    dp4 outpos.w, projection[3], r1
+    mul outcolor, materialColor, color
+    mov outuv.xy, uv
+    mov outuv.zw, constants.xx
+    end
+.end

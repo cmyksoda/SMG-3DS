@@ -32,7 +32,12 @@ that button until release. The bottom-right button toggles shooting once per fre
 its selected state has an amber border and an ON label. The bottom-left button is momentary.
 The diagnostic build exits with Start + Select.
 
-The current build displays the mapped inputs for testing. These mappings are not yet
+The current build can preview the static Good Egg model in
+`ObjectData/BroadBeanPlanetB.arc`. This new rendering path compiles but has not yet
+been visually verified. It decodes indexed geometry and CMPR textures, with a partial
+base-material shader; full J3D materials and gameplay remain unfinished. In this preview,
+D-pad orbits the model and the camera button resets the view.
+These mappings are not yet
 connected to Mario, camera movement, star-bit collection, or shooting in the game world.
 Original game icons load from the user's SD card; until imported, the development screen
 explicitly uses text labels and a diagnostic reticle.
@@ -56,7 +61,7 @@ cmake -S . -B /path/outside/checkout/3ds -G Ninja \
 cmake --build /path/outside/checkout/3ds
 ```
 
-For portable math, input, archive, and original core tests:
+For portable math, input, archive, model, and original core tests:
 
 ```sh
 cmake -S . -B /path/outside/checkout/host -G Ninja -DCMAKE_BUILD_TYPE=Debug
@@ -65,7 +70,7 @@ ctest --test-dir /path/outside/checkout/host --output-on-failure
 ```
 
 Configure the 3DS build with `-DSMG_BUILD_VALIDATION=ON` to also build
-`native_validation.3dsx`. This separate app runs the math and original controller
+`native_validation.3dsx`. This separate app runs the math, original controller, BCSV, and model
 tests on ARM and displays their result; it exits with Start.
 
 ## Game assets
@@ -81,7 +86,8 @@ wit extract /path/to/galaxy.iso /path/to/extracted --psel data --pmode none
 ```
 
 The resulting `files` directory is the game-data root. The host `resource_audit`
-tool checks its RARC archives and BCSV tables; currently it reports the four U8-format
+tool checks its RARC archives and `.bcsv` files; extensionless stage tables are not
+included in that audit. Currently it reports the four U8-format
 Wii HOME Menu archives as unsupported.
 
 The runtime expects the contents of the disc's `files` directory at:

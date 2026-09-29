@@ -35,6 +35,11 @@ completion does not make those interfaces portable to ARM11/PICA200.
 - Yaz0 decompression and RARC indexing work independently of host endianness and alignment.
   The bootstrap probes the original star-bit layout archive and the Good Egg scenario table
   if they are present on the SD card.
+- A static J3D reader decodes rigid single-joint indexed geometry and CMPR textures.
+  The Good Egg BroadBeanPlanetB model yields 1,484 triangles and three textures.
+  A native PICA200 preview renderer now builds; visual verification is pending.
+  Its shader uses the first texture, vertex/material color, and basic UV transforms.
+  Full TEV materials, lighting, skinning, and stage placement are not implemented.
 
 The WPad pointer, accelerometer, swing, and rumble device members are not installed yet.
 Do not compile callers that dereference them until their native implementations exist.
@@ -102,10 +107,12 @@ its six scenario records and first scenario number 1 have been read through orig
 on emulated ARM. A boot probe is not stage execution.
 
 An ASan/UBSan host audit indexed 2,228 RARC archives with 24,788 resources and converted
-all 1,405 contained BCSV tables (10,891 records). Forty-nine animation tables required
+all 1,405 files with the `.bcsv` extension (10,891 records). Extensionless stage tables
+are not covered by that audit. Forty-nine animation tables required
 repacking unaligned fields; regression tests cover packed offsets and odd record strides.
 The four remaining `.arc` files are U8-format Wii HOME Menu resources, currently unsupported.
 `resource_audit` reports them and returns failure rather than counting them as validated.
 
 The portable math tests check tolerances and conventions, not bit-identical Gekko rounding.
-The native validation app has passed in Azahar; no physical console has been tested.
+The previous native validation app passed 1,269 checks in Azahar. The newly added model
+tests pass on the host but have not yet run on emulated ARM. No physical console has been tested.

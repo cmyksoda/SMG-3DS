@@ -1,5 +1,6 @@
 #include <smg/TouchUi.hpp>
 #include <smg/NativePad.hpp>
+#include <smg/SceneRenderer.hpp>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -40,7 +41,11 @@ C2D_SpriteSheet loadIcon(const char* path) {
 }
 
 bool TouchUi::init() {
-    top_ = C2D_CreateScreenTarget(GFX_TOP, GFX_LEFT);
+    top_ = C3D_RenderTargetCreate(240,400,GPU_RB_RGBA8,GPU_RB_DEPTH24_STENCIL8);
+    if (top_) C3D_RenderTargetSetOutput(top_,GFX_TOP,GFX_LEFT,
+        GX_TRANSFER_FLIP_VERT(0)|GX_TRANSFER_OUT_TILED(0)|GX_TRANSFER_RAW_COPY(0)|
+        GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8)|GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB8)|
+        GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO));
     bottom_ = C2D_CreateScreenTarget(GFX_BOTTOM, GFX_LEFT);
     text_ = C2D_TextBufNew(2048);
     starBit_ = loadIcon("sdmc:/3ds/SMG-3DS/ui/star-bit.t3x");
@@ -94,11 +99,23 @@ void TouchUi::button(const Rect& b, bool active, bool pressed, float alpha, C2D_
         b.x + b.width/2.0f, b.y+30.0f, 0.30f, edge, true);
 }
 
-void TouchUi::draw(const InputFrame& input, const NativePad& pad, bool coreReady, const char* assetStatus) {
+void TouchUi::draw(const InputFrame& input, const NativePad& pad, SceneRenderer& scene, bool coreReady, const char* assetStatus) {
     C2D_TextBufClear(text_);
     C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
-    C2D_TargetClear(top_, color(4, 9, 26));
+    C3D_RenderTargetClear(top_,C3D_CLEAR_ALL,0x04091aff,0);
+    if (scene.ready()) {
+        C2D_Flush();
+        scene.draw(top_);
+    }
+    C2D_Prepare();
     C2D_SceneBegin(top_);
+    C3D_DepthTest(false,GPU_ALWAYS,GPU_WRITE_COLOR);
+    if (scene.ready()) {
+        C2D_DrawRectSolid(0,0,0,400,30,color(4,9,26,0.8f));
+        label("GOOD EGG / ORIGINAL MODEL PREVIEW",200,5,0.42f,color(229,239,255),true);
+        label(scene.status().c_str(),200,203,0.32f,color(173,198,223),true);
+        label("D-pad: orbit   Camera: reset   Gameplay pending",200,221,0.32f,color(194,210,230),true);
+    } else {
     background(400, frame_);
     label("SMG-3DS", 200, 18, 0.9f, color(236, 243, 255), true);
     label("native platform bring-up", 200, 49, 0.45f, color(156, 185, 229), true);
@@ -114,6 +131,8 @@ void TouchUi::draw(const InputFrame& input, const NativePad& pad, bool coreReady
         42, 161, 0.42f, color(230, 203, 133));
     label(assetStatus, 200, 193, 0.34f, color(173, 183, 206), true);
     label("START + SELECT: exit", 200, 216, 0.36f, color(148, 166, 195), true);
+    label(scene.status().c_str(),200,233,0.25f,color(173,183,206),true);
+    }
     if (input.pointer.visible) {
         if (pointer_) starPointer(pointer_, input.pointer.x, input.pointer.y, input.shootMode);
         else {
