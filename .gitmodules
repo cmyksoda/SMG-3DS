@@ -1,0 +1,3 @@
+[submodule "upstream/Petari"]
+	path = upstream/Petari
+	url = https://github.com/SMGCommunity/Petari.git
