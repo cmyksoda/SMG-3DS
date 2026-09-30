@@ -7,6 +7,7 @@
 #include <JSystem/J3DGraphLoader/J3DModelLoader.hpp>
 #include <smg/Archive.hpp>
 #include <smg/Bcsv.hpp>
+#include <smg/Bmg.hpp>
 #include <smg/Dol.hpp>
 #include <smg/NativeResources.hpp>
 #include <smg/Animation.hpp>
@@ -461,7 +462,100 @@ int auditCollision(const fs::path& root) {
     return failed + wrong == 0 ? 0 : 1;
 }
 
+// Every BMG on the disc turned native, then read the way MessageData, MessageEditorMessageTag and TalkNodeCtrl
+// read it, against the original's big-endian values.
+int auditBmg(const fs::path& root) {
+    const auto be16 = [](const std::uint8_t* at) { return unsigned(at[0]) << 8 | at[1]; };
+    const auto be32 = [&](const std::uint8_t* at) { return std::uint32_t(be16(at)) << 16 | be16(at + 2); };
+    const auto n16 = [](const std::uint8_t* at) { std::uint16_t v; std::memcpy(&v, at, 2); return unsigned(v); };
+    const auto n32 = [](const std::uint8_t* at) { std::uint32_t v; std::memcpy(&v, at, 4); return v; };
+    std::size_t files = 0, messages = 0, units = 0, nodes = 0, wrong = 0, failed = 0;
+    std::map<std::pair<unsigned, unsigned>, std::size_t> kinds;
+    std::vector<fs::path> archives;
+    for (const auto& entry : fs::recursive_directory_iterator(root))
+        if (entry.is_regular_file() && extension(entry.path().string(), ".arc")) archives.push_back(entry.path());
+    std::sort(archives.begin(), archives.end());
+    for (const auto& path : archives) {
+        std::vector<std::uint8_t> storage;
+        std::vector<smg::ArchiveEntry> entries;
+        std::string error;
+        if (!smg::readArchive(path.c_str(), storage, entries, 64u << 20, error)) continue;
+        for (const auto& entry : entries) {
+            if (!extension(entry.path, ".bmg")) continue;
+            ++files;
+            const std::vector<std::uint8_t> original(storage.begin() + entry.offset, storage.begin() + entry.offset + entry.size);
+            std::vector<std::uint8_t> bmg = original;
+            if (const char* why = smg::nativeBmg(bmg.data(), bmg.size())) {
+                std::printf("%s %s: %s\n", path.c_str(), entry.path.c_str(), why);
+                ++failed;
+                continue;
+            }
+            std::vector<std::uint8_t> again = bmg;
+            wrong += smg::nativeBmg(again.data(), again.size()) != nullptr || again != bmg;
+            const auto miss = [&](bool bad, const char* what, std::size_t at) {
+                if (bad && wrong++ < 20) std::printf("%s %s: %s at 0x%zx\n", path.c_str(), entry.path.c_str(), what, at);
+            };
+            // Blocks by the header's count, as MessageHolder's getBlock walks them.
+            std::size_t inf = 0, dat = 0, flw = 0;
+            for (std::uint32_t i = 0, at = 0x20; i < n32(bmg.data() + 0xC); ++i) {
+                const std::uint32_t magic = n32(bmg.data() + at);
+                miss(magic != be32(original.data() + at) || n32(bmg.data() + at + 4) != be32(original.data() + at + 4), "a block header", at);
+                if (magic == 0x494E4631) inf = at;
+                if (magic == 0x44415431) dat = at;
+                if (magic == 0x464C5731) flw = at;
+                at += n32(bmg.data() + at + 4);
+            }
+            const std::uint8_t *o = original.data(), *n = bmg.data();
+            const unsigned count = n16(n + inf + 8), itemSize = n16(n + inf + 10);
+            miss(count != be16(o + inf + 8) || itemSize != be16(o + inf + 10), "INF1's counts", inf);
+            for (unsigned i = 0; i < count; ++i) {
+                const std::size_t item = inf + 16 + i * itemSize;
+                miss(n32(n + item) != be32(o + item) || n16(n + item + 4) != be16(o + item + 4) ||
+                     std::memcmp(n + item + 6, o + item + 6, itemSize - 6), "an INF1 item", item);
+                ++messages;
+                for (std::size_t at = dat + 8 + be32(o + item);;) {
+                    ++units;
+                    if (be16(o + at) != 0x1A) {
+                        miss(n16(n + at) != be16(o + at), "a character", at);
+                        if (!be16(o + at)) break;
+                        at += 2;
+                        continue;
+                    }
+                    const std::uint8_t *t = n + at + 2, *u = o + at + 2;  // as MessageEditorMessageTag holds it
+                    const unsigned length = u[0], group = u[1], type = be16(u + 2);
+                    ++kinds[{group, type}];
+                    miss(n16(n + at) != 0x1A || t[0] != length || t[1] != group || n16(t + 2) != type, "a tag's head", at);
+                    if (length == 8 && group == 1 && type == 0) miss(n16(t + 4) != be16(u + 4), "a wait (getParam16)", at);
+                    if (group == 2 || group == 10)
+                        for (unsigned k = 4; k < length - 2; k += 2) miss(n16(t + k) != be16(u + k), "a name (getParamPtr)", at);
+                    if (length == 8 && (group == 5 || group == 255)) miss(t[4] != u[4], "a byte (getParam8)", at);
+                    if (length == 14 && (group == 6 || group == 7))
+                        miss(n32(t + 4) != 0 || n32(t + 8) != be32(u + 8), "a slot and argument (getParam32)", at);
+                    at += length;
+                }
+            }
+            if (flw) {
+                const unsigned nodeCount = n16(n + flw + 8), branches = n16(n + flw + 10);
+                miss(nodeCount != be16(o + flw + 8) || branches != be16(o + flw + 10), "FLW1's counts", flw);
+                for (unsigned i = 0; i < nodeCount; ++i, ++nodes) {
+                    const std::size_t node = flw + 16 + i * 8;
+                    miss(n[node] != o[node] || n[node + 1] != o[node + 1] || n16(n + node + 2) != be16(o + node + 2), "a node's head", node);
+                    if (o[node] == 3) miss(n32(n + node + 4) != be32(o + node + 4), "an event's argument", node);
+                    else miss(n16(n + node + 4) != be16(o + node + 4) || n16(n + node + 6) != be16(o + node + 6), "a node's halves", node);
+                }
+                const std::size_t table = flw + 16 + nodeCount * 8;
+                for (unsigned i = 0; i < branches; ++i) miss(n16(n + table + i * 2) != be16(o + table + i * 2), "a branch", table + i * 2);
+                miss(std::memcmp(n + table + branches * 2, o + table + branches * 2, branches), "the byte table", table + branches * 2);
+            }
+        }
+    }
+    std::printf("%zu BMG files: %zu messages, %zu characters and tags, %zu flow nodes; %zu tag kinds;", files, messages, units, nodes, kinds.size());
+    std::printf(" %zu refused, %zu reads differ\n", failed, wrong);
+    return failed + wrong == 0 && files ? 0 : 1;
+}
+
 int main(int argc, char** argv) {
+    if (argc == 3 && !std::strcmp(argv[2], "--bmg")) return auditBmg(argv[1]);
     if (argc == 3 && !std::strcmp(argv[2], "--gravity")) return auditGravity(argv[1], false);
     if (argc == 3 && !std::strcmp(argv[2], "--actors")) return auditGravity(argv[1], true);
     if (argc == 3 && !std::strcmp(argv[2], "--collision")) return auditCollision(argv[1]);
@@ -492,7 +586,7 @@ int main(int argc, char** argv) {
         return 0;
     }
     const bool models = argc == 3 && !std::strcmp(argv[2], "--models");
-    if (argc != 2 && !models) { std::fprintf(stderr,"Usage: resource_audit EXTRACTED_FILES_DIRECTORY [--models|--gravity|--actors|--collision] | MAIN_DOL --dol\n"); return 2; }
+    if (argc != 2 && !models) { std::fprintf(stderr,"Usage: resource_audit EXTRACTED_FILES_DIRECTORY [--models|--gravity|--actors|--collision|--bmg] | MAIN_DOL --dol\n"); return 2; }
     std::error_code ec;
     const fs::path root(argv[1]);
     if (!fs::is_directory(root, ec)) { std::fprintf(stderr,"Not a readable directory\n"); return 2; }
