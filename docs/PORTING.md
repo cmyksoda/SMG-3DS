@@ -305,6 +305,25 @@ stands in until then.
    (a 3x4 times a 4x4), `J3DPSMtxArrayConcat` (`PSMTXConcat` per matrix) and
    `J3DMtxBuffer::calcWeightEnvelopeMtx` (each envelope is its joints' world times inverse bind, weighted),
    each read from the assembly's register flow and checked against the direct formula (host and ARM).
+   `smg::J3DSkeletonImage` gives JSystem's own `J3DModelLoader` a model's skeleton to read in place: INF1
+   (its hierarchy keeping only joint nodes), JNT1, EVP1 and DRW1, native-endian and laid out in the
+   loader's structs (they keep offsets in pointer-sized fields, so a byte copy would only suit 32-bit
+   targets). As on the disc, DRW1 ends with its envelope entries again, which the loader counts off.
+   `J3DModel::calcAnmMtx` and `J3DMtxBuffer::calcWeightEnvelopeMtx` then run as the game runs them, on the
+   host and ARM. J3D reaches the Wii GPU's API from its drawing side; each GX entry point stops the program
+   by name (`source/compat/Gx.cpp`), and the SDK's write-gather writers go through one point that does the
+   same. Cache stores and interrupt or scheduler sections do nothing, which is their whole purpose here: no
+   reader outside the CPU sees that memory, and J3D runs on one thread. J3D's 32-byte alignment requests
+   (the GPU's DMA granularity) take the free store's alignment. JSystem frees nothing in its destructors;
+   `smg::forgetJ3DSkeleton` frees a skeleton model as the scene heap going would.
+   Checking every model on the disc against it showed the port's own joint composition was wrong for
+   294 of 1,758 models, Mario's among them (8% off): J3D composes joints three ways by INF1's flags. Basic
+   applies a joint's scale only while the accumulated scale is not one; Softimage scales translations by
+   the accumulated scale and applies the scale at the end; Maya divides a scale-compensating joint by its
+   parent's own scale. It also turns by its sine table. The port now composes the same way from J3D's own
+   `J3DGetTranslateRotateMtx` and `JMAMTXApplyScale`, and `resource_audit --models` finds all 1,758
+   skeletons agree with `J3DModel` to 1e-4. (The earlier bind-pose check could not see it: the port's
+   loader baked its vertices with the same composition it was checked against.)
    J3D's CPU side (`J3DModel::calc`, joints, envelope matrices) is portable; `J3DModelData` gets a native loader from the port's parsers instead of J3D's in-place
    big-endian loader. `XanimePlayer`/`XanimeCore` blend Mario's animations; the renderer draws what
    the original matrices say.
@@ -453,6 +472,6 @@ across 12 zones; the preview draws 56 rigid models in 172 placements.
 
 The portable math tests check tolerances and conventions, not bit-identical Gekko rounding.
 The native validation app passes 1,069 math, 37 WPad, 179 BCSV, 1,043 J3D model/texture,
-8,810 TEV combiner, 27 original gravity, 27 NameObj, 89 scene and gravity creator, 48 collision, 21 J3D animation, 13 original actor, 6 J3D transform, 7 ETC1 and 8 GPU texture checks on emulated ARM
+8,810 TEV combiner, 27 original gravity, 27 NameObj, 89 scene and gravity creator, 48 collision, 21 J3D animation, 13 original actor, 6 J3D transform, 6 J3D skeleton, 7 ETC1 and 8 GPU texture checks on emulated ARM
 in Azahar; the GPU checks compare the hardware's ETC1 decoding against ours. Of the disc's
 7,780 materials, 6,987 translate to the combiner exactly. No physical console has been tested.
