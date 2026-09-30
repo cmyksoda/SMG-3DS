@@ -360,8 +360,11 @@ game's own `main()` (GameSystem.cpp, kept whole as `smgGameMain`) and runs until
 lacks; every such stop prints its name to stderr, which the probe routes to Azahar's log (filter
 `*:Info Debug.Emulated:Debug`, and **`instant_debug_log=true`**, or the log file stops a second in). A
 priority-101 constructor opens that channel before the game's static initializers run. Every stop ends in `abort`,
-and the probe ends the process right there (`svcExitProcess` from a SIGABRT handler): libctru's own exit would
-unmount the SD card while the game's DVD worker was still reading from it, which faults on hardware.
+and the probe ends the process right there: `abort` is wrapped at link time (`--wrap=abort`, since newlib keeps signal
+handlers per thread and most stops happen off the main thread), because libctru's own exit would unmount the SD card
+while the game's DVD worker was still reading from it, which faults on hardware. Before ending, it prints the
+return addresses left on the stopping thread's stack ("callers on the stack": each word that follows a call
+instruction in the program's code); `tools/stop-callers.sh` names them from the ELF, newest first.
 
 **Measuring.** `tools/petari-link-needs.sh BUILD "Game JSystem nw4r" OUT HEADER 'STATEMENT'` compiles every
 source for ARM, lists what nothing defines, and links a probe of `STATEMENT` against the port's libraries with
@@ -382,7 +385,7 @@ so only programs without the game (the preview, tests, tools) ever take one.
 | --- | --- | --- |
 | OS threads, mutexes, messages, clock | `OsThreads.cpp` | libctru threads on the app core, Wii priorities mapped in order (16 = 0x30); recursive mutexes on LightLocks; blocking queues; time base at 60.75 MHz from the system tick, dated from 2000-01-01 |
 | Arenas | `OsMemory.cpp` | MEM1 (0x806C0000-0x81800000, from main.dol's end) and MEM2 (0x90000800-0x933E0000) as two blocks of the 3DS heap; boot info with the Wii's 24 MB |
-| Allocation | `GameHeap.cpp` | plain `new` from the game's current JKRHeap once the root heap exists (as the original), the free store before; `delete` by address. The port's own containers use `compat/smg/FreeStore.hpp` |
+| Allocation | `GameHeap.cpp` | plain `new` from the game's current JKRHeap once the root heap exists (as the original), the free store before; `delete` by address. The port's own long-lived containers use `compat/smg/FreeStore.hpp`'s allocator, and port code the game calls into opens an `smg::PortMemory` scope, so its scratch never spends a game heap (a solid heap would never get it back) |
 | Disc | `Dvd.cpp` | entry numbers from the disc's `sys/fst.bin` (not reproducible by sorting: MovieData precedes ModuleData); reads from the SD files; async reads finish on a worker that calls back like the drive's interrupt |
 | Video | `Video.cpp` | a retrace thread on the 3DS VBlank runs the game's retrace callbacks, latches flushed buffers |
 | System settings | `SystemConfig.cpp` | language and sound mode from the 3DS's settings; 16:9 for the 5:3 screen |
@@ -390,6 +393,11 @@ so only programs without the game (the preview, tests, tools) ever take one.
 | ARAM | `RVL_SDK/aralt/aralt.c` | the SDK's own "Dummy ARAM" in MEM2, compiled as it is |
 | Pure software | `Os.cpp`, `Math.cpp` (host too) | OSReport, OSPanic, PPCHalt, cache ops, MSR, error handlers kept; the SDK's matrix helpers |
 | GPU (GX, GD) | `RVL_SDK/gx/*.c`, `gd/*.c`, `GxFifo.cpp` | the SDK's own GX and GD, built as C++ with C's conversions; its register blocks are port memory (hardware blocks the port has no counterpart for stop by name); the FIFO takes big-endian bytes into a command processor (`smg::GxCommandProcessor`, portable and tested) that keeps CP/XF/BP state, follows display lists, raises the pixel engine's draw-done and token interrupts, sizes and decodes vertices by the CP's descriptor and attribute tables (the field layout of the SDK's own `private/cp_reg.h`), and hands each whole primitive to the host, which stops there until drawing is written |
+| GPU drawing | `GxRender.cpp`, `smg::buildGxDraw` | each primitive the command processor completes is built on the CPU (registers through the SDK's own `private/*_reg.h`, TEV to combiner stages, vertices transformed and culled in EFB space) and drawn with citro3d on the top screen; the display copy ends the frame |
+| Audio | `WiiAudio.cpp`, `smg::WiiDsp` | the Wii DSP running JAudio2's own microcode protocol in software (ROM boot, task mails, commands, voice mixing, filters, reverb); the AI's DMA blocks play through the 3DS's DSP (NDSP), raising the AI interrupt per block |
+| Alarms, thread priority | `OsThreads.cpp` | the SDK's alarm list on one alarm thread (one-shot and periodic, as `InsertAlarm` orders them); priorities read and change |
+| Reset, power, HOME | `OsReset.cpp` | the power callback runs once when the 3DS asks the app to close; no reset button |
+| Remote extras | `Wpad.cpp` | battery from the 3DS's own, charging as full; the Remote's speaker and motor answer that there is none |
 | Interrupts | `Os.cpp` (host too) | the SDK's handler table and mask; a raised interrupt waits while interrupts are off and is delivered when they come back on, lowest source first, its handler run with interrupts off (GXSetDrawDone depends on exactly this) |
 | Everything else reached | `Sdk.cpp` | generated by `tools/sdk-boundaries.py`: one loud stop per C function |
 
@@ -407,9 +415,18 @@ structures native in place where original code first reads them, recognising dat
 archives are first (at `JKRMemArchive`'s mount); `JKRArchive::SDIFileEntry`'s `mFlag:8 / mNameOffset:24`
 also swaps declaration order, since Metrowerks fills bitfields from the top and GCC on ARM from the bottom.
 BCSV tables turn at `JMapInfo::attach` (in place, or as a repacked copy where ARM can't load a field where it
-sits). Still to come as the boot reaches them: DVD, compressed and ARAM archives' header reads, fonts (BRFNT), layouts
-(BRLYT/BRLAN), J3D models and animations (the port's J3DSkeletonImage and native key tables are a start),
-collision (KCL), particles, audio banks.
+sits). Since session 4, `smg::SwapPlan` (`include/smg/SwapPlan.hpp`) is the shared tool for the rest: a converter
+walks a file exactly as its reader does and plans every field once (kept bytes, half or word); bytes two readers
+would take differently, fields past the end, or words ARM can't load where they sit fail the plan, and the file stays
+as it was with the reason. Layouts (BRLYT, BRLAN, TPL, BRFNT: `source/core/Layout.cpp`, turned where
+`LayoutHolder` mounts them and `ResFont::SetResource` takes a font) and the audio data (`source/core/AudioData.cpp`:
+the audio archive SMR.szs with its sound table, names, sequence collection, wave systems and instrument banks; the
+chord, music-event, remix and Remote-speaker files) are done, each with a disc audit that reads the result back
+through the original's own structs: `resource_audit FILES --layouts` (894 files, 232,439 fields, none different)
+and `--audio` (79 files, 69,003 fields, none different). What stays big-endian stays so on purpose: texels and
+glyph sheets (the GPU's bytes), sequence bytecode (JAudio2's reader reads bytes, adapted), wave samples (the DSP reads
+them big-endian, as the Wii's did), and the sequence collection's group tables, which sit at odd addresses.
+Still to come as the boot reaches them: J3D models and animations, collision (KCL), particles, streams (AST).
 
 **Messages (BMG).** The game reads its text more than one way, so no single byte order serves it. Characters
 and a tag's type are 16-bit units; `MessageEditorMessageTag` reads a tag's length and group as bytes, and so
@@ -499,12 +516,21 @@ would give game code MSL's own formatter (its decompiled `printf.c`) or wrap the
 
 **Wide gaps, measured.** 64-bit hosts: 94 of the 1,803 files need fixes (`long` overload ambiguities, pointer
 casts to `u32`), and the game stores pointers in `u32`, so a 32-bit host is the honest target for sanitizer runs.
-`wchar_t` is two bytes on the Wii and four here, and the game reads its UTF-16 text through `wchar_t*`
-(`TalkNodeCtrl`, the tag processors, nw4r's `TextWriter`), so text will need `-fshort-wchar` for the game's
-libraries and wide-string functions built for it (MSL's own, from the decomp), not newlib's. The game calls
-only four: `swprintf`, `vswprintf`, `wcslen` and `wcsncpy`, with integer and string conversions in its own
-format strings. MSL's
-`std::sort` orders equal keys differently from libstdc++'s.
+`wchar_t` is two bytes on the Wii, and the game reads its UTF-16 text through `wchar_t*` (`TalkNodeCtrl`, the tag
+processors, nw4r's `TextWriter`). The whole 3DS build uses `-fshort-wchar` (linked with `--no-wchar-size-warning`),
+and the game's four wide functions (`swprintf`, `vswprintf`, `wcslen`, `wcsncpy`) are MSL's own from the decomp,
+built as C over `compat/smg/MslWide.h`; `__num2dec` (a float in wide text) stops by name, as the game's wide formats
+have none. MSL's `std::sort` orders equal keys differently from libstdc++'s.
+
+**Traps met in session 4.** devkitARM's GCC makes enums one byte (ARM EABI short enums) where Metrowerks used
+`-enum int`: any struct read from a file with an enum member changes shape (TPL's headers were; GX's
+`GXVtxAttrFmtList`/`GXVtxDescList`, which J3D's model loader reads from BMD data, still are). Tests on Wii
+addresses (`>= 0x80000000` for "cached") mean nothing here: the OS address macros are identities and four sites
+were rewritten by meaning. GCC puts a class's vtable pointer first where Metrowerks put it after the first class's
+data, so `JGadget::TLinkList` offsets written as numbers must be `offsetof`. The 3DS loads `.rodata` read-only on
+hardware (Azahar doesn't enforce it), so data converted in place can't be `const`. And a new generated Petari
+header needs both build directories cleaned: ninja's dependency files still name upstream's copy, and a stale object
+kept a big-endian reader reading natively.
 
 ## The native scene boundary
 
