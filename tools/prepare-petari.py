@@ -1044,6 +1044,10 @@ adapt("src/JSystem/J3DGraphLoader/J3DModelLoader.cpp", "JSystem/J3DGraphLoader/J
 # GDSetArrayRaw takes the array's raw address as a u32; Metrowerks converted the null to it.
 adapt("src/JSystem/J3DGraphBase/J3DShape.cpp", "JSystem/J3DGraphBase/J3DShape.cpp", [
     ("GDSetArrayRaw((GXAttr)(i + GX_VA_POS), nullptr, stride[i]);", "GDSetArrayRaw((GXAttr)(i + GX_VA_POS), 0, stride[i]);", 1),
+    # Clearing the top bit was the Wii's cached-to-physical step; the port's addresses need the SDK's own macro,
+    # which the command processor undoes.
+    ("#include <revolution/gd.h>\n", "#include <revolution/gd.h>\n#include <revolution/os.h>\n", 1),
+    ("J3DLoadCPCmd(0xA0 + idx, ((uintptr_t)data & 0x7FFFFFFF));", "J3DLoadCPCmd(0xA0 + idx, OSCachedToPhysical(data));", 1),
 ])
 
 # Class operator new and delete take size_t, which is unsigned int on ARM where u32 is unsigned long.
@@ -1556,6 +1560,16 @@ adapt("src/nw4r/lyt/lyt_texMap.cpp", "nw4r/lyt/lyt_texMap.cpp", [
     ("SetPaletteFormat(pClut->format);", "SetPaletteFormat(GXTlutFmt(pClut->format));", 1),
     ("            if (reinterpret_cast< u32 >(p->descriptorArray) < 0x80000000) {",
      "            if (reinterpret_cast< uintptr_t >(p->descriptorArray) < reinterpret_cast< uintptr_t >(p)) {", 1),
+])
+# The Wii told a main-memory address from an ARAM offset by its value (0x80000000 up), and every 3DS address is
+# below that: main memory is the source exactly when copying into ARAM (direction 0; main.dol's own code agrees).
+adapt("src/Game/System/Overwrite.cpp", "Game/System/Overwrite.cpp", [
+    ("    if (pCommand->mSrc < 0x80000000) {", "    if (pCommand->mTransferDirection != 0) {", 1),
+])
+# FIFO pointers share this queue with draw-sync tokens (below 0x10000) and the stop message (0x10000). The Wii's
+# pointers sat above 0x80000000; the 3DS's sit above 0x10000.
+adapt("src/Game/System/DrawSyncManager.cpp", "Game/System/DrawSyncManager.cpp", [
+    ("        if (reinterpret_cast< u32 >(message) >= 0x80000000) {", "        if (reinterpret_cast< u32 >(message) > 0x10000) {", 1),
 ])
 # Colours packed into a u32 through memory read 0xRRGGBBAA on the Wii and byte-reversed on ARM; these pack and
 # unpack the value the Wii's way, so literals like 0xFF0000FF and u32s bound for the GPU keep their meaning.
