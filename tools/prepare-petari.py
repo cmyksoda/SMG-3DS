@@ -593,9 +593,16 @@ adapt("src/Game/AreaObj/AreaObj.cpp", "Game/AreaObj/AreaObj.cpp", [
 adapt("libs/RVL_SDK/include/revolution/os.h", "include/revolution/os.h", [
     # Wii low-memory addresses, which Metrowerks pins in place; declared here so each is one object or none.
     ("u32 __OSBusClock = 0x800000F8;\nu32 __MEM2End = 0x80003128;", "extern u32 __OSBusClock;\nextern u32 __MEM2End;", 1),
-    # A Wii physical address is 32 bits; a 64-bit host's pointer is cut to it explicitly.
-    ("#define OSCachedToPhysical(caddr) ((u32)((u8*)(caddr)-OS_BASE_CACHED))",
-     "#define OSCachedToPhysical(caddr) ((u32)(uintptr_t)((u8*)(caddr)-OS_BASE_CACHED))", 1),
+    # The Wii sees memory three ways (cached at 0x80000000, uncached at 0xC0000000, physical from 0); a 3DS app has one
+    # address space, whose addresses all fit the GPU's 29-bit physical fields, so each view is the address itself.
+    ("#define OSPhysicalToCached(paddr) ((void*)((u32)(paddr) + OS_BASE_CACHED))\n"
+     "#define OSCachedToPhysical(caddr) ((u32)((u8*)(caddr)-OS_BASE_CACHED))\n"
+     "#define OSUncachedToPhysical(ucaddr) ((u32)((u32)(ucaddr) & (~OS_BASE_UNCACHED)))\n"
+     "#define OSPhysicalToUncached(paddr) ((void*)((u32)(paddr) + OS_BASE_UNCACHED))",
+     "#define OSPhysicalToCached(paddr) ((void*)(uintptr_t)(u32)(paddr))\n"
+     "#define OSCachedToPhysical(caddr) ((u32)(uintptr_t)(caddr))\n"
+     "#define OSUncachedToPhysical(ucaddr) ((u32)(uintptr_t)(ucaddr))\n"
+     "#define OSPhysicalToUncached(paddr) ((void*)(uintptr_t)(u32)(paddr))", 1),
     ("""        psq_st inF, 0(tmpPtr), 0x1, 5
         lha out, 0(tmpPtr)
     }
@@ -1796,8 +1803,14 @@ adapt("src/RVL_SDK/gx/GXInit.c", "RVL_SDK/gx/GXInit.c", [
      "    __peReg = (void*)OSPhysicalToUncached(0x0c001000);\n    __memReg = (void*)OSPhysicalToUncached(0x0c004000);",
      "    __piReg = smgGXRegisters(0);\n    __cpReg = smgGXRegisters(1);\n    __peReg = smgGXRegisters(2);\n    __memReg = smgGXRegisters(3);", 1),
 ])
-for gx in ["GXDisplayList", "GXMisc"]:
-    adapt(f"src/RVL_SDK/gx/{gx}.c", f"RVL_SDK/gx/{gx}.c", [('#include "revolution/gx.h"\n', '#include "revolution/gx.h"\n#include <smg/GxPrivate.h>\n', 1)])
+adapt("src/RVL_SDK/gx/GXDisplayList.c", "RVL_SDK/gx/GXDisplayList.c", [('#include "revolution/gx.h"\n', '#include "revolution/gx.h"\n#include <smg/GxPrivate.h>\n', 1)])
+# GXPeekARGB and GXPeekZ read the EFB through the Wii's memory window onto it; reading the port's render target back
+# is still to come, so each stops by name.
+adapt("src/RVL_SDK/gx/GXMisc.c", "RVL_SDK/gx/GXMisc.c", [
+    ('#include "revolution/gx.h"\n', '#include "revolution/gx.h"\n#include <smg/GxPrivate.h>\n', 1),
+    ("    u32 addr = (u32) OSPhysicalToUncached(0x8000000);\n",
+     "    OSPanic(__FILE__, __LINE__, \"reading the EFB's pixels back (GXPeekARGB, GXPeekZ) is not the port's yet\");\n    u32 addr = 0;\n", 2),
+])
 
 # The Wii's hardware registers: the GX library's processor interface and memory interface blocks are the port's
 # register memory (source/compat/GxFifo.cpp), the same blocks __piReg and __memReg view; every other block has no

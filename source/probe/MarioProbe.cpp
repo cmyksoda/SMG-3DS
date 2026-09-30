@@ -20,7 +20,7 @@ void smgGameMain();
 int main() {
     std::fprintf(stderr, "mario-probe: main\n");
     gfxInitDefault();
-    consoleInit(GFX_TOP, nullptr);
+    consoleInit(GFX_BOTTOM, nullptr);  // the top screen is the game's
     // consoleInit takes stderr for the screen too; stops belong in the log, which outlives the app.
     consoleDebugInit(debugDevice_SVC);
     std::printf("SMG boot bring-up\n");

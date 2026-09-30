@@ -259,6 +259,11 @@ if(NINTENDO_3DS)
   target_include_directories(smg_pica PUBLIC "${DEVKITPRO}/libctru/include")
   target_link_libraries(smg_pica PUBLIC smg_platform)
   target_compile_options(smg_pica PRIVATE -Wall -Wextra -Werror)
+  set(GX_SHADER "${CMAKE_CURRENT_BINARY_DIR}/GxShader.hpp")
+  add_custom_command(OUTPUT "${GX_SHADER}"
+    COMMAND "${DEVKITPRO}/tools/bin/picasso" -o "${CMAKE_CURRENT_BINARY_DIR}/gx.shbin" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/gx.v.pica"
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/embed-binary.py" "${CMAKE_CURRENT_BINARY_DIR}/gx.shbin" "${GX_SHADER}" gxShader
+    DEPENDS shaders/gx.v.pica tools/embed-binary.py VERBATIM)
   add_executable(SMG-3DS source/platform/Main.cpp source/platform/TouchUi.cpp source/platform/SceneRenderer.cpp "${MODEL_SHADER}")
   set_target_properties(SMG-3DS PROPERTIES SUFFIX ".elf")
   target_include_directories(SMG-3DS PRIVATE "${DEVKITPRO}/libctru/include" "${CMAKE_CURRENT_BINARY_DIR}")
@@ -287,7 +292,7 @@ if(NINTENDO_3DS)
       list(APPEND PETARI_BUILT_ELSEWHERE "${source}")
     endforeach()
   endforeach()
-  set(PETARI_GAME_SOURCES source/compat/Sdk.cpp source/compat/OsThreads.cpp source/compat/OsMemory.cpp source/compat/GameHeap.cpp source/compat/Dvd.cpp source/compat/Video.cpp source/compat/OsReset.cpp source/compat/SystemConfig.cpp source/compat/Wpad.cpp source/compat/NativeResources.cpp source/compat/GxFifo.cpp source/compat/Nwc24.cpp source/compat/WiiAudio.cpp source/compat/Nw4rDb.cpp source/compat/DolTables.cpp source/compat/Kpad.cpp
+  set(PETARI_GAME_SOURCES source/compat/Sdk.cpp source/compat/OsThreads.cpp source/compat/OsMemory.cpp source/compat/GameHeap.cpp source/compat/Dvd.cpp source/compat/Video.cpp source/compat/OsReset.cpp source/compat/GxRender.cpp source/compat/SystemConfig.cpp source/compat/Wpad.cpp source/compat/NativeResources.cpp source/compat/GxFifo.cpp source/compat/Nwc24.cpp source/compat/WiiAudio.cpp source/compat/Nw4rDb.cpp source/compat/DolTables.cpp source/compat/Kpad.cpp
     "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/LiveActor/RailRiderCamera.cpp"
     "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/LiveActor/LiveActorSound.cpp")
   foreach(source ${PETARI_GAME_CANDIDATES})
@@ -329,9 +334,10 @@ if(NINTENDO_3DS)
     "${CMAKE_CURRENT_BINARY_DIR}/petari/MSL_C/wprintf.c")
   target_include_directories(msl_wide PRIVATE compat)
   target_compile_options(msl_wide PRIVATE -w)
+  set_source_files_properties(source/compat/GxRender.cpp PROPERTIES OBJECT_DEPENDS "${GX_SHADER}")
   add_library(petari_game STATIC ${PETARI_GAME_SOURCES})
-  target_link_libraries(petari_game PUBLIC petari_scene petari_anim)
-  target_include_directories(petari_game PRIVATE include)
+  target_link_libraries(petari_game PUBLIC petari_scene petari_anim smg_pica)
+  target_include_directories(petari_game PRIVATE include "${CMAKE_CURRENT_BINARY_DIR}")
   target_compile_options(petari_game PRIVATE -Wno-narrowing -ffunction-sections -fdata-sections)
 
   add_executable(mario_probe source/probe/MarioProbe.cpp)
@@ -341,7 +347,7 @@ if(NINTENDO_3DS)
   # The game and the port's libraries call each other: GNU ld rescans the group until nothing more resolves. The
   # boundary stops come after it, for what the game does not define.
   target_link_libraries(mario_probe PRIVATE -Wl,--start-group smg_platform petari_game petari_scene petari_anim petari_j3d
-    petari_gravity petari_core msl_wide -Wl,--end-group petari_game_boundaries citro2d citro3d ctru m)
+    petari_gravity petari_core msl_wide smg_pica -Wl,--end-group petari_game_boundaries citro2d citro3d ctru m)
   target_link_options(mario_probe PRIVATE -Wl,--gc-sections "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/mario_probe.map")
   add_custom_command(TARGET mario_probe POST_BUILD
     COMMAND "${DEVKITPRO}/tools/bin/3dsxtool" "$<TARGET_FILE:mario_probe>" "${CMAKE_CURRENT_BINARY_DIR}/mario_probe.3dsx" VERBATIM)

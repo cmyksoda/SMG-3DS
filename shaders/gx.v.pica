@@ -1,0 +1,22 @@
+; The GX renderer's vertices arrive transformed to clip space on the CPU (source/core/GxDraw.cpp): this passes them
+; on, with the channel colour's bytes as fractions and the coordinates each combiner unit samples.
+.constf scale(0.00392156862, 0.0, 0.0, 0.0)
+.out outpos position
+.out outclr color
+.out outtc0 texcoord0
+.out outtc1 texcoord1
+.out outtc2 texcoord2
+.alias inpos v0
+.alias inclr v1
+.alias intc0 v2
+.alias intc1 v3
+.alias intc2 v4
+
+.proc main
+    mov outpos, inpos
+    mul outclr, scale.xxxx, inclr
+    mov outtc0, intc0
+    mov outtc1, intc1
+    mov outtc2, intc2
+    end
+.end
