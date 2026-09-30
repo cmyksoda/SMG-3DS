@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Compiles every source in one Petari directory for the 3DS (generated copies where the port adapts one) and
+# Compiles every source under one Petari directory for the 3DS (generated copies where the port adapts one) and
 # lists what they reference that neither they nor the port's libraries define: a bring-up's work list.
 set -euo pipefail
 project_dir=$(cd -- "$(dirname -- "$0")/.." && pwd)
@@ -15,11 +15,13 @@ FLAGS="-march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft -D__3DS__ -fno-rtt
   -isystem /opt/devkitpro/libctru/include -isystem /build/petari/include -isystem $P/include
   -isystem $P/libs/RVL_SDK/include -isystem $P/libs/JSystem/include -isystem $P/libs/nw4r/include"
 cd /out && rm -f -- *.o
-for f in $P/src/$SUBDIR/*.cpp; do
-    name=$(basename "$f" .cpp); src=$f
-    [ -f "/build/petari/$SUBDIR/$name.cpp" ] && src=/build/petari/$SUBDIR/$name.cpp
-    arm-none-eabi-g++ $FLAGS "$src" -o "$name.o" 2>/dev/null || echo "$name" >> failed.txt
-done
+compile() {
+    relative=${1#$P/src/}; src=$1; object=$(echo "${relative%.cpp}" | tr / _).o
+    [ -f "/build/petari/$relative" ] && src=/build/petari/$relative
+    arm-none-eabi-g++ $FLAGS "$src" -o "$object" 2>/dev/null || echo "$relative" >> failed.txt
+}
+export -f compile; export P FLAGS
+find "$P/src/$SUBDIR" -name "*.cpp" | xargs -P "$(nproc)" -n 1 bash -c '"'"'compile "$0"'"'"'
 arm-none-eabi-nm -C --defined-only -- *.o /build/lib*.a 2>/dev/null |
     awk '"'"'$2 ~ /^[TWVDBRtwvdbruS]$/ {sub(/^[0-9a-f]+ [A-Za-z] /,""); print}'"'"' | sort -u > defined.txt
 arm-none-eabi-nm -C --undefined-only -- *.o | sed "s/^ *U //" | grep -v ":$" |
