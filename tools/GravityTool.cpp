@@ -95,7 +95,7 @@ int main(int argc, char** argv) {
     std::printf("%zu gravities placed in %zu zones\n", scene.placedGravities().size(), stage.zones.size());
     for (const auto& [name, count] : placed) std::printf("%5d %s\n", count, name.c_str());
     for (const auto& [name, count] : skipped) std::printf("%5d %s (not brought up)\n", count, name.c_str());
-    std::printf("%zu use switches, sleep or a follower and keep their start state\n", scene.startStateGravities().size());
+    std::printf("%zu follow a base matrix, which is not brought up, and keep their placement\n", scene.startStateGravities().size());
 
     const TVec3f at = argc == 7 ? TVec3f(std::atof(argv[4]), std::atof(argv[5]), std::atof(argv[6]))
                                 : TVec3f(stage.start[0], stage.start[1], stage.start[2]);

@@ -71,6 +71,7 @@ bool placeStageGravity(const std::string& root, const Stage& stage, NativeScene&
             }
         }
     }
+    scene.syncAfterPlacement();
     scene.forgetZoneTables();
     error.clear();
     return true;

@@ -7,6 +7,8 @@
 
 class CollisionCode;
 class GravityCreator;
+class SleepController;
+class StageSwitchCtrl;
 class JMapInfo;
 class JMapInfoIter;
 class NameObjHolder;
@@ -48,19 +50,24 @@ public:
     };
     const ZonePaths* zonePaths(int zone) const;
 
+    struct GravitySleep;
     struct PlacedGravity {
         GravityCreator* creator;
         void (*destroy)(GravityCreator*);
         PlanetGravity* gravity;
         std::string name;
         int zone;
+        StageSwitchCtrl* switches; // SW_A and SW_B, as the actor's StageSwitchCtrl holds them
+        GravitySleep* sleep;       // SW_SLEEP
     };
     // GlobalGravityObj's work for one planetobjinfo row. False, with the name kept in skippedGravities(),
     // for a kind not brought up.
     bool placeGlobalGravity(const JMapInfoIter& row);
+    // GameScene::init's last step after placement: every sleep controller syncs with its switch.
+    void syncAfterPlacement();
     const std::vector<PlacedGravity>& placedGravities() const { return mGravities; }
     const std::vector<std::string>& skippedGravities() const { return mSkippedGravities; }
-    // Rows whose switches or followers are only honored as a scene starts: every switch off, nothing moved.
+    // Rows with a follower (FollowId), which keep their placement: base matrix followers are not brought up.
     const std::vector<std::string>& startStateGravities() const { return mStartStateGravities; }
 
     // CollisionDirector's attribute codes, which KCollisionServer reads camera ids through.
@@ -77,6 +84,9 @@ public:
     const std::vector<CameraCodes>& cameraCodes() const { return mCameraCodes; }
 
 private:
+    void moveGravities();
+    static void forgetGravity(const PlacedGravity& placed);
+
     NameObjHolder* mNameObjHolder;
     SceneObjHolder* mSceneObjHolder;
     bool mSyncRequested = false;

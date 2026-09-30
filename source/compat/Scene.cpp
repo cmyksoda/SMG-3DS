@@ -2,6 +2,7 @@
 #include <Game/Camera/CameraPolygonCodeUtil.hpp>
 #include <Game/Gravity/PlanetGravityManager.hpp>
 #include <Game/Map/CollisionCode.hpp>
+#include <Game/Map/StageSwitch.hpp>
 #include <Game/NameObj/NameObjHolder.hpp>
 #include <Game/NameObj/NameObjRegister.hpp>
 #include <Game/Scene/SceneNameObjMovementController.hpp>
@@ -32,11 +33,18 @@ NativeScene::NativeScene()
     sCurrent = this;
     // GameScene::init creates these first; the rest of its list is not brought up.
     MR::createSceneObj(SceneObj_PlanetGravityManager);
+    // SceneFunction makes the switch container with the scene's other placement holders.
+    MR::createSceneObj(SceneObj_StageSwitchContainer);
 }
 
 NativeScene::~NativeScene() {
     // The game frees the whole scene heap at once; here each scene object goes by itself.
-    for (const PlacedGravity& placed : mGravities) placed.destroy(placed.creator);
+    for (const PlacedGravity& placed : mGravities) forgetGravity(placed);
+    // The zone switches, which the game leaves to the scene heap with the container.
+    if (auto* switches = static_cast<StageSwitchContainer*>(mSceneObjHolder->getObj(SceneObj_StageSwitchContainer))) {
+        for (int i = 0; i < switches->mSwitches.size(); ++i) delete switches->mSwitches[i].mSwitch;
+        delete switches->mGlobalSwitches;
+    }
     for (int id = 0; id < SceneObj_NumMax; ++id) delete mSceneObjHolder->getObj(id);
     delete mSceneObjHolder;
     for (CodeTable* table : {mCollisionCode->mFloorTable, mCollisionCode->mWallTable, mCollisionCode->mSoundTable,
@@ -110,6 +118,7 @@ void NativeScene::movement() {
         MR::syncWithFlagsAllSceneNameObj();
         mSyncRequested = false;
     }
+    moveGravities();
 }
 } // namespace smg
 
@@ -126,6 +135,8 @@ NameObj* SceneObjHolder::newEachObj(int id) {
     switch (id) {
     case SceneObj_PlanetGravityManager:
         return new PlanetGravityManager("重力");
+    case SceneObj_StageSwitchContainer:
+        return new StageSwitchContainer();
     }
     std::fprintf(stderr, "SceneObjHolder: scene object %d is not brought up\n", id);
     std::abort();
@@ -144,6 +155,10 @@ bool isExistSceneObj(int id) {
 // StageDataHolder counts the zones it placed, and finds a row's zone by the table it came from.
 bool isPlacementLocalStage() {
     return smg::NativeScene::current().hasPlacedZones();
+}
+
+s32 getPlacedZoneId(const JMapInfoIter& rIter) {
+    return smg::NativeScene::current().zoneOf(rIter);
 }
 
 const TPos3f* getZonePlacementMtx(const JMapInfoIter& rIter) {

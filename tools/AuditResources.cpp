@@ -104,7 +104,8 @@ int auditGravity(const fs::path& root) {
         if (entry.is_directory() && fs::exists(entry.path() / (name + "Scenario.arc"))) galaxies.push_back(name);
     }
     std::sort(galaxies.begin(), galaxies.end());
-    std::size_t scenarios = 0, failed = 0, placedTotal = 0, startState = 0, sampled = 0, wires = 0, wirePoints = 0;
+    std::size_t scenarios = 0, failed = 0, placedTotal = 0, startState = 0, sampled = 0, wires = 0, wirePoints = 0, switched = 0,
+                asleep = 0;
     std::map<std::string, std::size_t> placed, skipped;
     std::vector<std::string> noStartGravity, withSkipped, noEntrance, noLanding, farLandings;
     std::map<std::string, std::size_t> landings, floors;
@@ -155,6 +156,10 @@ int auditGravity(const fs::path& root) {
             for (const auto& name : scene.skippedGravities()) ++skipped[name];
             if (!scene.skippedGravities().empty()) withSkipped.push_back(label);
             placedTotal += scene.placedGravities().size();
+            for (const auto& g : scene.placedGravities()) {
+                switched += g.switches || g.sleep;
+                asleep += !g.gravity->mAppeared;
+            }
             startState += scene.startStateGravities().size();
 
             // Each wire's samples lie along its rail from the rail's first point, evenly to within the few percent the
@@ -236,7 +241,8 @@ int auditGravity(const fs::path& root) {
     for (const auto& [name, count] : skipped) std::printf("%6zu  skipped: %s\n", count, name.c_str());
     std::printf("%zu wire gravities sampled their rails into %zu points, from each rail's start, chords within 5%% of even\n",
                 wires, wirePoints);
-    std::printf("%zu placements keep only their start state (switches, SW_SLEEP or FollowId)\n", startState);
+    std::printf("%zu placements follow their switches (%zu asleep as the scene starts); %zu have a follower, not brought up\n",
+                switched, asleep, startState);
     std::printf("%zu scenarios skip a gravity:", withSkipped.size());
     for (const auto& label : withSkipped) std::printf(" [%s]", label.c_str());
     std::printf("\n%zu hidden-star scenarios have no MarioNo 0 entrance in their layers:", noEntrance.size());

@@ -6,6 +6,8 @@
 #include <Game/Gravity/GravityInfo.hpp>
 #include <Game/Gravity/PlanetGravityManager.hpp>
 #include <Game/Gravity/PointGravity.hpp>
+#include <Game/Map/StageSwitch.hpp>
+#include <Game/Util/JMapIdInfo.hpp>
 #include <Game/NameObj/NameObjHolder.hpp>
 #include <Game/Scene/SceneObjHolder.hpp>
 #include <Game/Util/MtxUtil.hpp>
@@ -87,7 +89,7 @@ struct Row {
     const char* name;
     float pos[3]{}, dir[3]{}, scale[3]{1, 1, 1};
     s32 args[3]{-1, -1, -1};
-    s32 priority = 0, switchA = -1, rail = -1;
+    s32 priority = 0, switchA = -1, switchB = -1, sleep = -1, rail = -1;
     float range = -1, distant = 0;
     const char* type = "Normal";
     const char* power = "Normal";
@@ -100,7 +102,7 @@ std::vector<std::uint8_t> planetTable(const std::vector<Row>& rows) {
     const Field fields[]{{"name", 6}, {"pos_x", 2}, {"pos_y", 2}, {"pos_z", 2}, {"dir_x", 2}, {"dir_y", 2}, {"dir_z", 2},
                          {"scale_x", 2}, {"scale_y", 2}, {"scale_z", 2}, {"Obj_arg0", 0}, {"Obj_arg1", 0}, {"Obj_arg2", 0},
                          {"Priority", 0}, {"SW_A", 0}, {"Range", 2}, {"Distant", 2}, {"Gravity_type", 6}, {"Power", 6},
-                         {"Inverse", 0}, {"CommonPath_ID", 0}};
+                         {"Inverse", 0}, {"CommonPath_ID", 0}, {"SW_B", 0}, {"SW_SLEEP", 0}};
     constexpr unsigned count = sizeof(fields) / sizeof(fields[0]), stride = count * 4, data = 16 + count * 12;
     std::vector<std::uint8_t> bytes(data + rows.size() * stride);
     std::string strings;
@@ -126,7 +128,8 @@ std::vector<std::uint8_t> planetTable(const std::vector<Row>& rows) {
                                      static_cast<std::uint32_t>(row.args[1]), static_cast<std::uint32_t>(row.args[2]),
                                      static_cast<std::uint32_t>(row.priority), static_cast<std::uint32_t>(row.switchA),
                                      real(row.range), real(row.distant), text(row.type), text(row.power),
-                                     static_cast<std::uint32_t>(row.inverse), static_cast<std::uint32_t>(row.rail)};
+                                     static_cast<std::uint32_t>(row.inverse), static_cast<std::uint32_t>(row.rail),
+                                     static_cast<std::uint32_t>(row.switchB), static_cast<std::uint32_t>(row.sleep)};
         for (unsigned f = 0; f < count; ++f) put(data + r * stride + f * 4, values[f]);
     }
     bytes.insert(bytes.end(), strings.begin(), strings.end());
@@ -186,7 +189,7 @@ void creators(smg::NativeScene& scene) {
     MR::makeMtxTR(turned.toMtxPtr(), TVec3f(10000, 0, 0), TVec3f(0, 0, 90));
     const int galaxy = scene.addZone(identity), zone = scene.addZone(turned);
 
-    std::vector<Row> shapes(8), zoned(3);
+    std::vector<Row> shapes(8), zoned(6);
     shapes[0].name = "GlobalCubeGravity";
     shapes[1].name = "GlobalCubeGravity";
     shapes[1].args[0] = 0, shapes[1].args[1] = 1, shapes[1].args[2] = 0;
@@ -210,6 +213,11 @@ void creators(smg::NativeScene& scene) {
     zoned[1].name = "GlobalPlaneGravity";
     zoned[2].name = "GlobalPointGravity";
     zoned[2].scale[0] = 3, zoned[2].distant = -1;
+    // Switches in the second zone: B gates one off, SW_SLEEP puts one to sleep, and A=4 needs switch 4.
+    for (int i = 3; i < 6; ++i) zoned[i].name = "GlobalPointGravity", zoned[i].pos[1] = 1000, zoned[i].range = 3000;
+    zoned[3].switchB = 3;
+    zoned[4].sleep = 4;
+    zoned[5].switchA = 4;
 
     const auto shapeBytes = planetTable(shapes), zonedBytes = planetTable(zoned);
     smg::Bcsv shapeTable, zonedTable;
@@ -227,10 +235,15 @@ void creators(smg::NativeScene& scene) {
     scene.addZonePaths(galaxy, rails.info(), {&points.info()});
     for (int row = 0; row < shapeTable.info().getNumEntries(); ++row) scene.placeGlobalGravity(JMapInfoIter(&shapeTable.info(), row));
     for (int row = 0; row < zonedTable.info().getNumEntries(); ++row) scene.placeGlobalGravity(JMapInfoIter(&zonedTable.info(), row));
+    scene.syncAfterPlacement();
+    // Levers: what a switch object does with its own row's switches, the original StageSwitchCtrl.
+    StageSwitchCtrl* leverA7 = MR::createStageSwitchCtrl(nullptr, JMapInfoIter(&shapeTable.info(), 1));
+    StageSwitchCtrl* leverB3 = MR::createStageSwitchCtrl(nullptr, JMapInfoIter(&zonedTable.info(), 3));
+    StageSwitchCtrl* leverA4 = MR::createStageSwitchCtrl(nullptr, JMapInfoIter(&zonedTable.info(), 5));
     scene.forgetZoneTables();
 
     const auto& placed = scene.placedGravities();
-    check(placed.size() == 11 && scene.skippedGravities().empty(), "every kind is placed, wire gravity too");
+    check(placed.size() == 14 && scene.skippedGravities().empty(), "every kind is placed, wire gravity too");
     check(placed[0].zone == galaxy && placed[8].zone == zone, "each gravity knows its zone");
     for (const auto& gravity : placed) check(gravity.gravity->mIsRegistered, "each gravity is registered with the manager");
 
@@ -244,7 +257,41 @@ void creators(smg::NativeScene& scene) {
     const PlanetGravity* topOnly = placed[1].gravity;
     check(vec(pullAt(topOnly, 0, 3000, 0), 0, -1, 0) && vec(pullAt(topOnly, 3000, 500, 0), 0, 0, 0), "a cube with only its top face");
     check(!topOnly->mActivated, "switch A gates a gravity off while the scene starts");
-    check(scene.startStateGravities().size() == 1, "and that row is reported as start-state only");
+    check(scene.startStateGravities().empty(), "switches are followed, so no row keeps only its start state");
+    leverA7->onSwitchA();
+    scene.movement();
+    check(topOnly->mActivated && vec(pullAt(topOnly, 0, 3000, 0), 0, -1, 0), "turning switch 7 on turns the cube on");
+    leverA7->offSwitchA();
+    scene.movement();
+    check(!topOnly->mActivated, "and off again");
+
+    const PlanetGravity* gatedB = placed[11].gravity;
+    const PlanetGravity* sleeper = placed[12].gravity;
+    const PlanetGravity* needs4 = placed[13].gravity;
+    check(gatedB->mActivated && gatedB->mAppeared, "a gravity with only switch B starts on");
+    leverB3->onSwitchB();
+    scene.movement();
+    check(!gatedB->mActivated, "switch B on turns it off");
+    leverB3->offSwitchB();
+    scene.movement();
+    check(gatedB->mActivated, "and switch B off turns it back on");
+    check(!topOnly->mActivated, "another zone's switch leaves the cube alone");
+
+    check(!sleeper->mAppeared, "SW_SLEEP off puts a gravity to sleep when the scene starts, as initSync does");
+    check(!needs4->mActivated, "switch A=4 is off too");
+    leverA4->onSwitchA();
+    scene.movement();
+    check(sleeper->mAppeared && needs4->mActivated, "switch 4 on wakes the sleeper and turns the A=4 gravity on");
+    leverA4->offSwitchA();
+    scene.movement();
+    check(!sleeper->mAppeared && !needs4->mActivated, "and off puts them back");
+    for (StageSwitchCtrl* lever : {leverA7, leverB3, leverA4}) {
+        for (SwitchIdInfo* info : {lever->mSW_A, lever->mSW_B, lever->mSW_Appear, lever->mSW_Dead}) {
+            if (info) delete info->mIDInfo;
+            delete info;
+        }
+        delete lever;
+    }
 
     // Cone of scale 2: base radius 1000 at the placement point, apex 1000 above it.
     const PlanetGravity* cone = placed[2].gravity;

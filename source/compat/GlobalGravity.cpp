@@ -2,6 +2,10 @@
 #include <Game/Gravity/GravityCreator.hpp>
 #include <Game/Gravity/WireGravity.hpp>
 #include <Game/LiveActor/RailRider.hpp>
+#include <Game/Map/ActorAppearSwitchListener.hpp>
+#include <Game/Map/SleepController.hpp>
+#include <Game/Map/StageSwitch.hpp>
+#include <Game/Util/JMapIdInfo.hpp>
 #include <Game/Util/JMapInfo.hpp>
 #include <Game/Util/JMapUtil.hpp>
 #include <cstring>
@@ -67,6 +71,64 @@ bool used(const JMapInfoIter& row, const char* field) {
 } // namespace
 
 namespace smg {
+namespace {
+// GlobalGravityObj::updateSwitch: switch A must be on and switch B off, for whichever the row uses.
+void updateSwitch(PlanetGravity* gravity, const StageSwitchCtrl* switches) {
+    if (!switches || !(switches->isValidSwitchA() || switches->isValidSwitchB())) return;
+    bool switchA = true, switchB = true;
+    if (switches->isValidSwitchA()) switchA = switches->isOnSwitchA();
+    if (switches->isValidSwitchB()) switchB = !switches->isOnSwitchB();
+    gravity->mActivated = switchA && switchB;
+}
+
+void forgetSwitch(SwitchIdInfo* info) {
+    if (!info) return;
+    delete info->mIDInfo;
+    delete info;
+}
+} // namespace
+
+// SleepControlFunc::addSleepControl's listener, calling what GlobalGravityObj's makeActorAppeared and
+// makeActorDead do; SleepControllerHolder's own add, initSync and movement are the scene's.
+struct NativeScene::GravitySleep : SwitchEventListener {
+    PlanetGravity* gravity;
+    const StageSwitchCtrl* switches;
+    SleepController* controller = nullptr;
+    GravitySleep(PlanetGravity* g, const StageSwitchCtrl* s) : gravity(g), switches(s) {}
+    void listenSwitchOnEvent() override {
+        gravity->mAppeared = true;
+        updateSwitch(gravity, switches);
+    }
+    void listenSwitchOffEvent() override { gravity->mAppeared = false; }
+};
+
+void NativeScene::forgetGravity(const PlacedGravity& placed) {
+    if (StageSwitchCtrl* switches = placed.switches) {
+        for (SwitchIdInfo* info : {switches->mSW_A, switches->mSW_B, switches->mSW_Appear, switches->mSW_Dead}) forgetSwitch(info);
+        delete switches;
+    }
+    if (GravitySleep* sleep = placed.sleep) {
+        forgetSwitch(sleep->controller->mSwitchIdInfo);
+        delete sleep->controller;
+        delete sleep;
+    }
+    placed.destroy(placed.creator);
+}
+
+void NativeScene::syncAfterPlacement() {
+    for (const PlacedGravity& placed : mGravities)
+        if (placed.sleep) placed.sleep->controller->initSync();
+}
+
+// SleepControllerHolder::movement, then GlobalGravityObj::movement for each gravity with switches. A dead
+// actor is out of the scene's movement until it appears again.
+void NativeScene::moveGravities() {
+    for (const PlacedGravity& placed : mGravities)
+        if (placed.sleep) placed.sleep->controller->update();
+    for (const PlacedGravity& placed : mGravities)
+        if (placed.gravity->mAppeared) updateSwitch(placed.gravity, placed.switches);
+}
+
 bool NativeScene::placeGlobalGravity(const JMapInfoIter& row) {
     const char* name = nullptr;
     if (!MR::getObjectName(&name, row)) return false;
@@ -79,17 +141,22 @@ bool NativeScene::placeGlobalGravity(const JMapInfoIter& row) {
         return false;
     }
 
-    // GlobalGravityObj::init: the creator builds, sets up and registers the gravity.
+    // GlobalGravityObj::init: the creator builds, sets up and registers the gravity, the actor reads its
+    // switches, appears (updating its switch state), and puts itself under sleep control.
     GravityCreator* creator = kind->create();
     creator->createFromJMap(row);
     PlanetGravity* gravity = creator->getGravity();
-    mGravities.push_back({creator, kind->destroy, gravity, name, zoneOf(row)});
-
-    // makeActorAppeared, then updateSwitch: switch A gates it on and B off, and every switch starts off.
+    StageSwitchCtrl* switches = nullptr;
+    if (MR::isExistStageSwitchA(row) || MR::isExistStageSwitchB(row)) switches = MR::createStageSwitchCtrl(nullptr, row);
     gravity->mAppeared = true;
-    const bool switchA = used(row, "SW_A"), switchB = used(row, "SW_B");
-    if (switchA || switchB) gravity->mActivated = !switchA;
-    if (switchA || switchB || used(row, "SW_SLEEP") || used(row, "FollowId")) mStartStateGravities.emplace_back(name);
+    updateSwitch(gravity, switches);
+    GravitySleep* sleep = nullptr;
+    if (MR::isExistStageSwitchSleep(row)) {
+        sleep = new GravitySleep(gravity, switches);
+        sleep->controller = new SleepController(row, sleep);
+    }
+    mGravities.push_back({creator, kind->destroy, gravity, name, zoneOf(row), switches, sleep});
+    if (used(row, "FollowId")) mStartStateGravities.emplace_back(name);
     return true;
 }
 } // namespace smg

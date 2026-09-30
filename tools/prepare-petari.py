@@ -415,6 +415,15 @@ adapt("src/Game/Map/CollisionCode.cpp", "Game/Map/CollisionCode.cpp", [
     "u32 CollisionCode::getCameraID(const Triangle& rTriangle) {",
 ], reason="Triangle comes with CollisionParts, which waits for LiveActor")
 
+# Stage switches: the container, zone switches, switch controls and sleep controllers are the originals.
+# The game leaves the zone switches to the scene heap; the native scene frees them, so it needs to see them.
+adapt("include/Game/Map/StageSwitch.hpp", "include/Game/Map/StageSwitch.hpp", [
+    ("private:\n    /* 0x0C */", "    /* 0x0C */", 1),
+])
+adapt("include/Game/Util/JMapIdInfo.hpp", "include/Game/Util/JMapIdInfo.hpp", [
+    ("#include <revolution.h>", "#include <revolution/types.h>", 1),
+])
+
 adapt("include/Game/System/WPadButton.hpp", "include/Game/System/WPadButton.hpp", [
     ("#include <revolution.h>", "#include <revolution/kpad.h>", 1),
 ])

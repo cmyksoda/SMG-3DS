@@ -142,8 +142,8 @@ borrows its owner's sample storage rather than allocating the Wii's 120-sample I
    19.4 MB of linear memory after Good Egg in Azahar; other formats stay uncompressed.
 4. **Original scene and actor execution.** Placed gravity runs through the original creators
    over the native scene. Next: `LiveActor` (which also brings back `GlobalGravityObj` and the
-   `GravityUtil` actor overloads, and `CollisionParts` with `CollisionDirector`'s keepers), stage
-   switches, then the original `NameObjListExecutor` scheduler,
+   `GravityUtil` actor overloads, and `CollisionParts` with `CollisionDirector`'s keepers), then the
+   original `NameObjListExecutor` scheduler,
    gravity, collision, stage placement, Mario, animation, and camera using the real resources.
    Integrate the input boundary into `GamePadUtil`/`WPad`, including explicit digital spin input.
    Skip the Wii pointer's multi-frame loss-of-IR delay: stylus lift must hide it immediately.
@@ -204,10 +204,15 @@ Three ways forward:
   comes from the original `MR::makeMtxTR`, as `StageDataHolder::calcPlacementMtx` builds it;
 - `GlobalGravityObj`'s work, until `LiveActor` runs (`source/compat/GlobalGravity.cpp`): pick the
   creator by the names `NameObjFactory` uses, call `createFromJMap` (which registers the gravity),
-  then appear and apply switches as a scene starts, with every stage switch off: a gravity with
-  switch A stays off, one with only switch B stays on. Rows with switches, sleep control
-  (`SW_SLEEP`) or a follower (`FollowId`) are listed, because only their start state is honored.
-  Creators and gravities (and the wire creator's `RailRider`) are freed with the scene.
+  read the row's switches into the original `StageSwitchCtrl`, appear, and put `SW_SLEEP` rows under
+  an original `SleepController` whose listener does what the actor's `makeActorAppeared` and
+  `makeActorDead` do to its gravity. `syncAfterPlacement` is GameScene's `initSyncSleepController`,
+  so a gravity whose sleep switch is off starts asleep. `movement()` runs the sleep controllers, then
+  `updateSwitch` for every awake gravity with switches: switch A must be on and B off. Switches live
+  in the original `StageSwitchContainer`, one set of 128 per zone plus the global ones. Followers
+  (`FollowId`, which no gravity on the disc uses) keep their placement. Creators, gravities, switch
+  controls, sleep controllers and the wire creator's `RailRider` are freed with the scene.
+- `MR::getPlacedZoneId`, answered from the zone a row's table was registered for.
 
 - `CollisionDirector`'s `CollisionCode` (created with the scene, as the director creates it), which
   `KCollisionServer` reads camera ids through, and `CameraDirector`'s camera-code collection:
@@ -270,7 +275,8 @@ gravity rows, all in `planetobjinfo` tables: 463 planes in boxes, 178 points, 14
 disks, 75 segments, 34 planes in cylinders, 10 disk tori, 9 planes, 7 cones and 12 wires. Every
 kind is placed: the 59 wire placements (22 scenarios, among them Honeybee Kingdom, Sand Clock and
 Cosmos Garden) sample their real rails into 1,095 points, each from its rail's first point, with
-chords within 5% of even (the original integrates Bezier lengths numerically, a little short). 63 rows use switch A, 15 switch B, 11 `SW_SLEEP`, and none
+chords within 5% of even (the original integrates Bezier lengths numerically, a little short).
+294 placements follow their switches; 61 start asleep because their `SW_SLEEP` switch is off. 63 rows use switch A, 15 switch B, 11 `SW_SLEEP`, and none
 a follower. Every scenario has gravity at Mario's start except twelve hidden-star scenarios
 (`IsHidden`), which place no MarioNo 0 entrance of their own; `Stage::entrance` says so instead
 of starting at the origin. Another 67 rows place actors with gravity of their own (the reverse
@@ -295,6 +301,6 @@ across 12 zones; the preview draws 56 rigid models in 172 placements.
 
 The portable math tests check tolerances and conventions, not bit-identical Gekko rounding.
 The native validation app passes 1,069 math, 37 WPad, 179 BCSV, 1,043 J3D model/texture,
-8,607 TEV combiner, 27 original gravity, 27 NameObj, 60 scene and gravity creator, 48 collision, 7 ETC1 and 8 GPU texture checks on emulated ARM
+8,607 TEV combiner, 27 original gravity, 27 NameObj, 73 scene and gravity creator, 48 collision, 7 ETC1 and 8 GPU texture checks on emulated ARM
 in Azahar; the GPU checks compare the hardware's ETC1 decoding against ours. Of the disc's
 7,780 materials, 6,949 translate to the combiner exactly. No physical console has been tested.

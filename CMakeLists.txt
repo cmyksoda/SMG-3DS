@@ -89,7 +89,10 @@ add_library(petari_scene STATIC
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Map/CollisionCode.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/LiveActor/RailRider.cpp"
   "${PETARI}/src/Game/Map/BezierRail.cpp"
-  "${PETARI}/src/Game/Map/RailPart.cpp")
+  "${PETARI}/src/Game/Map/RailPart.cpp"
+  "${PETARI}/src/Game/Map/StageSwitch.cpp"
+  "${PETARI}/src/Game/Map/SleepController.cpp"
+  "${PETARI}/src/Game/Util/JMapIdInfo.cpp")
 target_link_libraries(petari_scene PUBLIC petari_gravity)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
   "${PETARI}/src/Game/NameObj/NameObjHolder.cpp" "${PETARI}/src/Game/Util/HashUtil.cpp"
@@ -105,7 +108,8 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
   "${PETARI}/libs/JSystem/include/JSystem/JKernel/JKRHeap.hpp"
   "${PETARI}/src/Game/Map/KCollision.cpp" "${PETARI}/include/Game/Map/KCollision.hpp"
   "${PETARI}/src/Game/Map/CollisionCode.cpp" "${PETARI}/include/Game/Camera/CameraPolygonCodeUtil.hpp"
-  "${PETARI}/src/Game/LiveActor/RailRider.cpp")
+  "${PETARI}/src/Game/LiveActor/RailRider.cpp" "${PETARI}/include/Game/Map/StageSwitch.hpp"
+  "${PETARI}/include/Game/Util/JMapIdInfo.hpp")
 
 add_library(smg_platform STATIC
   source/core/Input.cpp source/core/Motion.cpp source/core/Settings.cpp source/core/Session.cpp
