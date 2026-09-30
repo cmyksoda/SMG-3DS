@@ -480,11 +480,14 @@ void SceneRenderer::loadStage(const std::string& root, const std::string& galaxy
         startGravity_ = stage_.entrance ? describeGravity(*gravity_, stage_, stage_.start.data()) : "no MarioNo 0 entrance";
         // Each model's collision arrives with it from the loader thread.
         collision_ = std::make_unique<StageCollision>();
-        useLights(smg::loadStageLights(root, *gravity_, error) ? gravity_->defaultAreaLight() : nullptr);
-        if (!gravity_->defaultAreaLight()) lightName_ = "lights unavailable: " + error;
+        lightSets_.clear();
+        lightError_ = smg::loadStageLights(root, *gravity_, error) ? "" : "lights unavailable: " + error;
+        lightSet(gravity_->defaultAreaLight());
     } else {
         startGravity_ = "unavailable: " + error;
         gravity_.reset();
+        lightSets_.clear();
+        lightSet(nullptr);
     }
     resetCamera();
     status_ = std::to_string(stage_.objects.size()) + " placements, " + std::to_string(names_.size()) + " models to load";
@@ -501,26 +504,44 @@ void SceneRenderer::loadStage(const std::string& root, const std::string& galaxy
 
 // Placed models draw in the map and planet buffers, which take the area light's planet set; the player,
 // enemy and NPC sets come with actors. Without light data every channel sees plain white.
-void SceneRenderer::useLights(const AreaLightInfo* area) {
-    const auto unit = [](const GXColor& c, float* out) {
-        out[0] = c.r / 255.0f, out[1] = c.g / 255.0f, out[2] = c.b / 255.0f, out[3] = c.a / 255.0f;
-    };
-    if (!area) {
-        for (auto& light : light_) light = {};
-        for (float& c : ambient_) c = 1;
-        lightAlpha_ = 0;
-        return;
+int SceneRenderer::lightSet(const AreaLightInfo* area) {
+    for (std::size_t i = 0; i < lightSets_.size(); ++i)
+        if (lightSets_[i].area == area) return static_cast<int>(i);
+    LightSet set{area, {}, {1, 1, 1, 1}, 0};
+    if (area) {
+        const auto unit = [](const GXColor& c, float* out) {
+            out[0] = c.r / 255.0f, out[1] = c.g / 255.0f, out[2] = c.b / 255.0f, out[3] = c.a / 255.0f;
+        };
+        const ActorLightInfo& planet = area->mPlanetLight;
+        const LightInfo* infos[2]{&planet.mInfo0, &planet.mInfo1};
+        for (int i = 0; i < 2; ++i) {
+            unit(infos[i]->mColor, set.lights[i].color);
+            set.lights[i].position[0] = infos[i]->mPos.x, set.lights[i].position[1] = infos[i]->mPos.y;
+            set.lights[i].position[2] = infos[i]->mPos.z;
+            set.lights[i].followCamera = infos[i]->mIsFollowCamera;
+        }
+        unit(planet.mColor, set.ambient);
+        set.alpha = planet.mAlpha2 / 255.0f;
     }
-    const ActorLightInfo& planet = area->mPlanetLight;
-    const LightInfo* infos[2]{&planet.mInfo0, &planet.mInfo1};
+    lightSets_.push_back(set);
+    return static_cast<int>(lightSets_.size()) - 1;
+}
+
+// LightFunction::loadActorLightInfo: positions go into view space unless they follow the camera already;
+// the third light, at the camera, lights alpha only.
+void SceneRenderer::loadLightSet(const LightSet& set, const C3D_Mtx& view) {
     for (int i = 0; i < 2; ++i) {
-        unit(infos[i]->mColor, light_[i].color);
-        light_[i].position[0] = infos[i]->mPos.x, light_[i].position[1] = infos[i]->mPos.y, light_[i].position[2] = infos[i]->mPos.z;
-        light_[i].followCamera = infos[i]->mIsFollowCamera;
+        const auto& light = set.lights[i];
+        float at[3]{light.position[0], light.position[1], light.position[2]};
+        if (!light.followCamera) {
+            for (int row = 0; row < 3; ++row)
+                at[row] = view.r[row].x * light.position[0] + view.r[row].y * light.position[1] + view.r[row].z * light.position[2] + view.r[row].w;
+        }
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, i ? light1Pos_ : light0Pos_, at[0], at[1], at[2], 1);
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, i ? light1Color_ : light0Color_, light.color[0], light.color[1], light.color[2], light.color[3]);
     }
-    unit(planet.mColor, ambient_);
-    lightAlpha_ = planet.mAlpha2 / 255.0f;
-    lightName_ = area->mAreaLightName;
+    C3D_FVUnifSet(GPU_VERTEX_SHADER, light2Alpha_, set.alpha, 0, 0, 0);
+    C3D_FVUnifSet(GPU_VERTEX_SHADER, lightAmbient_, set.ambient[0], set.ambient[1], set.ambient[2], set.ambient[3]);
 }
 
 void SceneRenderer::dropProbe() {
@@ -628,7 +649,9 @@ void SceneRenderer::consume(Prepared& prepared) {
     const bool sky = prepared.name.size() > 2 && prepared.name[0] == 'V' && prepared.name[1] == 'R';
     for (const auto& object : stage_.objects) {
         if (object.name != prepared.name) continue;
-        Instance instance{gpu.get(), {}, {}, 0, sky};
+        // ActorLightCtrl::init: the light area around the placement, else the stage's default.
+        const int light = gravity_ ? lightSet(gravity_->areaLightAt(TVec3f(object.transform[3], object.transform[7], object.transform[11]))) : 0;
+        Instance instance{gpu.get(), {}, {}, 0, sky, light};
         setMatrix(instance.transform, object.transform);
         const auto& t = object.transform;
         float scale = 0;
@@ -666,6 +689,7 @@ void SceneRenderer::update(const InputFrame& input, float seconds) {
             const std::string failed = failed_ ? ", " + std::to_string(failed_) + " failed" : "";
             status_ = std::to_string(models_.size()) + " models, " + std::to_string(instances_.size()) + " placed; skipped " +
                       std::to_string(skinned_) + " animated" + failed + memory;
+            if (!lightError_.empty()) status_ = lightError_;
             std::snprintf(memory, sizeof(memory), "%zu models, %.1f MB free", models_.size(), linearSpaceFree() / (1024.0 * 1024.0));
             summary_ = memory + failed;
             if (collision_ && stage_.entrance && startLanding_.empty()) {
@@ -701,6 +725,10 @@ void SceneRenderer::update(const InputFrame& input, float seconds) {
 
 void SceneRenderer::drawInstance(const Instance& instance, const C3D_Mtx& view, bool translucent, const Material*& current) {
     const GpuModel& model = *instance.model;
+    if (instance.sky || instance.light != currentLight_) {
+        loadLightSet(lightSets_[instance.light], view);
+        currentLight_ = instance.sky ? -1 : instance.light;
+    }
     C3D_Mtx modelView;
     Mtx_Multiply(&modelView, &view, &instance.transform);
     C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, modelView_, &modelView);
@@ -756,20 +784,8 @@ void SceneRenderer::draw(C3D_RenderTarget* target) {
                FVec3_New(position_[0] + forward[0], position_[1] + forward[1], position_[2] + forward[2]), FVec3_New(0, 1, 0), false);
     Mtx_PerspTilt(&projection, C3D_AngleFromDegrees(FieldOfView), C3D_AspectRatioTop, Near, Far, false);
     C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, projection_, &projection);
-    // LightFunction::loadActorLightInfo with the stage's planet light: positions go into view space unless
-    // they follow the camera already; the third light, at the camera, lights alpha only.
-    for (int i = 0; i < 2; ++i) {
-        const auto& light = light_[i];
-        float at[3]{light.position[0], light.position[1], light.position[2]};
-        if (!light.followCamera) {
-            for (int row = 0; row < 3; ++row)
-                at[row] = view.r[row].x * light.position[0] + view.r[row].y * light.position[1] + view.r[row].z * light.position[2] + view.r[row].w;
-        }
-        C3D_FVUnifSet(GPU_VERTEX_SHADER, i ? light1Pos_ : light0Pos_, at[0], at[1], at[2], 1);
-        C3D_FVUnifSet(GPU_VERTEX_SHADER, i ? light1Color_ : light0Color_, light.color[0], light.color[1], light.color[2], light.color[3]);
-    }
-    C3D_FVUnifSet(GPU_VERTEX_SHADER, light2Alpha_, lightAlpha_, 0, 0, 0);
-    C3D_FVUnifSet(GPU_VERTEX_SHADER, lightAmbient_, ambient_[0], ambient_[1], ambient_[2], ambient_[3]);
+    // Each placement's light set is loaded as it draws; the sky's view differs, so it loads its own.
+    currentLight_ = -1;
 
     // The sky turns with the camera but never moves away from it, and is drawn first without depth.
     C3D_Mtx skyView = view;

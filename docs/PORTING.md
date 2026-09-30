@@ -117,11 +117,16 @@ completion does not make those interfaces portable to ARM11/PICA200.
   -1 in the galaxy's own table) gives its planet set: two diffuse lights, a light at the camera
   that lights only alpha, which the planets' TEV programs turn into rim light, and an ambient,
   which lit channels use in place of the material's own (a judgment call: the director loads it
-  for every draw buffer). Light areas (an `AreaObj`) and point lights come with actors, and so do
-  the player, enemy and NPC sets. Petari's string literals are UTF-8 in this build and the disc's
+  for every draw buffer). Point lights come with actors, and so do the player, enemy and NPC sets.
+  Light areas are the original `LightArea`, `AreaObj` and `AreaForm`,
+  placed from `LightCtrlCube` and `LightCtrlCylinder` rows as `NameObjFactory` makes them; each
+  placement takes the light of the area around its origin, as `ActorLightCtrl::init` finds it. In Good
+  Egg the planets' sets barely differ between areas (the areas change the player and enemy sets), so
+  the look changes little until actors draw. Petari's string literals are UTF-8 in this build and the disc's
   names Shift-JIS, so `LightDataHolder`'s "デフォルト" never matches a row by name; its fallback, the
-  first row, is the one the disc names that anyway. Skinned models are skipped until animation exists. This is a stage preview with a
-  free camera, not gameplay: no actor, collision or camera code from the game runs yet.
+  first row, is the one the disc names that anyway. Skinned models are skipped until animation
+  exists. This is a stage preview with a free camera, not gameplay: no actor or camera code from the
+  game runs yet, and its gravity and collision answer only the readouts and the probe.
 
 The WPad pointer, accelerometer, swing, and rumble device members are not installed yet.
 Do not compile callers that dereference them until their native implementations exist.
@@ -141,8 +146,8 @@ borrows its owner's sample storage rather than allocating the Wii's 120-sample I
    collision, effects, layouts, and audio readers;
    direct casts of Wii bytes to ARM structures are insufficient. Handle the game's Shift-JIS
    names and text encodings deliberately.
-3. **PICA200 renderer.** The static stage path exists. Still missing: light areas and point
-   lights, GX's second color channel, projection texgens (they
+3. **PICA200 renderer.** The static stage path exists. Still missing: point lights, GX's second
+   color channel, projection texgens (they
    fall back to sphere maps), mipmaps, BTK/BRK/BPK material animation, billboards, runtime
    skinning, fog, particles and postprocessing. `resource_audit --models` lists the 831
    approximated TEV programs by reason: an unclamped output or value outside 0..1 (370 and 156,
@@ -223,7 +228,12 @@ Three ways forward:
   in the original `StageSwitchContainer`, one set of 128 per zone plus the global ones. Followers
   (`FollowId`, which no gravity on the disc uses) keep their placement. Creators, gravities, switch
   controls, sleep controllers and the wire creator's `RailRider` are freed with the scene.
-- `MR::getPlacedZoneId`, answered from the zone a row's table was registered for.
+- `MR::getPlacedZoneId`, `MR::getZoneNum` and `MR::getZoneNameFromZoneId`, answered from the zones
+  and the tables registered for them.
+- `AreaObjContainer`'s light area manager (`MR::getAreaObjManager("LightArea")`; any other manager
+  stops the program), `SwitchWatcherHolder`'s watch on switch-appear switches (validate and invalidate
+  as the switch changes), and `SleepControllerHolder`'s control of areas. Areas linked to a map part
+  are left out and listed, since they stand relative to the part's moving matrix.
 
 - `CollisionDirector`'s `CollisionCode` (created with the scene, as the director creates it), which
   `KCollisionServer` reads camera ids through, and `CameraDirector`'s camera-code collection:
@@ -287,7 +297,8 @@ disks, 75 segments, 34 planes in cylinders, 10 disk tori, 9 planes, 7 cones and 
 kind is placed: the 59 wire placements (22 scenarios, among them Honeybee Kingdom, Sand Clock and
 Cosmos Garden) sample their real rails into 1,095 points, each from its rail's first point, with
 chords within 5% of even (the original integrates Bezier lengths numerically, a little short).
-294 placements follow their switches; 61 start asleep because their `SW_SLEEP` switch is off. 63 rows use switch A, 15 switch B, 11 `SW_SLEEP`, and none
+294 placements follow their switches; 61 start asleep because their `SW_SLEEP` switch is off.
+2,175 light areas are placed across all scenarios (9 linked to map parts wait). 63 rows use switch A, 15 switch B, 11 `SW_SLEEP`, and none
 a follower. Every scenario has gravity at Mario's start except twelve hidden-star scenarios
 (`IsHidden`), which place no MarioNo 0 entrance of their own; `Stage::entrance` says so instead
 of starting at the origin. Another 67 rows place actors with gravity of their own (the reverse
@@ -312,6 +323,6 @@ across 12 zones; the preview draws 56 rigid models in 172 placements.
 
 The portable math tests check tolerances and conventions, not bit-identical Gekko rounding.
 The native validation app passes 1,069 math, 37 WPad, 179 BCSV, 1,043 J3D model/texture,
-8,607 TEV combiner, 27 original gravity, 27 NameObj, 81 scene and gravity creator, 48 collision, 7 ETC1 and 8 GPU texture checks on emulated ARM
+8,607 TEV combiner, 27 original gravity, 27 NameObj, 89 scene and gravity creator, 48 collision, 7 ETC1 and 8 GPU texture checks on emulated ARM
 in Azahar; the GPU checks compare the hardware's ETC1 decoding against ours. Of the disc's
 7,780 materials, 6,949 translate to the combiner exactly. No physical console has been tested.

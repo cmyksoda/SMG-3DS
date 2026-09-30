@@ -105,6 +105,14 @@ int main(int argc, char** argv) {
                     planet.mInfo1.mIsFollowCamera ? " following the camera" : "", planet.mAlpha2, planet.mColor.r, planet.mColor.g,
                     planet.mColor.b, planet.mColor.a);
     }
+    std::map<std::string, int> lit;
+    for (const auto& object : stage.objects) {
+        const AreaLightInfo* light = scene.areaLightAt(TVec3f(object.transform[3], object.transform[7], object.transform[11]));
+        ++lit[light ? light->mAreaLightName : "none"];
+    }
+    std::printf("%zu light areas; the placed models take:", scene.areaCount());
+    for (const auto& [name, count] : lit) std::printf(" %s x%d,", name.c_str(), count);
+    std::printf("\n");
     std::map<std::string, int> placed, skipped;
     for (const auto& gravity : scene.placedGravities()) ++placed[gravity.name];
     for (const auto& name : scene.skippedGravities()) ++skipped[name];

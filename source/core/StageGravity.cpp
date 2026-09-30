@@ -55,18 +55,23 @@ bool placeStageGravity(const std::string& root, const Stage& stage, NativeScene&
             scene.addZoneTable(id, table->info());
             tables.push_back(std::move(table));
         }
-        for (const std::string& layer : layerNames(zone.layerMask)) {
-            const std::string path = "jmp/placement/" + layer + "/planetobjinfo";
-            for (const ArchiveEntry& entry : entries) {
-                if (!MR::isEqualStringCase(entry.path.c_str(), path.c_str())) continue;
+        // Gravity rows, then area rows (the light areas), layer by layer.
+        for (const char* kind : {"planetobjinfo", "areaobjinfo"}) {
+            for (const std::string& layer : layerNames(zone.layerMask)) {
+                const std::string path = "jmp/placement/" + layer + "/" + kind;
+                const auto entry = find(path);
+                if (entry == entries.end()) continue;
                 auto table = std::make_unique<Bcsv>();
-                if (!table->load({storage.data() + entry.offset, entry.size}, error)) {
+                if (!table->load({storage.data() + entry->offset, entry->size}, error)) {
                     error = zone.name + " " + path + ": " + error;
                     return false;
                 }
                 scene.addZoneTable(id, table->info());
-                for (int row = 0; row < table->info().getNumEntries(); ++row)
-                    scene.placeGlobalGravity(JMapInfoIter(&table->info(), row));
+                for (int row = 0; row < table->info().getNumEntries(); ++row) {
+                    const JMapInfoIter iter(&table->info(), row);
+                    if (kind[0] == 'p') scene.placeGlobalGravity(iter);
+                    else scene.placeAreaObj(iter);
+                }
                 tables.push_back(std::move(table));
             }
         }

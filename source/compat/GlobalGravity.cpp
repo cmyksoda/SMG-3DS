@@ -4,6 +4,7 @@
 #include <Game/LiveActor/RailRider.hpp>
 #include <Game/Map/ActorAppearSwitchListener.hpp>
 #include <Game/Map/SleepController.hpp>
+#include <Game/AreaObj/LightAreaHolder.hpp>
 #include <Game/Map/StageSwitch.hpp>
 #include <Game/Util/JMapIdInfo.hpp>
 #include <Game/Util/JMapInfo.hpp>
@@ -80,13 +81,19 @@ void updateSwitch(PlanetGravity* gravity, const StageSwitchCtrl* switches) {
     if (switches->isValidSwitchB()) switchB = !switches->isOnSwitchB();
     gravity->mActivated = switchA && switchB;
 }
+} // namespace
 
-void forgetSwitch(SwitchIdInfo* info) {
+void NativeScene::forgetSwitchId(SwitchIdInfo* info) {
     if (!info) return;
     delete info->mIDInfo;
     delete info;
 }
-} // namespace
+
+void NativeScene::forgetSwitches(StageSwitchCtrl* switches) {
+    if (!switches) return;
+    for (SwitchIdInfo* info : {switches->mSW_A, switches->mSW_B, switches->mSW_Appear, switches->mSW_Dead}) forgetSwitchId(info);
+    delete switches;
+}
 
 // SleepControlFunc::addSleepControl's listener, calling what GlobalGravityObj's makeActorAppeared and
 // makeActorDead do; SleepControllerHolder's own add, initSync and movement are the scene's.
@@ -103,12 +110,9 @@ struct NativeScene::GravitySleep : SwitchEventListener {
 };
 
 void NativeScene::forgetGravity(const PlacedGravity& placed) {
-    if (StageSwitchCtrl* switches = placed.switches) {
-        for (SwitchIdInfo* info : {switches->mSW_A, switches->mSW_B, switches->mSW_Appear, switches->mSW_Dead}) forgetSwitch(info);
-        delete switches;
-    }
+    forgetSwitches(placed.switches);
     if (GravitySleep* sleep = placed.sleep) {
-        forgetSwitch(sleep->controller->mSwitchIdInfo);
+        forgetSwitchId(sleep->controller->mSwitchIdInfo);
         delete sleep->controller;
         delete sleep;
     }
@@ -116,6 +120,8 @@ void NativeScene::forgetGravity(const PlacedGravity& placed) {
 }
 
 void NativeScene::syncAfterPlacement() {
+    if (mLightAreas) mLightAreas->initAfterPlacement();
+    syncAreaSleeps();
     for (const PlacedGravity& placed : mGravities)
         if (placed.sleep) placed.sleep->controller->initSync();
 }

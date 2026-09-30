@@ -106,7 +106,8 @@ int auditGravity(const fs::path& root) {
     std::sort(galaxies.begin(), galaxies.end());
     std::size_t scenarios = 0, failed = 0, placedTotal = 0, startState = 0, sampled = 0, wires = 0, wirePoints = 0, switched = 0,
                 asleep = 0;
-    std::map<std::string, std::size_t> placed, skipped;
+    std::map<std::string, std::size_t> placed, skipped, areasSkipped;
+    std::size_t areasPlaced = 0;
     std::vector<std::string> noStartGravity, withSkipped, noEntrance, noLanding, farLandings;
     std::map<std::string, std::size_t> landings, floors;
     for (const auto& galaxy : galaxies) {
@@ -160,6 +161,9 @@ int auditGravity(const fs::path& root) {
                 switched += g.switches || g.sleep;
                 asleep += !g.gravity->mAppeared;
             }
+            areasPlaced += scene.areaCount();
+            for (const auto& name : scene.skippedAreas())
+                if (name.rfind("LightCtrl", 0) == 0) ++areasSkipped[name];
             startState += scene.startStateGravities().size();
 
             // Each wire's samples lie along its rail from the rail's first point, evenly to within the few percent the
@@ -243,6 +247,9 @@ int auditGravity(const fs::path& root) {
                 wires, wirePoints);
     std::printf("%zu placements follow their switches (%zu asleep as the scene starts); %zu have a follower, not brought up\n",
                 switched, asleep, startState);
+    std::printf("%zu light areas placed across all scenarios; not placed:", areasPlaced);
+    for (const auto& [name, count] : areasSkipped) std::printf(" %s x%zu,", name.c_str(), count);
+    std::printf("\n");
     std::printf("%zu scenarios skip a gravity:", withSkipped.size());
     for (const auto& label : withSkipped) std::printf(" [%s]", label.c_str());
     std::printf("\n%zu hidden-star scenarios have no MarioNo 0 entrance in their layers:", noEntrance.size());

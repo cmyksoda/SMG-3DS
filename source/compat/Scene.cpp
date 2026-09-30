@@ -41,6 +41,7 @@ NativeScene::NativeScene()
 NativeScene::~NativeScene() {
     // The game frees the whole scene heap at once; here each scene object goes by itself.
     for (const PlacedGravity& placed : mGravities) forgetGravity(placed);
+    forgetAreas();
     forgetLights();
     // The zone switches, which the game leaves to the scene heap with the container.
     if (auto* switches = static_cast<StageSwitchContainer*>(mSceneObjHolder->getObj(SceneObj_StageSwitchContainer))) {
@@ -121,6 +122,7 @@ void NativeScene::movement() {
         MR::syncWithFlagsAllSceneNameObj();
         mSyncRequested = false;
     }
+    moveAreas();
     moveGravities();
 }
 } // namespace smg

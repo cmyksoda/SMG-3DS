@@ -97,7 +97,14 @@ add_library(petari_scene STATIC
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Map/LightDataHolder.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Map/LightZoneDataHolder.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Map/LightFunctionData.cpp"
-  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/ObjUtilCsv.cpp")
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/ObjUtilCsv.cpp"
+  source/compat/Area.cpp
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/FollowIdCheck.cpp"
+  "${PETARI}/src/Game/Util/JMapLinkInfo.cpp"
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/AreaObj/AreaForm.cpp"
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/AreaObj/AreaObj.cpp"
+  "${PETARI}/src/Game/AreaObj/LightArea.cpp"
+  "${PETARI}/src/Game/AreaObj/LightAreaHolder.cpp")
 target_link_libraries(petari_scene PUBLIC petari_gravity)
 # The native scene owns the light tables it is handed, so it sees their (header-only) type.
 target_include_directories(petari_scene PRIVATE include)
@@ -118,7 +125,9 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
   "${PETARI}/src/Game/LiveActor/RailRider.cpp" "${PETARI}/include/Game/Map/StageSwitch.hpp"
   "${PETARI}/include/Game/Util/JMapIdInfo.hpp" "${PETARI}/src/Game/Map/LightDataHolder.cpp"
   "${PETARI}/src/Game/Map/LightZoneDataHolder.cpp" "${PETARI}/src/Game/Map/LightFunction.cpp"
-  "${PETARI}/include/Game/Map/LightDataHolder.hpp" "${PETARI}/include/Game/Map/LightZoneDataHolder.hpp")
+  "${PETARI}/include/Game/Map/LightDataHolder.hpp" "${PETARI}/include/Game/Map/LightZoneDataHolder.hpp"
+  "${PETARI}/src/Game/AreaObj/AreaForm.cpp" "${PETARI}/src/Game/AreaObj/AreaObj.cpp"
+  "${PETARI}/include/Game/AreaObj/AreaForm.hpp")
 
 add_library(smg_platform STATIC
   source/core/Input.cpp source/core/Motion.cpp source/core/Settings.cpp source/core/Session.cpp

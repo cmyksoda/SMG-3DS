@@ -343,7 +343,7 @@ std::vector<std::uint8_t> lightData() {
                                           bits(0), 0, 100, 0xffffff96u, 0xffffffffu, 0, bits(0), bits(-1), bits(0), 1, 0xffffff80u, 64,
                                           64, 64, 0xffffff80u};
     };
-    return bigEndianTable(fields, {row(0, 1000, -1), row(6, 2000, 100)}, std::string("First\0Egg\0", 10));
+    return bigEndianTable(fields, {row(0, 1000, -1), row(6, 2000, 100), row(10, 3000, 50)}, std::string("First\0Egg\0Night\0", 16));
 }
 
 std::vector<std::uint8_t> galaxyLights() {
@@ -382,6 +382,57 @@ void lights() {
     }
 }
 
+// Light areas as NameObjFactory makes them from areaobjinfo rows, through AreaObj::init.
+void lightAreas() {
+    TPos3f identity;
+    identity.identity();
+    smg::NativeScene scene;
+    const int galaxy = scene.addZone("TestGalaxy", identity);
+    const auto real = [](float v) { return bits(v); };
+    // Strings: "LightCtrlCube" at 0, "WaterCube" at 14.
+    const std::uint32_t none = 0xffffffffu;
+    const auto areaBytes = bigEndianTable(
+        {{"name", 6}, {"pos_x", 2}, {"pos_y", 2}, {"pos_z", 2}, {"dir_x", 2}, {"dir_y", 2}, {"dir_z", 2}, {"scale_x", 2},
+         {"scale_y", 2}, {"scale_z", 2}, {"Obj_arg0", 0}, {"Obj_arg1", 0}, {"SW_APPEAR", 0}, {"SW_A", 0}},
+        {{0, real(0), real(0), real(0), real(0), real(0), real(0), real(1), real(1), real(1), 3, 0, none, none},
+         {0, real(5000), real(0), real(0), real(0), real(0), real(0), real(1), real(1), real(1), 3, 0, 9, none},
+         {14, real(0), real(0), real(0), real(0), real(0), real(0), real(1), real(1), real(1), none, none, none, 9}},
+        std::string("LightCtrlCube\0WaterCube\0", 24));
+    smg::Bcsv areas;
+    std::string error;
+    check(areas.load({areaBytes.data(), areaBytes.size()}, error), "the areaobjinfo table loads");
+    scene.addZoneTable(galaxy, areas.info());
+    for (int row = 0; row < areas.info().getNumEntries(); ++row) scene.placeAreaObj(JMapInfoIter(&areas.info(), row));
+    StageSwitchCtrl* lever = MR::createStageSwitchCtrl(nullptr, JMapInfoIter(&areas.info(), 2));
+    scene.syncAfterPlacement();
+    scene.forgetZoneTables();
+    check(scene.areaCount() == 2 && scene.skippedAreas().size() == 1 && scene.skippedAreas()[0] == "WaterCube",
+          "light areas are placed; other areas wait, and say so");
+
+    const auto dataBytes = lightData(), zoneBytes = galaxyLights();
+    auto data = std::make_unique<smg::Bcsv>();
+    std::vector<std::pair<std::string, std::unique_ptr<smg::Bcsv>>> zones;
+    zones.emplace_back("lighttestgalaxy.bcsv", std::make_unique<smg::Bcsv>());
+    check(data->load({dataBytes.data(), dataBytes.size()}, error) && zones.back().second->load({zoneBytes.data(), zoneBytes.size()}, error),
+          "the light tables load");
+    scene.initLights(std::move(data), std::move(zones));
+    const auto lightAt = [&](float x, float y, float z) { return std::string(scene.areaLightAt(TVec3f(x, y, z))->mAreaLightName); };
+    check(lightAt(0, 500, 0) == "Night", "inside a light area, the light its zone table names for Obj_arg0");
+    check(lightAt(0, -100, 0) == "Egg" && lightAt(700, 500, 0) == "Egg", "outside it, the galaxy's default");
+    check(lightAt(5000, 500, 0) == "Egg", "an area with SW_APPEAR waits for its switch");
+    lever->onSwitchA();
+    scene.movement();
+    check(lightAt(5000, 500, 0) == "Night", "and lights when the switch turns on");
+    lever->offSwitchA();
+    scene.movement();
+    check(lightAt(5000, 500, 0) == "Egg", "and stops when it turns off");
+    for (SwitchIdInfo* info : {lever->mSW_A, lever->mSW_B, lever->mSW_Appear, lever->mSW_Dead}) {
+        if (info) delete info->mIDInfo;
+        delete info;
+    }
+    delete lever;
+}
+
 void sceneObjects() {
     check(!MR::isExistSceneObj(SceneObj_PlanetGravityManager), "no scene objects before a scene");
     smg::NativeScene scene;
@@ -397,6 +448,7 @@ void sceneObjects() {
 int runSceneTests() {
     sceneObjects();
     lights();
+    lightAreas();
     {
         // A new scene, so its manager holds only the gravities placed here.
         smg::NativeScene scene;

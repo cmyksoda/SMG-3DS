@@ -442,9 +442,8 @@ adapt("src/Game/Map/LightDataHolder.cpp", "Game/Map/LightDataHolder.cpp", [
     ('#include "Game/Util.hpp"', '#include "Game/Util/StringUtil.hpp"', 1),
 ])
 adapt("src/Game/Map/LightZoneDataHolder.cpp", "Game/Map/LightZoneDataHolder.cpp", [
-    ('#include "Game/AreaObj/LightArea.hpp"\n', "", 1),
     ('#include "Game/Util.hpp"', '#include "Game/Util/ObjUtil.hpp"\n#include "Game/Util/SceneUtil.hpp"', 1),
-], drop=["bool ZoneLightID::isTargetArea(const LightArea* pLightArea) const {"], reason="LightArea waits for AreaObj")
+])
 extract("src/Game/Map/LightFunction.cpp", "Game/Map/LightFunctionData.cpp",
         '#include "Game/Map/LightFunction.hpp"\n#include "Game/Util/JMapInfo.hpp"\n#include "Game/Util/ObjUtil.hpp"\n#include <cstdio>\n',
         [("", "void getDataLightInfo(JMapInfo* pInfo, int id, LightInfo* pLightInfo, const char* pName) {"),
@@ -461,6 +460,44 @@ extract("src/Game/Util/ObjUtil.cpp", "Game/Util/ObjUtilCsv.cpp",
          "void MR::getCsvDataVec(Vec* pOut, const JMapInfo* pMapInfo, const char* pKey, s32 idx) {",
          "void MR::getCsvDataColor(GXColor* pOut, const JMapInfo* pMapInfo, const char* pKey, s32 idx) {"],
         fixes=[(" NO_INLINE {", " {")])
+
+# Areas: the original forms, AreaObj and LightArea. The container, followers, switch watchers and sleep
+# control they reach are the native scene's (source/compat/Area.cpp).
+# The base form is only ever one of its subclasses and its virtuals have no bodies: pure, as GCC needs them.
+adapt("include/Game/AreaObj/AreaForm.hpp", "include/Game/AreaObj/AreaForm.hpp", [
+    ("    virtual void init(const JMapInfoIter&);\n    virtual bool isInVolume(const TVec3f&) const;\n\n    TPos3f* _4;",
+     "    virtual void init(const JMapInfoIter&) = 0;\n    virtual bool isInVolume(const TVec3f&) const = 0;\n\n    TPos3f* _4;", 1),
+])
+adapt("src/Game/AreaObj/AreaForm.cpp", "Game/AreaObj/AreaForm.cpp", [
+    ('#include "Game/Util.hpp"', '#include "Game/Util/JMapUtil.hpp"\n#include "Game/Util/MathUtil.hpp"\n#include "Game/Util/MtxUtil.hpp"', 1),
+])
+extract("src/Game/Util/BaseMatrixFollowTargetHolder.cpp", "Game/Util/FollowIdCheck.cpp",
+        '#include "Game/Util/BaseMatrixFollowTargetHolder.hpp"\n#include "Game/Util/JMapLinkInfo.hpp"\n#include "Game/Util/JMapUtil.hpp"\n',
+        [("MR", "bool isValidFollowID(const JMapInfoIter& rIter) {")])
+adapt("src/Game/AreaObj/AreaObj.cpp", "Game/AreaObj/AreaObj.cpp", [
+    ("#include <functional.hpp>\n", "", 1),
+    # MSL's rfind_if walked down to Begin - 1, a pointer before the array (nullptr - 1 for an empty manager).
+    ("""    AreaObj* const* Begin = mArray.begin();
+    AreaObj* const* End = mArray.end();
+    AreaObj* const* p = std::rfind_if(
+        End - 1, Begin - 1,
+        std::binder2nd< std::const_mem_fun1_t< bool, AreaObj, const TVec3f& >, const TVec3f& >(std::mem_func(&AreaObj::isInVolume), rVec));
+
+    p = (p == Begin - 1 ? End : p);
+
+    if (p != mArray.end()) {
+        return *p;
+    }
+
+    return nullptr;""",
+     """    for (s32 i = mArray.size() - 1; i >= 0; i--) {
+        if (mArray[i]->isInVolume(rVec)) {
+            return mArray[i];
+        }
+    }
+
+    return nullptr;""", 1),
+])
 
 adapt("include/Game/System/WPadButton.hpp", "include/Game/System/WPadButton.hpp", [
     ("#include <revolution.h>", "#include <revolution/kpad.h>", 1),

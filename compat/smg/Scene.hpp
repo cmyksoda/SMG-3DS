@@ -7,12 +7,18 @@
 #include <vector>
 
 struct AreaLightInfo;
+class AreaObj;
 class CollisionCode;
+class LightAreaHolder;
+namespace MR {
+class FunctorBase;
+}
 class LightDataHolder;
 class LightZoneDataHolder;
 class GravityCreator;
 class SleepController;
 class StageSwitchCtrl;
+class SwitchIdInfo;
 class JMapInfo;
 class JMapInfoIter;
 class NameObjHolder;
@@ -71,7 +77,19 @@ public:
     // GlobalGravityObj's work for one planetobjinfo row. False, with the name kept in skippedGravities(),
     // for a kind not brought up.
     bool placeGlobalGravity(const JMapInfoIter& row);
-    // GameScene::init's last step after placement: every sleep controller syncs with its switch.
+    // NameObjFactory's area objects for one areaobjinfo row, through AreaObj::init. False, with the name kept
+    // in skippedAreas(), for a kind not brought up (only light areas are).
+    bool placeAreaObj(const JMapInfoIter& row);
+    const std::vector<std::string>& skippedAreas() const { return mSkippedAreas; }
+    std::size_t areaCount() const { return mAreas.size(); }
+    // AreaObjContainer's light area manager, as MR::getAreaObjManager finds it; the holder registers itself.
+    LightAreaHolder* lightAreas(bool create);
+    void registerLightAreas(LightAreaHolder* holder) { mLightAreas = holder; }
+    // SwitchWatcherHolder's watch on a switch-appear switch, and SleepControllerHolder's control of an area.
+    void watchSwitchAppear(const StageSwitchCtrl* switches, const MR::FunctorBase& on, const MR::FunctorBase& off);
+    void addAreaSleep(AreaObj* area, const JMapInfoIter& row);
+    // GameScene::init's last steps after placement: every NameObj's initAfterPlacement (the light areas sort
+    // by priority), then every sleep controller syncs with its switch.
     void syncAfterPlacement();
     const std::vector<PlacedGravity>& placedGravities() const { return mGravities; }
     const std::vector<std::string>& skippedGravities() const { return mSkippedGravities; }
@@ -86,6 +104,8 @@ public:
     LightDataHolder* lightDataHolder() const { return mLightData; }
     // LightFunction::getAreaLightInfo for an actor outside every light area: the galaxy's default light.
     const AreaLightInfo* defaultAreaLight() const;
+    // The light an actor at a point takes: ActorLightCtrl::init's area search, then getAreaLightInfo.
+    const AreaLightInfo* areaLightAt(const TVec3f& position);
 
     // CollisionDirector's attribute codes, which KCollisionServer reads camera ids through.
     CollisionCode& collisionCode() { return *mCollisionCode; }
@@ -102,8 +122,15 @@ public:
 
 private:
     void moveGravities();
+    void moveAreas();
+    void syncAreaSleeps();
     void forgetLights();
+    void forgetAreas();
+    struct AppearWatch;
+    struct AreaSleep;
     static void forgetGravity(const PlacedGravity& placed);
+    static void forgetSwitches(StageSwitchCtrl* switches);
+    static void forgetSwitchId(SwitchIdInfo* info);
 
     NameObjHolder* mNameObjHolder;
     SceneObjHolder* mSceneObjHolder;
@@ -112,6 +139,11 @@ private:
     std::vector<std::string> mZoneNames;
     std::unique_ptr<smg::Bcsv> mLightTable;
     std::vector<std::pair<std::string, std::unique_ptr<smg::Bcsv>>> mZoneLightTables;
+    std::vector<AreaObj*> mAreas;
+    std::vector<std::string> mSkippedAreas;
+    LightAreaHolder* mLightAreas = nullptr;
+    std::vector<AppearWatch*> mAppearWatches;
+    std::vector<AreaSleep*> mAreaSleeps;
     LightDataHolder* mLightData = nullptr;
     LightZoneDataHolder* mLightZones = nullptr;
     std::vector<std::pair<const JMapData*, int>> mZoneTables;
