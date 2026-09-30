@@ -1532,6 +1532,15 @@ adapt("src/Game/Screen/CustomTagProcessor.cpp", "Game/Screen/CustomTagProcessor.
     ("    if (!*reinterpret_cast< const u8* >(tag.getParamPtr(0))) {",
      "    if (!(reinterpret_cast< uintptr_t >(*reinterpret_cast< const wchar_t* const* >(tag.getParamPtr(0))) >> 24)) {", 1),
 ])
+# On ARM the header test only answers false for the disc's big-endian layouts, and the game walks the unbuilt one.
+adapt("src/nw4r/lyt/lyt_layout.cpp", "nw4r/lyt/lyt_layout.cpp", [
+    ('#include "nw4r/lyt/util.h"\n', '#include "nw4r/lyt/util.h"\n#include <revolution/os.h>\n#include <cstring>\n', 1),
+    ("            if (!detail::TestFileHeader(*pFileHead, 'RLYT')) {\n",
+     "            if (!std::memcmp(lytResBuf, \"RLYT\\xFE\\xFF\", 6)) {\n"
+     "                OSPanic(__FILE__, __LINE__, \"nw4r's layouts (BRLYT) are big-endian, and turning them native is not the port's yet\");\n"
+     "            }\n"
+     "            if (!detail::TestFileHeader(*pFileHead, 'RLYT')) {\n", 1),
+])
 # Reads past an array, which gcc treats as unreachable and may fold the surrounding loop or copy away.
 # Nintendo's loop runs past three horizontal tasks into mInfinityTasks, which createInfinityTask then replaces;
 # stopping at three leaves the same tasks, less four leaked allocations.
