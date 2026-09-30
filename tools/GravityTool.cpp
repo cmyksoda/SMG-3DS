@@ -1,6 +1,7 @@
 #include <smg/Archive.hpp>
 #include <smg/Model.hpp>
 #include <smg/Scene.hpp>
+#include <smg/StageCollision.hpp>
 #include <smg/StageGravity.hpp>
 #include <Game/Gravity/GravityInfo.hpp>
 #include <Game/Gravity/PlanetGravityManager.hpp>
@@ -121,5 +122,22 @@ int main(int argc, char** argv) {
     }
     std::printf("\n");
     fall(argv[1], stage, at, pull);
+
+    smg::StageCollision collision;
+    if (!collision.load(argv[1], stage, error)) {
+        std::fprintf(stderr, "%s\n", error.c_str());
+        return 1;
+    }
+    std::printf("Collision: %zu parts, %zu triangles from the placed models' own KCL files\n", collision.parts(),
+                collision.triangles());
+    smg::StageCollision::Hit hit;
+    if (collision.strikeLine(at, pull * 100000.0f, hit)) {
+        const auto& object = stage.objects[hit.object];
+        std::printf("Falling along it lands on %s's collision (%s) after %.1f units, at (%.1f, %.1f, %.1f), face normal "
+                    "(%.3f, %.3f, %.3f), floor code %s.\n", object.name.c_str(), object.zone.c_str(), hit.distance,
+                    hit.position.x, hit.position.y, hit.position.z, hit.normal.x, hit.normal.y, hit.normal.z, hit.floor);
+    } else {
+        std::printf("Falling along it meets no collision.\n");
+    }
     return 0;
 }

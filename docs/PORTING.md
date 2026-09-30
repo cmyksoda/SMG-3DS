@@ -76,6 +76,21 @@ completion does not make those interfaces portable to ARM11/PICA200.
   point and follows it to the first placed model: from scenario 1's start, a disk gravity in
   `DiskGardenZone` pulls straight down onto `DiskGardenPlanet`, 9.2 units below. The preview
   shows the same answer at Mario's start and, live, at the camera.
+- Collision runs through the original `KCollisionServer` (`KCollision`, `KCollisionPlus`) and
+  `CollisionCode`. `smg::Kcl` validates a disc KCL and repacks it, as `Bcsv` repacks tables: every
+  field swapped by its type (octree nodes are found by walking the tree the way `searchBlock` does;
+  what they point at are u16 prism lists), and a header in this build's own `KCLFile` layout, so
+  `setData` can turn offsets into 64-bit pointers on the host. Three adaptations: the Wii's
+  `isBinaryInitialized` asked whether the first header word was negative, true only for Wii pointers,
+  so it now asks whether it points into the image; `searchBlock` shifted by -1 before checking for a
+  single-block file, undefined in C++, so it checks first; and one `goto` crossed an initialization.
+  `calcFarthestVertexDistance` reads camera ids through `CollisionDirector`'s `CollisionCode`, which the
+  native scene holds, and registers them with `CameraDirector`, which the native scene collects for.
+  `CollisionParts` owns a server per placed part but is created by actors (it takes a `HitSensor` whose
+  host is a `LiveActor`), so it waits for them. Until then `smg::StageCollision` gives each placement
+  of a model with a `<name>.kcl` its own server and does for every part what
+  `CollisionParts::checkStrikeLine` does. From Mario's start in Good Egg scenario 1 the pull lands on
+  `DiskGardenPlanet`'s collision 13.9 units below, on a Normal floor (the drawn grass is 9.2 below).
 - newlib's `<ctype.h>` defines `_U`, `_L`, `_N`, `_S`, `_P`, `_C`, `_X` and `_B` as macros, and
   Petari uses some of them as member names. ARM builds force-include `compat/smg/NewlibCtype.hpp`,
   which lets libstdc++ read them once and then undefines them.
@@ -124,8 +139,8 @@ borrows its owner's sample storage rather than allocating the Wii's 120-sample I
    19.4 MB of linear memory after Good Egg in Azahar; other formats stay uncompressed.
 4. **Original scene and actor execution.** Placed gravity runs through the original creators
    over the native scene. Next: `LiveActor` (which also brings back `GlobalGravityObj` and the
-   `GravityUtil` actor overloads), `RailRider` for wire gravity, stage switches, collision from
-   each zone's `.kcl`, then the original `NameObjListExecutor` scheduler,
+   `GravityUtil` actor overloads, and `CollisionParts` with `CollisionDirector`'s keepers), `RailRider`
+   for wire gravity, stage switches, then the original `NameObjListExecutor` scheduler,
    gravity, collision, stage placement, Mario, animation, and camera using the real resources.
    Integrate the input boundary into `GamePadUtil`/`WPad`, including explicit digital spin input.
    Skip the Wii pointer's multi-frame loss-of-IR delay: stylus lift must hide it immediately.
@@ -191,6 +206,11 @@ Three ways forward:
   (`SW_SLEEP`) or a follower (`FollowId`) are listed, because only their start state is honored;
   wire gravity is listed as skipped. Creators and gravities are freed with the scene.
 
+- `CollisionDirector`'s `CollisionCode` (created with the scene, as the director creates it), which
+  `KCollisionServer` reads camera ids through, and `CameraDirector`'s camera-code collection:
+  `MR::initCameraCodeCollection`, `registerCameraCode` and `termCameraCodeCollection` record, per
+  part, the codes its collision names, for the camera to read when it runs.
+
 Everything else about the scene still belongs to `GameSystem`. Asking for the scene before one
 exists stops the program with a message. Once `GameSystem` and the original `SceneObjHolder.cpp`
 run, delete the native scene, its `newEachObj`, and the holder lookups it answers.
@@ -252,12 +272,21 @@ a follower. Every scenario has gravity at Mario's start except twelve hidden-sta
 of starting at the origin. Another 67 rows place actors with gravity of their own (the reverse
 and quarter-roll gravity rooms, gravity lights); they wait for `LiveActor`.
 
+`resource_audit --collision` repacks all 1,016 KCL files on the disc (677,800 triangles, 424 left out
+by the game as degenerate), sets each up as `CollisionParts::init` does, and casts 48 rays through each
+with `checkArrow`, checking every result against brute force over all triangles. 27,856 hits agree; the
+rest differ only where the original does: 10 at an edge (`KCHitArrow` accepts 0.01 outside it), 240
+where the disc's octree does not list the nearer triangle in the block the ray meets it, and 48 where
+the walk stops at the first block with any hit although that hit lies beyond it. None is unexplained.
+One file has no attribute table (`CocoTree`) and one triangle of `BigBigFly` names a missing row; the
+game ignores both.
+
 All 1,758 BMD/BDL models load under ASan and UBSan (5,053,844 triangles), and 6,949 of their
 7,780 materials translate to the combiner exactly. Good Egg scenario 1 places 296 objects
 across 12 zones; the preview draws 56 rigid models in 172 placements.
 
 The portable math tests check tolerances and conventions, not bit-identical Gekko rounding.
 The native validation app passes 1,069 math, 37 WPad, 179 BCSV, 1,043 J3D model/texture,
-8,607 TEV combiner, 27 original gravity, 27 NameObj, 56 scene and gravity creator, 7 ETC1 and 8 GPU texture checks on emulated ARM
+8,607 TEV combiner, 27 original gravity, 27 NameObj, 56 scene and gravity creator, 48 collision, 7 ETC1 and 8 GPU texture checks on emulated ARM
 in Azahar; the GPU checks compare the hardware's ETC1 decoding against ours. Of the disc's
 7,780 materials, 6,949 translate to the combiner exactly. No physical console has been tested.
