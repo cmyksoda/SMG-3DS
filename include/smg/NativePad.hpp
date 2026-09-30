@@ -1,5 +1,6 @@
 #pragma once
 #include <smg/Input.hpp>
+#include <smg/Kpad.hpp>
 #include <Game/System/WPad.hpp>
 #include <Game/System/WPadButton.hpp>
 #include <Game/System/WPadHolder.hpp>
@@ -25,6 +26,6 @@ private:
     WPadReadDataInfo readInfo_;
     KPADStatus status_{};
     WiiInput sample_;
-    double repeatElapsed_ = 0, nextRepeat_ = 0;
+    KpadRepeat repeat_;
 };
 }

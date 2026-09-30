@@ -228,11 +228,14 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
 add_library(smg_platform STATIC
   source/core/Input.cpp source/core/Motion.cpp source/core/Settings.cpp source/core/Session.cpp
   source/core/Archive.cpp source/core/Bcsv.cpp source/core/Model.cpp source/core/Texture.cpp source/core/Combiner.cpp
-  source/core/Stage.cpp source/core/StageGravity.cpp source/core/Mesh.cpp source/core/Etc1.cpp source/core/Kcl.cpp source/core/StageCollision.cpp source/core/StageLight.cpp source/core/Animation.cpp source/core/Actors.cpp source/core/J3DImage.cpp source/core/Dol.cpp source/core/GxCommands.cpp source/core/Bmg.cpp
-  source/compat/NativePad.cpp)
+  source/core/Stage.cpp source/core/StageGravity.cpp source/core/Mesh.cpp source/core/Etc1.cpp source/core/Kcl.cpp source/core/StageCollision.cpp source/core/StageLight.cpp source/core/Animation.cpp source/core/Actors.cpp source/core/J3DImage.cpp source/core/Dol.cpp source/core/GxCommands.cpp source/core/Bmg.cpp source/core/Kpad.cpp)
 target_include_directories(smg_platform PUBLIC include)
 target_link_libraries(smg_platform PUBLIC petari_scene petari_anim)
 target_compile_options(smg_platform PRIVATE -Wall -Wextra -Werror)
+# The native scene's pad owns its WPad the native way; the whole-game boot builds the game's own over the port's KPAD.
+add_library(smg_native_pad STATIC source/compat/NativePad.cpp)
+target_link_libraries(smg_native_pad PUBLIC smg_platform)
+target_compile_options(smg_native_pad PRIVATE -Wall -Wextra -Werror)
 
 if(NINTENDO_3DS)
   target_include_directories(petari_core PUBLIC "${DEVKITPRO}/libctru/include")
@@ -248,7 +251,7 @@ if(NINTENDO_3DS)
   set_target_properties(SMG-3DS PROPERTIES SUFFIX ".elf")
   target_include_directories(SMG-3DS PRIVATE "${DEVKITPRO}/libctru/include" "${CMAKE_CURRENT_BINARY_DIR}")
   target_link_directories(SMG-3DS PRIVATE "${DEVKITPRO}/libctru/lib")
-  target_link_libraries(SMG-3DS PRIVATE smg_platform citro2d citro3d ctru m)
+  target_link_libraries(SMG-3DS PRIVATE smg_native_pad smg_platform citro2d citro3d ctru m)
   target_compile_options(SMG-3DS PRIVATE -Wall -Wextra -Werror)
   target_link_options(SMG-3DS PRIVATE "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/SMG-3DS.map")
   add_custom_command(TARGET SMG-3DS POST_BUILD
@@ -272,7 +275,7 @@ if(NINTENDO_3DS)
       list(APPEND PETARI_BUILT_ELSEWHERE "${source}")
     endforeach()
   endforeach()
-  set(PETARI_GAME_SOURCES source/compat/Sdk.cpp source/compat/OsThreads.cpp source/compat/OsMemory.cpp source/compat/GameHeap.cpp source/compat/Dvd.cpp source/compat/Video.cpp source/compat/SystemConfig.cpp source/compat/Wpad.cpp source/compat/NativeResources.cpp source/compat/GxFifo.cpp source/compat/Nwc24.cpp source/compat/WiiAudio.cpp source/compat/Nw4rDb.cpp source/compat/DolTables.cpp
+  set(PETARI_GAME_SOURCES source/compat/Sdk.cpp source/compat/OsThreads.cpp source/compat/OsMemory.cpp source/compat/GameHeap.cpp source/compat/Dvd.cpp source/compat/Video.cpp source/compat/SystemConfig.cpp source/compat/Wpad.cpp source/compat/NativeResources.cpp source/compat/GxFifo.cpp source/compat/Nwc24.cpp source/compat/WiiAudio.cpp source/compat/Nw4rDb.cpp source/compat/DolTables.cpp source/compat/Kpad.cpp
     "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/LiveActor/RailRiderCamera.cpp"
     "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/LiveActor/LiveActorSound.cpp")
   foreach(source ${PETARI_GAME_CANDIDATES})
@@ -332,7 +335,7 @@ if(NINTENDO_3DS)
     set_target_properties(native_validation PROPERTIES SUFFIX ".elf")
     target_compile_definitions(native_validation PRIVATE SMG_TEST_RUNNER)
     target_link_directories(native_validation PRIVATE "${DEVKITPRO}/libctru/lib")
-    target_link_libraries(native_validation PRIVATE smg_platform petari_gravity petari_scene petari_j3d citro2d citro3d ctru m)
+    target_link_libraries(native_validation PRIVATE smg_native_pad smg_platform petari_gravity petari_scene petari_j3d citro2d citro3d ctru m)
     target_compile_options(native_validation PRIVATE -Wall -Wextra -Werror)
     add_custom_command(TARGET native_validation POST_BUILD
       COMMAND "${DEVKITPRO}/tools/bin/3dsxtool" "$<TARGET_FILE:native_validation>"
@@ -370,7 +373,7 @@ else()
   target_compile_options(math_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME portable_math COMMAND math_tests)
   add_executable(pad_tests tests/PadTests.cpp)
-  target_link_libraries(pad_tests PRIVATE smg_platform)
+  target_link_libraries(pad_tests PRIVATE smg_native_pad)
   target_compile_options(pad_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME original_wpad_input COMMAND pad_tests)
   add_executable(model_tests tests/ModelTests.cpp)

@@ -1,5 +1,4 @@
 #include <smg/NativePad.hpp>
-#include <cmath>
 #include <cstdlib>
 
 namespace {
@@ -47,36 +46,15 @@ NativePad::NativePad(int channel) : pad_(channel), buttons_(&pad_), stick_(&pad_
     readInfo_.mStatusArray = &status_;
     pad_.setReadInfo(&readInfo_);
     pad_.mIsConnected = pad_.mIsSubPadConnected = true;
-    status_.dev_type = WPAD_DEV_FREESTYLE;
-    status_.data_format = WPAD_FMT_FREESTYLE_ACC_DPD;
-    status_.wpad_err = WPAD_ERR_NONE;
+    smg::writeKpadStatus(sample_, status_);
 }
 NativePad::~NativePad() { pads[pad_.mChannel] = nullptr; }
 
 void NativePad::update(const InputFrame& frame, double elapsedSeconds) {
-    const auto previous = sample_.held;
     sample_ = toWiiInput(frame);
-    status_.hold = sample_.held;
-    status_.trig = sample_.pressed;
-    status_.release = sample_.released;
-    status_.ex_status.fs.stick = {sample_.stickX, sample_.stickY};
-    // KPAD uses screen coordinates (+Y downward); our rendering NDC uses +Y upward.
-    status_.pos = {sample_.pointer.ndcX, -sample_.pointer.ndcY};
-    status_.dpd_valid_fg = sample_.pointer.visible ? 2 : 0;
-    status_.horizon = {1, 0};
-    const auto settings = repeat[pad_.mChannel];
-    if (previous != sample_.held || sample_.held == 0) {
-        repeatElapsed_ = 0;
-        nextRepeat_ = settings.delay;
-    } else if (std::isfinite(elapsedSeconds) && elapsedSeconds > 0 &&
-               std::isfinite(settings.delay) && settings.delay >= 0 &&
-               std::isfinite(settings.pulse) && settings.pulse > 0) {
-        repeatElapsed_ += elapsedSeconds;
-        if (repeatElapsed_ >= nextRepeat_) {
-            status_.hold |= KPAD_BUTTON_RPT;
-            nextRepeat_ += (std::floor((repeatElapsed_-nextRepeat_)/settings.pulse)+1)*settings.pulse;
-        }
-    }
+    writeKpadStatus(sample_, status_);
+    repeat_.set(repeat[pad_.mChannel].delay, repeat[pad_.mChannel].pulse);
+    if (repeat_.update(sample_.held, elapsedSeconds)) status_.hold |= KPAD_BUTTON_RPT;
     readInfo_.mValidStatusCount = 1;
     buttons_.update();
     stick_.update();

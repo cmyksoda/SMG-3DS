@@ -72,13 +72,6 @@ NATIVE = {
     "src/Game/Util/AreaObjUtil.cpp": (NATIVE_SCENE, ["    AreaObjMgr* getAreaObjManager(const char* pMgrName) {"]),
     "src/Game/AreaObj/AreaObjFollower.cpp": (NATIVE_SCENE, ["    bool addBaseMatrixFollowerAreaObj(AreaObj* pObj, const JMapInfoIter& rIter) {"]),
     "src/Game/Map/SleepControllerHolder.cpp": (NATIVE_SCENE, ["    void addSleepControl(AreaObj* pObj, const JMapInfoIter& rIter) {"]),
-    "src/Game/System/WPad.cpp": ("the port's pad (source/compat/NativePad.cpp)", [
-        "WPad::WPad(s32 channel)", "void WPad::setReadInfo(WPadReadDataInfo* pReadInfo) {", "KPADStatus* WPad::getKPadStatus(u32 index) const {",
-        "s32 WPad::getValidStatusCount() const {", "    bool isDeviceFreeStyle(const KPADStatus* pStatus) {"]),
-    "src/Game/System/WPadHolder.cpp": ("the port's pad (source/compat/NativePad.cpp)", [
-        "WPadReadDataInfo::WPadReadDataInfo() : mStatusArray(), mValidStatusCount() {",
-        "KPADStatus* WPadReadDataInfo::getKPadStatus(u32 index) const {", "u32 WPadReadDataInfo::getValidStatusCount() const {",
-        "    WPad* getWPad(s32 channel) {"]),
     # Plain new and delete also serve allocations made before the game's heaps exist, and memory outside them.
     "src/JSystem/JKernel/JKRHeap.cpp": ("the port's (source/compat/GameHeap.cpp)", [
         "void* operator new(size_t size) {", "void* operator new[](size_t size) {", "void operator delete(void* pData) {",

@@ -1,3 +1,4 @@
+#include <smg/HidInput.hpp>
 #include <smg/Input.hpp>
 #include <smg/NativePad.hpp>
 #include <smg/Session.hpp>
@@ -35,30 +36,7 @@ struct Motion {
 };
 
 smg::RawInput readInput(const Motion& motion) {
-    hidScanInput();
-    const u32 held = hidKeysHeld();
-    smg::RawInput input;
-    const struct { u32 native; smg::Key port; } bindings[] = {
-        {KEY_A, smg::A}, {KEY_B, smg::B}, {KEY_X, smg::X}, {KEY_Y, smg::Y},
-        {KEY_L, smg::L}, {KEY_R, smg::R}, {KEY_ZL, smg::ZL}, {KEY_ZR, smg::ZR},
-        {KEY_DUP, smg::Up}, {KEY_DDOWN, smg::Down}, {KEY_DLEFT, smg::Left}, {KEY_DRIGHT, smg::Right},
-        {KEY_START, smg::Start}, {KEY_SELECT, smg::Select}
-    };
-    for (const auto& binding : bindings) if (held & binding.native) input.held |= binding.port;
-    circlePosition circle;
-    hidCircleRead(&circle);
-    input.circleX = circle.dx;
-    input.circleY = circle.dy;
-    hidCstickRead(&circle);
-    input.cstickX = circle.dx;
-    input.cstickY = circle.dy;
-    input.touching = (held & KEY_TOUCH) != 0;
-    if (input.touching) {
-        touchPosition touch;
-        hidTouchRead(&touch);
-        input.touchX = touch.px;
-        input.touchY = touch.py;
-    }
+    smg::RawInput input = smg::readHidInput();
     if (motion.ready) {
         angularRate rate;
         accelVector accel;

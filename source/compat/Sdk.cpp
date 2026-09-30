@@ -37,14 +37,6 @@ void DSPCheckMailToDSP() { unported("DSPCheckMailToDSP"); }
 void DSPInit() { unported("DSPInit"); }
 void DSPReadMailFromDSP() { unported("DSPReadMailFromDSP"); }
 void DSPSendMailToDSP() { unported("DSPSendMailToDSP"); }
-// KPAD
-void KPADInit() { unported("KPADInit"); }
-void KPADRead() { unported("KPADRead"); }
-void KPADReset() { unported("KPADReset"); }
-void KPADSetDistParam() { unported("KPADSetDistParam"); }
-void KPADSetHoriParam() { unported("KPADSetHoriParam"); }
-void KPADSetPosParam() { unported("KPADSetPosParam"); }
-void KPADSetSensorHeight() { unported("KPADSetSensorHeight"); }
 // LC
 void LCDisable() { unported("LCDisable"); }
 void LCEnable() { unported("LCEnable"); }
@@ -127,14 +119,11 @@ void WPADControlMotor() { unported("WPADControlMotor"); }
 void WPADControlSpeaker() { unported("WPADControlSpeaker"); }
 void WPADDisconnect() { unported("WPADDisconnect"); }
 void WPADGetInfoAsync() { unported("WPADGetInfoAsync"); }
-void WPADGetSensorBarPosition() { unported("WPADGetSensorBarPosition"); }
 void WPADGetSpeakerVolume() { unported("WPADGetSpeakerVolume"); }
 void WPADIsSpeakerEnabled() { unported("WPADIsSpeakerEnabled"); }
 void WPADProbe() { unported("WPADProbe"); }
 void WPADSendStreamData() { unported("WPADSendStreamData"); }
 void WPADSetAutoSleepTime() { unported("WPADSetAutoSleepTime"); }
-void WPADSetConnectCallback() { unported("WPADSetConnectCallback"); }
-void WPADSetExtensionCallback() { unported("WPADSetExtensionCallback"); }
 // __DSP_boot_task
 void __DSP_boot_task() { unported("__DSP_boot_task"); }
 }

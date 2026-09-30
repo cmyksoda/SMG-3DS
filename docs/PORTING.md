@@ -425,11 +425,23 @@ turns every BMG on the disc and reads each field the game's way against the orig
 messages, 306,992 characters and tags, 3,948 flow nodes, 50 tag kinds, none refused, none different.
 `MessageData` calls it (`smgNativeBmg`) right after taking the file from its archive.
 
-**Where the boot stands** (2026-09-30, 10:25): through static initialization, DVD, VI, the root heap and
+**Pads.** The whole-game boot builds the game's own `WPad` and `WPadHolder` with all their parts (button,
+pointer, acceleration, swings, rumble, info checker, leave watcher) over the port's KPAD
+(`source/compat/Kpad.cpp`). Channel 0 is the 3DS itself, read through the port's own input mapping
+(`smg::readHidInput`, `smg::Input`, `smg::toWiiInput`, `smg::writeKpadStatus`), and the other three channels
+never connect. The WPAD side (`source/compat/Wpad.cpp`) reports channel 0's connection and its Nunchuk at the
+first read, as the Wii's Bluetooth stack reports them some time after the callbacks are set, never inside the
+call (the game's callback looks its pad up through a `WPadHolder` still being built). The sensor bar answers
+below the TV, the SDK's own answer when its setting is missing. Motion isn't fed to KPAD yet. The native scene's
+pad (`source/compat/NativePad.cpp`, library `smg_native_pad`) owns its `WPad` the native way and is linked only
+by the native app and the tests, so the boot never meets it.
+
+**Where the boot stands** (2026-09-30, 10:55): through static initialization, DVD, VI, the root heap and
 all of `HeapMemoryWatcher`'s heaps, nw4r's layout init, JKRAram's MEM2 ARAM, the error archive's mount, the
 language setting and WiiConnect24, the SDK's own `GXInit` (every setup command it sends decoded), the layout
-holders over the error message archive, and `MessageData` over the system messages, to `KPADInit`: the Wii
-Remote's processing library, which the port's pad has to take the place of. The text itself is not drawn yet.
+holders over the error message archive, `MessageData` over the system messages, and the game's own pads, to its
+first layout. `LayoutManager::removeUnnecessaryPanes` walks a pane tree nw4r built from big-endian BRLYT data,
+so layouts (BRLYT, then BRLAN) are the next format to turn native. The text itself is not drawn yet.
 That needs `wchar_t` settled (below): the game reads its UTF-16 text through `wchar_t*`. Rendering is the other
 open design: the command processor has the state, and turning primitives into citro3d draws is next, with the
 port's TEV-to-PICA combiner and texture conversion.
