@@ -25,6 +25,7 @@ struct Stage {
     std::vector<StageObject> objects;
     std::vector<StageZone> zones; // the galaxy itself first, then the zones it places
     std::array<float, 3> start{}, startRotation{};
+    bool entrance = false; // MarioNo 0 is in an active layer; hidden-star scenarios have none
 };
 
 // "common" plus one name per bit of a scenario's layer mask: "layera" for bit 0, and so on.

@@ -122,6 +122,7 @@ bool loadStage(const std::string& root, const std::string& galaxy, int scenario,
             stage.start[i] = field(start.info(), entrance.mIndex, position, 0);
             stage.startRotation[i] = field(start.info(), entrance.mIndex, direction, 0);
         }
+        stage.entrance = true;
         break;
     }
 

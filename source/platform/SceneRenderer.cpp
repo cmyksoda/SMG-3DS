@@ -439,7 +439,7 @@ void SceneRenderer::loadStage(const std::string& root, const std::string& galaxy
     gravity_.reset();
     gravity_ = std::make_unique<NativeScene>();
     if (smg::placeStageGravity(root, stage_, *gravity_, error)) {
-        startGravity_ = describeGravity(*gravity_, stage_, stage_.start.data());
+        startGravity_ = stage_.entrance ? describeGravity(*gravity_, stage_, stage_.start.data()) : "no MarioNo 0 entrance";
     } else {
         startGravity_ = "unavailable: " + error;
         gravity_.reset();

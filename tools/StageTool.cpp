@@ -14,8 +14,11 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "%s\n", error.c_str());
         return 1;
     }
-    std::printf("Start (%g, %g, %g) facing (%g, %g, %g)\n", stage.start[0], stage.start[1], stage.start[2],
-        stage.startRotation[0], stage.startRotation[1], stage.startRotation[2]);
+    if (stage.entrance)
+        std::printf("Start (%g, %g, %g) facing (%g, %g, %g)\n", stage.start[0], stage.start[1], stage.start[2],
+            stage.startRotation[0], stage.startRotation[1], stage.startRotation[2]);
+    else
+        std::printf("No MarioNo 0 entrance in this scenario's layers\n");
     std::map<std::string, int> zones;
     for (const auto& object : stage.objects) {
         ++zones[object.zone];

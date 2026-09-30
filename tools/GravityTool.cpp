@@ -98,7 +98,8 @@ int main(int argc, char** argv) {
 
     const TVec3f at = argc == 7 ? TVec3f(std::atof(argv[4]), std::atof(argv[5]), std::atof(argv[6]))
                                 : TVec3f(stage.start[0], stage.start[1], stage.start[2]);
-    std::printf("\nAt (%g, %g, %g)%s:\n", at.x, at.y, at.z, argc == 7 ? "" : ", the scenario's start");
+    std::printf("\nAt (%g, %g, %g)%s:\n", at.x, at.y, at.z,
+                argc == 7 ? "" : stage.entrance ? ", the scenario's start" : " (the scenario has no MarioNo 0 entrance)");
     for (const auto& gravity : scene.placedGravities()) {
         TVec3f pull;
         if (!gravity.gravity->mActivated || !gravity.gravity->calcGravity(&pull, at)) continue;
