@@ -5,8 +5,14 @@
 #include <Game/Player/MarioActor.hpp>
 #include <cstdio>
 
-int main() {
+// The game's static initializers run before main; stderr has to reach the emulator's log before any of them.
+__attribute__((constructor(101))) static void logFromTheStart() {
     consoleDebugInit(debugDevice_SVC);
+    std::fprintf(stderr, "mario-probe: static initialization begins\n");
+}
+
+int main() {
+    std::fprintf(stderr, "mario-probe: main\n");
     gfxInitDefault();
     consoleInit(GFX_TOP, nullptr);
     std::printf("MarioActor bring-up\n\n");
