@@ -71,6 +71,8 @@ bool TouchUi::init() {
     starBit_ = loadIcon("sdmc:/3ds/SMG-3DS/ui/star-bit.t3x");
     camera_ = loadIcon("sdmc:/3ds/SMG-3DS/ui/camera.t3x");
     pointer_ = loadIcon("sdmc:/3ds/SMG-3DS/ui/pointer.t3x");
+    // The halves meet at the texture's edge column; sampling past it drew a see-through seam down the star.
+    if (pointer_) C3D_TexSetWrap(C2D_SpriteSheetGetImage(pointer_, 0).tex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
     return top_ && bottom_ && text_;
 }
 
@@ -166,7 +168,8 @@ void TouchUi::drawTop(const InputFrame& input, const NativePad& pad, SceneRender
     if (!input.pointer.visible) return;
     const bool shooting = input.shootMode || input.shoot.held;
     if (pointer_) {
-        starPointer(pointer_, input.pointer.x, input.pointer.y, 28, shooting);
+        // The Wii draws it 22 of 456 lines tall; 16 of 240 stays near that and samples the texture at exactly half.
+        starPointer(pointer_, input.pointer.x, input.pointer.y, 16, shooting);
     } else {
         // A diagnostic reticle until the user's original pointer texture is imported.
         const auto c = shooting ? color(255, 204, 112) : color(138, 221, 255);
