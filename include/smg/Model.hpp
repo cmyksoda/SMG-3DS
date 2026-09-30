@@ -1,35 +1,86 @@
 #pragma once
 #include <smg/Archive.hpp>
+#include <smg/Texture.hpp>
 #include <array>
+#include <cstdint>
+#include <string>
+#include <vector>
 
 namespace smg {
 struct ModelVertex {
     float position[3]{};
-    float normal[3]{0,1,0};
-    float color[4]{1,1,1,1};
-    float uv[2]{};
+    float normal[3]{0, 1, 0};
+    float color[4]{1, 1, 1, 1};
+    float uv[2][2]{};
 };
+
 struct ModelTexture {
-    unsigned width=0, height=0, wrapS=0, wrapT=0;
-    // Row-major RGBA words (0xRRGGBBAA), top row first.
-    std::vector<std::uint32_t> pixels;
+    std::string name;
+    GxFormat format = GxFormat::RGBA8;
+    Image image;
+    unsigned wrapS = 0, wrapT = 0, minFilter = 1, magFilter = 1;
+};
+
+// GX state kept as the raw enumerations J3D stores; the renderer translates them.
+struct TevStage {
+    std::uint8_t colorIn[4]{15, 15, 15, 0}, colorOp = 0, colorBias = 0, colorScale = 0, colorClamp = 1, colorReg = 0;
+    std::uint8_t alphaIn[4]{7, 7, 7, 0}, alphaOp = 0, alphaBias = 0, alphaScale = 0, alphaClamp = 1, alphaReg = 0;
+    std::uint8_t texCoord = 0xff, texMap = 0xff, channel = 0xff;
+    std::uint8_t konstColor = 0x0c, konstAlpha = 0x1c;
+    std::uint8_t rasSwap = 0, texSwap = 0;
+};
+struct ColorChannel {
+    bool lighting = false;
+    std::uint8_t materialSource = 0, ambientSource = 0, lightMask = 0, diffuse = 0, attenuation = 2;
+};
+struct TexGen { std::uint8_t type = 1, source = 4, matrix = 60; };
+struct TexMatrix {
+    std::uint8_t projection = 0, mapping = 0;
+    float center[3]{}, scale[2]{1, 1}, rotation = 0, translation[2]{};
+    // Row-major 2x3 transform applied to (s, t, 1).
+    std::array<float, 6> uv{1, 0, 0, 0, 1, 0};
 };
 struct ModelMaterial {
-    int texture=-1;
-    unsigned cullMode=2, tevStages=0;
-    std::array<float,4> color{1,1,1,1};
-    std::array<float,6> uvTransform{1,0,0,0,1,0};
+    std::string name;
+    std::uint8_t mode = 1; // J3D draw pass: 1 opaque, 2 alpha test, 4 translucent
+    unsigned cullMode = 2;
+    std::uint8_t channelCount = 1;
+    ColorChannel channels[4]; // color0, alpha0, color1, alpha1
+    std::array<float, 4> materialColor[2]{{1, 1, 1, 1}, {1, 1, 1, 1}};
+    std::array<float, 4> ambientColor[2]{{0, 0, 0, 0}, {0, 0, 0, 0}};
+    std::uint8_t texGenCount = 0;
+    TexGen texGens[8];
+    TexMatrix texMatrices[10];
+    bool hasTexMatrix[10]{};
+    int textures[8]{-1, -1, -1, -1, -1, -1, -1, -1};
+    std::uint8_t tevStageCount = 1;
+    TevStage stages[16];
+    std::array<float, 4> tevColors[4]{}, konstColors[4]{};
+    std::uint8_t swapTables[4][4]{{0, 1, 2, 3}, {0, 1, 2, 3}, {0, 1, 2, 3}, {0, 1, 2, 3}};
+    struct { std::uint8_t compare0 = 7, reference0 = 0, op = 0, compare1 = 7, reference1 = 0; } alphaTest;
+    struct { std::uint8_t type = 0, source = 1, destination = 0, logic = 0; } blend;
+    struct { bool enable = true; std::uint8_t function = 3; bool update = true; } depth;
 };
-struct ModelShape { std::size_t first=0, count=0; unsigned material=0; };
+
+struct ModelShape {
+    std::size_t first = 0, count = 0;
+    unsigned material = 0;
+    std::uint8_t matrixType = 0; // 0 rigid, 1 billboard, 2 Y billboard, 3 skinned
+};
+struct ModelJoint {
+    std::string name;
+    int parent = -1;
+    float world[12]{}; // bind pose, row-major 3x4
+};
+
 struct Model {
-    std::vector<ModelVertex> vertices;
+    std::vector<ModelVertex> vertices; // bind-pose triangles in model space
     std::vector<ModelShape> shapes;
     std::vector<ModelMaterial> materials;
     std::vector<ModelTexture> textures;
-    std::array<float,3> minimum{}, maximum{};
+    std::vector<ModelJoint> joints;
+    std::array<float, 3> minimum{}, maximum{};
 };
-// Initial static J3D path. Unsupported skeletal/vertex formats fail explicitly.
-// Material data currently exposes the first texture, not a complete TEV translation.
+
 bool loadModel(Bytes source, Model& output, std::size_t decodedBudget, std::string& error);
-bool decodeCmpr(Bytes source, unsigned width, unsigned height, ModelTexture& output, std::string& error);
-}
+} // namespace smg

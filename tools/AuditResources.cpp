@@ -1,9 +1,12 @@
 #include <smg/Archive.hpp>
 #include <smg/Bcsv.hpp>
+#include <smg/Model.hpp>
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -16,7 +19,8 @@ bool extension(const std::string& name, const char* suffix) {
 }
 }
 int main(int argc, char** argv) {
-    if (argc != 2) { std::fprintf(stderr,"Usage: resource_audit EXTRACTED_FILES_DIRECTORY\n"); return 2; }
+    const bool models = argc == 3 && !std::strcmp(argv[2], "--models");
+    if (argc != 2 && !models) { std::fprintf(stderr,"Usage: resource_audit EXTRACTED_FILES_DIRECTORY [--models]\n"); return 2; }
     std::error_code ec;
     const fs::path root(argv[1]);
     if (!fs::is_directory(root, ec)) { std::fprintf(stderr,"Not a readable directory\n"); return 2; }
@@ -28,7 +32,8 @@ int main(int argc, char** argv) {
     }
     if (ec) { std::fprintf(stderr,"Directory traversal: %s\n",ec.message().c_str()); return 2; }
     std::sort(archives.begin(), archives.end());
-    std::size_t tables=0, records=0, resources=0, errors=0;
+    std::size_t tables=0, records=0, resources=0, errors=0, modelCount=0, triangles=0;
+    std::map<std::string, std::size_t> modelErrors;
     for (const auto& path : archives) {
         std::vector<std::uint8_t> storage;
         std::vector<smg::ArchiveEntry> entries;
@@ -45,9 +50,27 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr,"BCSV %s :: %s: %s\n",path.c_str(),entry.path.c_str(),error.c_str()); ++errors;
             } else records += table.info().getNumEntries();
         }
+        if (!models) continue;
+        for (const auto& entry : entries) {
+            if (!extension(entry.path,".bdl") && !extension(entry.path,".bmd")) continue;
+            ++modelCount;
+            smg::Model model;
+            if (smg::loadModel({storage.data()+entry.offset,entry.size},model,256u*1024*1024,error)) {
+                triangles += model.vertices.size()/3;
+                continue;
+            }
+            std::fprintf(stderr,"MODEL %s :: %s: %s\n",path.c_str(),entry.path.c_str(),error.c_str());
+            ++modelErrors[error.substr(0, error.find(':'))];
+        }
     }
     std::printf("%zu archives, %zu resources, %zu BCSV tables, %zu records, %zu errors\n",
         archives.size(),resources,tables,records,errors);
+    if (models) {
+        std::size_t failed = 0;
+        for (const auto& [reason, count] : modelErrors) { std::printf("%6zu  %s\n", count, reason.c_str()); failed += count; }
+        std::printf("%zu models, %zu loaded, %zu triangles\n", modelCount, modelCount - failed, triangles);
+        errors += failed;
+    }
     if (archives.empty()) { std::fprintf(stderr,"No archives found\n"); return 2; }
     return errors == 0 ? 0 : 1;
 }

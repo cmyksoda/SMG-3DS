@@ -14,7 +14,7 @@ GPU_TEXTURE_WRAP_PARAM wrap(unsigned value) {
     return value == 1 ? GPU_REPEAT : value == 2 ? GPU_MIRRORED_REPEAT : GPU_CLAMP_TO_EDGE;
 }
 
-bool upload(C3D_Tex& texture, const ModelTexture& source) {
+bool upload(C3D_Tex& texture, const Image& source, unsigned wrapS, unsigned wrapT) {
     const bool powerOfTwo = !(source.width & (source.width - 1)) && !(source.height & (source.height - 1));
     if (source.width < 8 || source.height < 8 || !powerOfTwo) return false;
     if (!C3D_TexInit(&texture, source.width, source.height, GPU_RGBA8)) return false;
@@ -27,7 +27,7 @@ bool upload(C3D_Tex& texture, const ModelTexture& source) {
     }
     C3D_TexFlush(&texture);
     C3D_TexSetFilter(&texture, GPU_LINEAR, GPU_LINEAR);
-    C3D_TexSetWrap(&texture, wrap(source.wrapS), wrap(source.wrapT));
+    C3D_TexSetWrap(&texture, wrap(wrapS), wrap(wrapT));
     return true;
 }
 } // namespace
@@ -57,14 +57,17 @@ bool SceneRenderer::load(const char* archivePath, const char* modelEntry) {
         status_ = "Missing model shader uniforms"; shutdown(); return false;
     }
 
-    // The shader has no texture matrix, so bake each material's UV transform into its vertices.
+    // The shader has no texture matrix, so bake each material's first UV transform into its vertices.
     for (const auto& shape : model.shapes) {
         const auto& m = model.materials[shape.material];
+        const unsigned matrix = (m.texGens[0].matrix - 30) / 3;
+        if (m.texGens[0].matrix == 60 || matrix >= 10 || !m.hasTexMatrix[matrix]) continue;
+        const auto& uv = m.texMatrices[matrix].uv;
         for (std::size_t i = shape.first; i < shape.first + shape.count; ++i) {
             auto& vertex = model.vertices[i];
-            const float u = vertex.uv[0], v = vertex.uv[1];
-            vertex.uv[0] = m.uvTransform[0] * u + m.uvTransform[1] * v + m.uvTransform[2];
-            vertex.uv[1] = m.uvTransform[3] * u + m.uvTransform[4] * v + m.uvTransform[5];
+            const float u = vertex.uv[0][0], v = vertex.uv[0][1];
+            vertex.uv[0][0] = uv[0] * u + uv[1] * v + uv[2];
+            vertex.uv[0][1] = uv[3] * u + uv[4] * v + uv[5];
         }
     }
     const std::size_t vertexBytes = model.vertices.size() * sizeof(ModelVertex);
@@ -75,14 +78,15 @@ bool SceneRenderer::load(const char* archivePath, const char* modelEntry) {
 
     textures_.resize(model.textures.size());
     for (std::size_t i = 0; i < model.textures.size(); ++i) {
-        if (!upload(textures_[i], model.textures[i])) {
+        const auto& texture = model.textures[i];
+        if (!upload(textures_[i], texture.image, texture.wrapS, texture.wrapT)) {
             status_ = "Cannot upload original texture"; shutdown(); return false;
         }
     }
-    ModelTexture white;
+    Image white;
     white.width = white.height = 8;
     white.pixels.assign(64, 0xffffffff);
-    whiteReady_ = upload(white_, white);
+    whiteReady_ = upload(white_, white, 0, 0);
     if (!whiteReady_) { status_ = "Cannot allocate material fallback texture"; shutdown(); return false; }
 
     float extent = 0;
@@ -130,7 +134,7 @@ void SceneRenderer::draw(C3D_RenderTarget* target) {
     AttrInfo_AddLoader(attrs, 0, GPU_FLOAT, 3);
     AttrInfo_AddLoader(attrs, 1, GPU_FLOAT, 3);
     AttrInfo_AddLoader(attrs, 2, GPU_FLOAT, 4);
-    AttrInfo_AddLoader(attrs, 3, GPU_FLOAT, 2);
+    AttrInfo_AddLoader(attrs, 3, GPU_FLOAT, 4);
     C3D_BufInfo* buffers = C3D_GetBufInfo();
     BufInfo_Init(buffers);
     BufInfo_Add(buffers, vertices_, sizeof(ModelVertex), 4, 0x3210);
@@ -155,9 +159,10 @@ void SceneRenderer::draw(C3D_RenderTarget* target) {
     for (const auto& shape : shapes_) {
         const auto& material = materials_[shape.material];
         C3D_CullFace(material.cullMode == 0 ? GPU_CULL_NONE : material.cullMode == 1 ? GPU_CULL_FRONT_CCW : GPU_CULL_BACK_CCW);
-        C3D_TexBind(0, material.texture >= 0 ? &textures_[material.texture] : &white_);
-        C3D_FVUnifSet(GPU_VERTEX_SHADER, colorLocation_, material.color[0], material.color[1],
-                      material.color[2], material.color[3]);
+        const int texture = material.textures[0];
+        C3D_TexBind(0, texture >= 0 ? &textures_[texture] : &white_);
+        const auto& color = material.materialColor[0];
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, colorLocation_, color[0], color[1], color[2], color[3]);
         C3D_DrawArrays(GPU_TRIANGLES, shape.first, shape.count);
     }
 }
