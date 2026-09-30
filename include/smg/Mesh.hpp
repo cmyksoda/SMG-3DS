@@ -25,6 +25,9 @@ struct PackedMesh {
     float center[3]{}, radius = 0;
 };
 
-// Shares identical vertices within each shape; shapes past 65536 vertices are split.
-PackedMesh packMesh(const Model& model);
+PackedVertex packVertex(const ModelVertex& vertex);
+
+// Shares identical vertices within each shape; shapes past 65536 vertices are split. With a kept skin, only
+// vertices on the same draw matrix are shared, and `origin` gets the model vertex each packed one came from.
+PackedMesh packMesh(const Model& model, std::vector<std::uint32_t>* origin = nullptr);
 } // namespace smg

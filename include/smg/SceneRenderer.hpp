@@ -43,16 +43,20 @@ public:
     // A diagnostic marker, not Mario: dropped above Mario's start, it falls along the original gravity and
     // stops on the original collision. Positions are on the top screen, from the last draw.
     struct Probe {
-        bool visible = false;
+        bool visible = false, falling = false;
         float x = 0, y = 0;
         std::vector<std::array<float, 2>> trail; // oldest first, only the points in view
         std::string label;
     };
     const Probe& probe() const { return probeView_; }
+    // Mario's own model, idling where his start's pull meets the collision: a model and its animation, with
+    // no player code behind it.
+    const std::string& figureState() const { return figureState_; }
 
     struct Material;
     struct GpuModel;
     struct Prepared;
+    struct Figure;
 private:
     struct Instance {
         GpuModel* model;
@@ -65,6 +69,7 @@ private:
     // An area light's planet set, as the director loads it for a draw buffer.
     struct LightSet {
         const AreaLightInfo* area;
+        bool player; // the player's set of the area, else its planet set
         struct Light {
             float color[4]{}, position[3]{};
             bool followCamera = false;
@@ -77,7 +82,10 @@ private:
     void consume(Prepared& prepared);
     void resetCamera();
     void drawInstance(const Instance& instance, const C3D_Mtx& view, bool translucent, const Material*& current);
-    int lightSet(const AreaLightInfo* area);
+    int lightSet(const AreaLightInfo* area, bool player = false);
+    std::unique_ptr<GpuModel> uploadModel(Prepared& prepared);
+    void placeFigure(Prepared& prepared);
+    void animateFigure(float seconds);
     const std::vector<Material>& framedMaterials(GpuModel& model, int frame);
     void loadLightSet(const LightSet& set, const C3D_Mtx& view);
     void dropProbe();
@@ -96,7 +104,10 @@ private:
     Stage stage_;
     std::unique_ptr<NativeScene> gravity_;
     std::unique_ptr<StageCollision> collision_; // after the scene, so it goes first
-    std::vector<std::string> names_;
+    std::vector<std::string> names_; // the placed models, then Mario's when the stage has an entrance
+    std::size_t placedNames_ = 0;
+    std::unique_ptr<Figure> figure_;
+    std::string figureState_;
     std::size_t consumed_ = 0, skinned_ = 0, missing_ = 0, failed_ = 0;
     Thread worker_ = nullptr;
     std::atomic<bool> stopping_{false};
@@ -105,6 +116,7 @@ private:
     std::vector<std::unique_ptr<GpuModel>> models_;
     std::vector<Instance> instances_;
     float position_[3]{}, yaw_ = 0, pitch_ = 0;
+    bool closeView_ = false; // L swaps between the view behind the start and the close one in front
     bool probeFalling_ = false;
     float probe_[3]{}, probeVelocity_[3]{}, probeFallen_ = 0, probeSinceTrail_ = 0;
     std::vector<std::array<float, 3>> probeTrail_;

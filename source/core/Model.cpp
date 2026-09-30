@@ -684,9 +684,9 @@ void poseSkeleton(const Model& model, const std::vector<JointTransform>& local, 
     }
 }
 
-void skinModel(const Model& model, const std::vector<std::array<float, 12>>& world, std::vector<ModelVertex>& vertices) {
+void skinMatrices(const Model& model, const std::vector<std::array<float, 12>>& world, std::vector<std::array<float, 12>>& draws) {
     const auto& skin = model.skin;
-    std::vector<Mtx34> draws(skin.draws.size(), Identity);
+    draws.assign(skin.draws.size(), Identity);
     for (std::size_t d = 0; d < skin.draws.size(); ++d) {
         const auto& draw = skin.draws[d];
         if (!draw.weighted) {
@@ -700,7 +700,18 @@ void skinModel(const Model& model, const std::vector<std::array<float, 12>>& wor
         }
         draws[d] = sum;
     }
-    vertices = skin.rest;
-    for (std::size_t v = 0; v < vertices.size(); ++v) transform(draws[skin.matrix[v]], vertices[v]);
+}
+
+ModelVertex skinVertex(const Model& model, const std::vector<std::array<float, 12>>& draws, std::size_t vertex) {
+    ModelVertex v = model.skin.rest[vertex];
+    transform(draws[model.skin.matrix[vertex]], v);
+    return v;
+}
+
+void skinModel(const Model& model, const std::vector<std::array<float, 12>>& world, std::vector<ModelVertex>& vertices) {
+    std::vector<Mtx34> draws;
+    skinMatrices(model, world, draws);
+    vertices.resize(model.skin.rest.size());
+    for (std::size_t v = 0; v < vertices.size(); ++v) vertices[v] = skinVertex(model, draws, v);
 }
 } // namespace smg

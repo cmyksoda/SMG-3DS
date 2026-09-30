@@ -5,8 +5,7 @@
 #include <unordered_map>
 
 namespace smg {
-namespace {
-PackedVertex pack(const ModelVertex& v) {
+PackedVertex packVertex(const ModelVertex& v) {
     PackedVertex p{};
     std::memcpy(p.position, v.position, sizeof(p.position));
     std::memcpy(p.uv, v.uv, sizeof(p.uv));
@@ -15,22 +14,26 @@ PackedVertex pack(const ModelVertex& v) {
     return p;
 }
 
+namespace {
 struct Key {
     PackedVertex v;
-    bool operator==(const Key& o) const { return !std::memcmp(&v, &o.v, sizeof(v)); }
+    std::uint32_t matrix; // vertices that move apart when animated must stay apart
+    bool operator==(const Key& o) const { return matrix == o.matrix && !std::memcmp(&v, &o.v, sizeof(v)); }
 };
 struct Hash {
     std::size_t operator()(const Key& k) const {
         const auto* bytes = reinterpret_cast<const std::uint8_t*>(&k.v);
-        std::size_t h = 1469598103934665603ull & SIZE_MAX;
+        std::size_t h = (1469598103934665603ull & SIZE_MAX) ^ k.matrix;
         for (std::size_t i = 0; i < sizeof(k.v); ++i) h = (h ^ bytes[i]) * (1099511628211ull & SIZE_MAX);
         return h;
     }
 };
 } // namespace
 
-PackedMesh packMesh(const Model& model) {
+PackedMesh packMesh(const Model& model, std::vector<std::uint32_t>* origin) {
     PackedMesh mesh;
+    if (origin) origin->clear();
+    const bool skin = model.skin.matrix.size() == model.vertices.size();
     for (std::size_t s = 0; s < model.shapes.size(); ++s) {
         const auto& shape = model.shapes[s];
         std::unordered_map<Key, std::uint16_t, Hash> seen;
@@ -44,9 +47,12 @@ PackedMesh packMesh(const Model& model) {
                 seen.clear();
             }
             for (std::size_t k = 0; k < 3; ++k) {
-                const Key key{pack(model.vertices[i + k])};
+                const Key key{packVertex(model.vertices[i + k]), skin ? model.skin.matrix[i + k] : 0u};
                 auto [it, inserted] = seen.emplace(key, static_cast<std::uint16_t>(mesh.vertices.size() - current.firstVertex));
-                if (inserted) mesh.vertices.push_back(key.v);
+                if (inserted) {
+                    mesh.vertices.push_back(key.v);
+                    if (origin) origin->push_back(static_cast<std::uint32_t>(i + k));
+                }
                 mesh.indices.push_back(it->second);
             }
         }

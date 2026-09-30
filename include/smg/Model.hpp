@@ -109,6 +109,10 @@ struct JointTransform {
 };
 // Each joint's world matrix for a pose, composed down the hierarchy as the loader composes the bind pose.
 void poseSkeleton(const Model& model, const std::vector<JointTransform>& local, std::vector<std::array<float, 12>>& world);
-// Every vertex through its draw matrix for those joints: needs the model's kept skin.
+// Each draw matrix for those joints: its joint's world, or its envelope's weighted skin. Needs the kept skin.
+void skinMatrices(const Model& model, const std::vector<std::array<float, 12>>& world, std::vector<std::array<float, 12>>& draws);
+// One model vertex from its rest through its draw matrix.
+ModelVertex skinVertex(const Model& model, const std::vector<std::array<float, 12>>& draws, std::size_t vertex);
+// Every vertex through its draw matrix for those joints.
 void skinModel(const Model& model, const std::vector<std::array<float, 12>>& world, std::vector<ModelVertex>& vertices);
 } // namespace smg

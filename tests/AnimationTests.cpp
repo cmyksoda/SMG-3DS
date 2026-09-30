@@ -1,4 +1,5 @@
 #include <smg/Animation.hpp>
+#include <smg/Mesh.hpp>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -171,6 +172,19 @@ void jointAnimation() {
     check(std::fabs(skinned[0].position[2] + 110) < 0.01f && std::fabs(skinned[0].position[0]) < 0.01f,
           "a rigid vertex turns with its joint");
     check(std::fabs(skinned[1].position[2] + 50) < 0.01f, "a weighted vertex blends its joints");
+
+    // Two triangles alike at the bind pose but on different draw matrices must not share packed vertices.
+    model.vertices.assign(6, {});
+    model.skin.rest.assign(6, {});
+    model.skin.matrix = {0, 0, 0, 1, 1, 1};
+    for (int v = 0; v < 6; ++v) model.vertices[v].position[0] = model.skin.rest[v].position[0] = float(v % 3);
+    model.shapes = {{0, 6, 0, 3}};
+    std::vector<std::uint32_t> origin;
+    auto mesh = smg::packMesh(model, &origin);
+    check(mesh.vertices.size() == 6 && origin.size() == 6 && origin[3] == 3, "vertices on other matrices stay apart");
+    model.skin.matrix.clear();
+    mesh = smg::packMesh(model);
+    check(mesh.vertices.size() == 3, "without a skin, alike vertices are shared");
 }
 
 void rejected() {

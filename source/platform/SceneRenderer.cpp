@@ -345,9 +345,32 @@ bool endsWith(const std::string& text, const std::string& suffix) {
 }
 } // namespace
 
+// Mario's model with its skin kept: the CPU skins one vertex buffer while the GPU draws from the other.
+struct SceneRenderer::Figure {
+    Model model;
+    std::vector<std::uint32_t> origin; // the model vertex behind each packed one
+    JointAnimation wait;
+    J3DFrameCtrl frames;
+    std::vector<JointTransform> pose;
+    std::vector<std::array<float, 12>> world, draws;
+    std::unique_ptr<GpuModel> gpu;
+    void* buffers[2]{};
+    int drawing = 0;
+    float sinceStep = 0;
+    std::string where;
+    Figure() = default;
+    Figure(const Figure&) = delete;
+    Figure& operator=(const Figure&) = delete;
+    ~Figure() {
+        if (gpu) gpu->vertices = nullptr; // one of the two buffers, freed here
+        for (void* buffer : buffers) if (buffer) linearFree(buffer);
+    }
+};
+
 struct SceneRenderer::Prepared {
-    enum class Result { Ready, Missing, Skinned, Failed } result = Result::Failed;
-    std::string name;
+    enum class Result { Ready, Missing, Skinned, Failed, Figure } result = Result::Failed;
+    std::string name, error;
+    std::unique_ptr<Figure> figure;
     std::unique_ptr<StageCollision::Model> collision; // read from the same archive, whatever the model is
     std::string collisionError;
     std::unique_ptr<TevRegAnimation> brk;
@@ -393,6 +416,54 @@ std::unique_ptr<SceneRenderer::Prepared> prepareModel(const std::string& root, c
     out->result = SceneRenderer::Prepared::Result::Ready;
     return out;
 }
+
+// MarioActor::initDrawAndModel's "Mario" with "MarioAnime", and the wait animation he stands in.
+std::unique_ptr<SceneRenderer::Prepared> prepareFigure(const std::string& root) {
+    auto out = std::make_unique<SceneRenderer::Prepared>();
+    out->name = "Mario";
+    auto figure = std::make_unique<SceneRenderer::Figure>();
+    std::vector<std::uint8_t> storage;
+    std::vector<ArchiveEntry> entries;
+    // The whole file name, so "wait.bck" does not find "hipwait.bck".
+    const auto find = [&](const std::string& file) {
+        return std::find_if(entries.begin(), entries.end(), [&](const ArchiveEntry& e) {
+            return MR::isEqualStringCase(e.path.c_str(), file.c_str()) || endsWith(e.path, "/" + file);
+        });
+    };
+    auto& error = out->error;
+    out->result = SceneRenderer::Prepared::Result::Missing;
+    if (!readArchive((root + "/ObjectData/Mario.arc").c_str(), storage, entries, ArchiveBudget, error)) return out;
+    const auto model = find("mario.bdl");
+    if (model == entries.end()) { error = "Mario.arc has no mario.bdl"; return out; }
+    out->result = SceneRenderer::Prepared::Result::Failed;
+    if (!loadModel({storage.data() + model->offset, model->size}, figure->model, ModelBudget, error, true)) return out;
+    out->result = SceneRenderer::Prepared::Result::Missing;
+    if (!readArchive((root + "/ObjectData/MarioAnime.arc").c_str(), storage, entries, ArchiveBudget, error)) return out;
+    const auto wait = find("wait.bck");
+    if (wait == entries.end()) { error = "MarioAnime.arc has no wait.bck"; return out; }
+    out->result = SceneRenderer::Prepared::Result::Failed;
+    if (!figure->wait.load({storage.data() + wait->offset, wait->size}, error)) return out;
+    std::vector<std::uint8_t>().swap(storage);
+
+    const Model& mario = figure->model;
+    out->mesh = packMesh(mario, &figure->origin);
+    for (const auto& texture : mario.textures) out->textures.push_back(tile(texture));
+    for (const auto& material : mario.materials) out->materials.push_back(prepare(material));
+    // Joints the animation leaves alone keep their bind pose.
+    for (const auto& joint : mario.joints) {
+        JointTransform t;
+        std::copy(joint.scale, joint.scale + 3, t.scale);
+        std::copy(joint.rotation, joint.rotation + 3, t.rotation);
+        std::copy(joint.translation, joint.translation + 3, t.translation);
+        figure->pose.push_back(t);
+    }
+    // As J3D's animation controls start a BCK: its length, its own play mode, one frame per game frame.
+    figure->frames.init(figure->wait.key().mFrameMax);
+    figure->frames.setAttribute(figure->wait.key().mAttribute);
+    out->figure = std::move(figure);
+    out->result = SceneRenderer::Prepared::Result::Figure;
+    return out;
+}
 } // namespace
 
 SceneRenderer::SceneRenderer() { LightLock_Init(&lock_); }
@@ -401,7 +472,7 @@ SceneRenderer::~SceneRenderer() { shutdown(); }
 void SceneRenderer::workerMain(void* self) { static_cast<SceneRenderer*>(self)->work(); }
 
 void SceneRenderer::work() {
-    for (const auto& name : names_) {
+    for (std::size_t i = 0; i < names_.size(); ++i) {
         // Hold at most two decoded models, so the loader cannot run far ahead of the uploads.
         for (;;) {
             if (stopping_) return;
@@ -411,7 +482,7 @@ void SceneRenderer::work() {
             if (queued < 2) break;
             svcSleepThread(2000000);
         }
-        auto prepared = prepareModel(root_, name);
+        auto prepared = i < placedNames_ ? prepareModel(root_, names_[i]) : prepareFigure(root_);
         LightLock_Lock(&lock_);
         finished_.push_back(std::move(prepared));
         LightLock_Unlock(&lock_);
@@ -467,6 +538,7 @@ void SceneRenderer::shutdown() {
     collision_.reset();
     gravity_.reset();
     instances_.clear();
+    figure_.reset();
     models_.clear();
     names_.clear();
     consumed_ = 0;
@@ -479,6 +551,8 @@ void SceneRenderer::shutdown() {
 void SceneRenderer::loadStage(const std::string& root, const std::string& galaxy, int scenario) {
     stopWorker();
     instances_.clear();
+    figure_.reset();
+    figureState_.clear();
     models_.clear();
     names_.clear();
     consumed_ = skinned_ = missing_ = failed_ = 0;
@@ -492,6 +566,7 @@ void SceneRenderer::loadStage(const std::string& root, const std::string& galaxy
     if (!smg::loadStage(root, galaxy, scenario, stage_, error)) { status_ = error; return; }
     for (const auto& object : stage_.objects)
         if (std::find(names_.begin(), names_.end(), object.name) == names_.end()) names_.push_back(object.name);
+    placedNames_ = names_.size();
     gravity_ = std::make_unique<NativeScene>();
     if (smg::placeStageGravity(root, stage_, *gravity_, error)) {
         startGravity_ = stage_.entrance ? describeGravity(*gravity_, stage_, stage_.start.data()) : "no MarioNo 0 entrance";
@@ -500,12 +575,15 @@ void SceneRenderer::loadStage(const std::string& root, const std::string& galaxy
         lightSets_.clear();
         lightError_ = smg::loadStageLights(root, *gravity_, error) ? "" : "lights unavailable: " + error;
         lightSet(gravity_->defaultAreaLight());
+        // Mario goes last, when every collision part he could stand on is in.
+        if (stage_.entrance) names_.push_back("Mario");
     } else {
         startGravity_ = "unavailable: " + error;
         gravity_.reset();
         lightSets_.clear();
         lightSet(nullptr);
     }
+    closeView_ = false;
     resetCamera();
     status_ = std::to_string(stage_.objects.size()) + " placements, " + std::to_string(names_.size()) + " models to load";
     // Just below the main thread, so decoding fills the time the main thread spends waiting on the GPU.
@@ -521,15 +599,16 @@ void SceneRenderer::loadStage(const std::string& root, const std::string& galaxy
 
 // Placed models draw in the map and planet buffers, which take the area light's planet set; the player,
 // enemy and NPC sets come with actors. Without light data every channel sees plain white.
-int SceneRenderer::lightSet(const AreaLightInfo* area) {
+int SceneRenderer::lightSet(const AreaLightInfo* area, bool player) {
     for (std::size_t i = 0; i < lightSets_.size(); ++i)
-        if (lightSets_[i].area == area) return static_cast<int>(i);
-    LightSet set{area, {}, {1, 1, 1, 1}, 0};
+        if (lightSets_[i].area == area && lightSets_[i].player == player) return static_cast<int>(i);
+    LightSet set{area, player, {}, {1, 1, 1, 1}, 0};
     if (area) {
         const auto unit = [](const GXColor& c, float* out) {
             out[0] = c.r / 255.0f, out[1] = c.g / 255.0f, out[2] = c.b / 255.0f, out[3] = c.a / 255.0f;
         };
-        const ActorLightInfo& planet = area->mPlanetLight;
+        // ActorLightCtrl::getTargetActorLight: the player's control asks for type 0.
+        const ActorLightInfo& planet = player ? area->mPlayerLight : area->mPlanetLight;
         const LightInfo* infos[2]{&planet.mInfo0, &planet.mInfo1};
         for (int i = 0; i < 2; ++i) {
             unit(infos[i]->mColor, set.lights[i].color);
@@ -626,12 +705,15 @@ void SceneRenderer::stepProbe(float seconds) {
 }
 
 void SceneRenderer::resetCamera() {
-    // Behind and above the first start point, looking the way it faces.
-    yaw_ = stage_.startRotation[1] * 3.14159265f / 180.0f;
-    pitch_ = -0.35f;
-    position_[0] = stage_.start[0] - std::sin(yaw_) * 2400;
-    position_[1] = stage_.start[1] + 900;
-    position_[2] = stage_.start[2] - std::cos(yaw_) * 2400;
+    // Behind and above the first start point, looking the way it faces; or close in front, looking back at it.
+    const float facing = stage_.startRotation[1] * 3.14159265f / 180.0f;
+    const float away = closeView_ ? 500 : -2400, above = closeView_ ? 330 : 900;
+    // Turned a little, so the star pointer at the centre does not cover what stands at the start.
+    yaw_ = closeView_ ? facing + 3.14159265f - 0.25f : facing;
+    pitch_ = closeView_ ? -0.45f : -0.35f;
+    position_[0] = stage_.start[0] + std::sin(facing) * away;
+    position_[1] = stage_.start[1] + above;
+    position_[2] = stage_.start[2] + std::cos(facing) * away;
 }
 
 namespace {
@@ -653,18 +735,13 @@ const std::vector<SceneRenderer::Material>& SceneRenderer::framedMaterials(GpuMo
     return model.framed.emplace(frame, std::move(prepared)).first->second;
 }
 
-void SceneRenderer::consume(Prepared& prepared) {
-    if (!prepared.collisionError.empty()) startLanding_ = "collision unavailable: " + prepared.collisionError;
-    if (prepared.collision && collision_) collision_->addParts(stage_, std::move(prepared.collision));
-    if (prepared.result == Prepared::Result::Missing) { ++missing_; return; }
-    if (prepared.result == Prepared::Result::Skinned) { ++skinned_; return; }
-    if (prepared.result != Prepared::Result::Ready) { ++failed_; return; }
+std::unique_ptr<SceneRenderer::GpuModel> SceneRenderer::uploadModel(Prepared& prepared) {
     auto gpu = std::make_unique<GpuModel>();
     gpu->name = prepared.name;
     const auto& mesh = prepared.mesh;
     gpu->vertices = linearAlloc(mesh.vertices.size() * sizeof(PackedVertex));
     gpu->indices = linearAlloc(mesh.indices.size() * sizeof(std::uint16_t));
-    if (!gpu->vertices || !gpu->indices) { ++failed_; status_ = "Out of linear memory at " + prepared.name; return; }
+    if (!gpu->vertices || !gpu->indices) { ++failed_; status_ = "Out of linear memory at " + prepared.name; return nullptr; }
     std::memcpy(gpu->vertices, mesh.vertices.data(), mesh.vertices.size() * sizeof(PackedVertex));
     std::memcpy(gpu->indices, mesh.indices.data(), mesh.indices.size() * sizeof(std::uint16_t));
     GSPGPU_FlushDataCache(gpu->vertices, mesh.vertices.size() * sizeof(PackedVertex));
@@ -677,12 +754,25 @@ void SceneRenderer::consume(Prepared& prepared) {
         if (!upload(gpu->textures[i], prepared.textures[i])) {
             ++failed_;
             status_ = "Cannot upload a texture of " + prepared.name;
-            return;
+            return nullptr;
         }
     }
     gpu->materials = std::move(prepared.materials);
     gpu->brk = std::move(prepared.brk);
     gpu->source = std::move(prepared.source);
+    return gpu;
+}
+
+void SceneRenderer::consume(Prepared& prepared) {
+    if (!prepared.collisionError.empty()) startLanding_ = "collision unavailable: " + prepared.collisionError;
+    if (prepared.collision && collision_) collision_->addParts(stage_, std::move(prepared.collision));
+    if (prepared.result == Prepared::Result::Figure) { placeFigure(prepared); return; }
+    if (!prepared.error.empty()) figureState_ = prepared.name + ": " + prepared.error;
+    if (prepared.result == Prepared::Result::Missing) { ++missing_; return; }
+    if (prepared.result == Prepared::Result::Skinned) { ++skinned_; return; }
+    if (prepared.result != Prepared::Result::Ready) { ++failed_; return; }
+    auto gpu = uploadModel(prepared);
+    if (!gpu) return;
 
     const bool sky = prepared.name.size() > 2 && prepared.name[0] == 'V' && prepared.name[1] == 'R';
     for (const auto& object : stage_.objects) {
@@ -703,6 +793,79 @@ void SceneRenderer::consume(Prepared& prepared) {
         instances_.push_back(instance);
     }
     models_.push_back(std::move(gpu));
+}
+
+void SceneRenderer::placeFigure(Prepared& prepared) {
+    auto gpu = uploadModel(prepared);
+    if (!gpu) { figureState_ = "Mario: " + status_; return; }
+    auto figure = std::move(prepared.figure);
+    const std::size_t bytes = prepared.mesh.vertices.size() * sizeof(PackedVertex);
+    figure->buffers[0] = gpu->vertices;
+    figure->buffers[1] = linearAlloc(bytes);
+    figure->gpu = std::move(gpu);
+    if (!figure->buffers[1]) { ++failed_; figureState_ = "Mario: out of linear memory"; return; }
+
+    // Stood where his start's pull meets the collision, upright against that pull, facing the start's way.
+    TVec3f pull;
+    const TVec3f start(stage_.start[0], stage_.start[1], stage_.start[2]);
+    auto* manager = MR::getSceneObj<PlanetGravityManager>(SceneObj_PlanetGravityManager);
+    if (!manager->calcTotalGravityVector(&pull, nullptr, start, GRAVITY_TYPE_NORMAL, 0)) {
+        figureState_ = "Mario: no gravity at his start";
+        return;
+    }
+    float at[3]{start.x, start.y, start.z};
+    StageCollision::Hit hit;
+    if (collision_ && collision_->land(start, pull, hit)) {
+        at[0] = hit.position.x, at[1] = hit.position.y, at[2] = hit.position.z;
+        figure->where = "on " + stage_.objects[hit.object].name;
+    } else {
+        figure->where = "at his start, over no collision";
+    }
+    const float unit[3]{1, 1, 1};
+    const Transform facing = placementMatrix(stage_.start.data(), stage_.startRotation.data(), unit);
+    TVec3f up(-pull.x, -pull.y, -pull.z), front(facing[2], facing[6], facing[10]), side;
+    up.normalize();
+    side.cross(up, front);
+    if (side.squared() < 1e-6f) side.cross(up, TVec3f(facing[0], facing[4], facing[8]));
+    side.normalize();
+    front.cross(side, up);
+    Transform placed{side.x, up.x, front.x, at[0], side.y, up.y, front.y, at[1], side.z, up.z, front.z, at[2]};
+
+    GpuModel& model = *figure->gpu;
+    const int light = gravity_ ? lightSet(gravity_->areaLightAt(TVec3f(at[0], at[1], at[2])), true) : 0;
+    Instance instance{&model, {}, {}, 0, false, light, nullptr};
+    setMatrix(instance.transform, placed);
+    for (int row = 0; row < 3; ++row)
+        instance.center[row] = placed[row * 4] * model.center[0] + placed[row * 4 + 1] * model.center[1] +
+                               placed[row * 4 + 2] * model.center[2] + placed[row * 4 + 3];
+    instance.radius = model.radius;
+    instances_.push_back(instance);
+    figure_ = std::move(figure);
+    animateFigure(0);
+}
+
+void SceneRenderer::animateFigure(float seconds) {
+    Figure& figure = *figure_;
+    constexpr float Step = 1 / 60.0f;
+    figure.sinceStep += seconds;
+    for (int steps = 0; figure.sinceStep >= Step; figure.sinceStep -= Step) {
+        figure.frames.update();
+        // After a long stall, catch up by a few frames rather than all of them.
+        if (++steps == 4) figure.sinceStep = 0;
+    }
+    figure.wait.pose(figure.frames.getFrame(), figure.pose);
+    poseSkeleton(figure.model, figure.pose, figure.world);
+    skinMatrices(figure.model, figure.world, figure.draws);
+    // The GPU may still be drawing last frame's buffer; the other one finished before this frame began.
+    figure.drawing ^= 1;
+    auto* out = static_cast<PackedVertex*>(figure.buffers[figure.drawing]);
+    for (std::size_t i = 0; i < figure.origin.size(); ++i) out[i] = packVertex(skinVertex(figure.model, figure.draws, figure.origin[i]));
+    GSPGPU_FlushDataCache(out, figure.origin.size() * sizeof(PackedVertex));
+    figure.gpu->vertices = out;
+    char text[128];
+    std::snprintf(text, sizeof text, "Mario: wait.bck frame %.0f of %d, %s", figure.frames.getFrame(), figure.wait.key().mFrameMax,
+                  figure.where.c_str());
+    figureState_ = text;
 }
 
 void SceneRenderer::update(const InputFrame& input, float seconds) {
@@ -741,6 +904,7 @@ void SceneRenderer::update(const InputFrame& input, float seconds) {
         }
     }
     if (input.camera.pressed) {
+        closeView_ = !closeView_;
         resetCamera();
         dropProbe();
     }
@@ -760,6 +924,7 @@ void SceneRenderer::update(const InputFrame& input, float seconds) {
         gravityHere_ = describeGravity(*gravity_, stage_, position_);
         if (collision_) stepProbe(seconds);
     }
+    if (figure_) animateFigure(seconds);
 }
 
 void SceneRenderer::drawInstance(const Instance& instance, const C3D_Mtx& view, bool translucent, const Material*& current) {
@@ -875,6 +1040,7 @@ void SceneRenderer::draw(C3D_RenderTarget* target) {
     };
     probeView_.trail.clear();
     probeView_.label = probeState_;
+    probeView_.falling = probeFalling_;
     std::array<float, 2> at{};
     probeView_.visible = !probeState_.empty() && toScreen(probe_, at);
     probeView_.x = at[0], probeView_.y = at[1];

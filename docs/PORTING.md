@@ -115,6 +115,14 @@ completion does not make those interfaces portable to ARM11/PICA200.
   the inverse binds), and `poseSkeleton` and `skinModel` pose and skin on the CPU. Every one of the
   disc's 1,758 models, reposed at its own bind pose, skins back to exactly what the loader baked,
   and all 3,231 BCK files load and pose to finite values on every frame.
+  The preview stands Mario's own `mario.bdl` where his start's pull meets the collision, upright
+  against that pull and facing the start's way, lit by the area's player set (`ActorLightCtrl`'s
+  type 0), and plays `MarioAnime`'s `wait.bck` in a `J3DFrameCtrl` at its own play mode, one
+  frame per game frame. The CPU skins only the packed vertices (`packMesh` keeps vertices on
+  different draw matrices apart and says which model vertex each came from) into one of two
+  linear buffers while the GPU reads the other. This is a model and an animation, not the player:
+  `MarioActor` would hide the body's `Face0` joint for `MarioFace` and swap `MarioHandL`/`R` poses
+  by the `PartsControl` joint, and `XanimePlayer` would blend animations; none of that runs yet.
 - newlib's `<ctype.h>` defines `_U`, `_L`, `_N`, `_S`, `_P`, `_C`, `_X` and `_B` as macros, and
   Petari uses some of them as member names. ARM builds force-include `compat/smg/NewlibCtype.hpp`,
   which lets libstdc++ read them once and then undefines them.
@@ -142,9 +150,10 @@ completion does not make those interfaces portable to ARM11/PICA200.
   Egg the planets' sets barely differ between areas (the areas change the player and enemy sets), so
   the look changes little until actors draw. Petari's string literals are UTF-8 in this build and the disc's
   names Shift-JIS, so `LightDataHolder`'s "デフォルト" never matches a row by name; its fallback, the
-  first row, is the one the disc names that anyway. Skinned models are skipped until animation
-  exists. This is a stage preview with a free camera, not gameplay: no actor or camera code from the
-  game runs yet, and its gravity and collision answer only the readouts and the probe.
+  first row, is the one the disc names that anyway. Skinned placed models are still skipped: which
+  animation each plays comes with its actor. This is a stage preview with a free camera, not gameplay:
+  no actor or camera code from the game runs yet, and its gravity and collision answer only the
+  readouts, the probe and where Mario's model stands.
 
 The WPad pointer, accelerometer, swing, and rumble device members are not installed yet.
 Do not compile callers that dereference them until their native implementations exist.
@@ -342,6 +351,6 @@ across 12 zones; the preview draws 56 rigid models in 172 placements.
 
 The portable math tests check tolerances and conventions, not bit-identical Gekko rounding.
 The native validation app passes 1,069 math, 37 WPad, 179 BCSV, 1,043 J3D model/texture,
-8,607 TEV combiner, 27 original gravity, 27 NameObj, 89 scene and gravity creator, 48 collision, 19 J3D animation, 7 ETC1 and 8 GPU texture checks on emulated ARM
+8,607 TEV combiner, 27 original gravity, 27 NameObj, 89 scene and gravity creator, 48 collision, 21 J3D animation, 7 ETC1 and 8 GPU texture checks on emulated ARM
 in Azahar; the GPU checks compare the hardware's ETC1 decoding against ours. Of the disc's
 7,780 materials, 6,949 translate to the combiner exactly. No physical console has been tested.

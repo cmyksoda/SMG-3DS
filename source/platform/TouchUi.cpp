@@ -144,7 +144,15 @@ void TouchUi::drawTop(const InputFrame& input, const NativePad& pad, SceneRender
         // The gravity probe: a marker and its trail, drawn over the scene so it cannot pass for Mario.
         const auto& probe = scene.probe();
         for (const auto& point : probe.trail) C2D_DrawRectSolid(point[0] - 1, point[1] - 1, 0, 2, 2, color(255, 120, 220, 0.8f));
-        if (probe.visible) {
+        if (probe.visible && !probe.falling) {
+            // Landed: a thin ring marks the spot without hiding what stands on it.
+            const u32 ring = color(255, 120, 220, 0.9f);
+            for (int i = 0; i < 16; ++i) {
+                const float a0 = i * 0.3927f, a1 = (i + 1) * 0.3927f;
+                C2D_DrawLine(probe.x + 11 * std::cos(a0), probe.y + 11 * std::sin(a0), ring, probe.x + 11 * std::cos(a1),
+                             probe.y + 11 * std::sin(a1), ring, 1.5f, 0);
+            }
+        } else if (probe.visible) {
             const float x = probe.x, y = probe.y;
             // A ring, so the marker still shows around the star pointer when both sit at the start.
             C2D_DrawCircle(x, y, 0, 11, color(255, 120, 220, 0.9f), color(255, 120, 220, 0.9f), color(255, 120, 220, 0.9f),
@@ -153,8 +161,12 @@ void TouchUi::drawTop(const InputFrame& input, const NativePad& pad, SceneRender
             C2D_DrawTriangle(x, y - 7, color(255, 120, 220), x - 5, y, color(255, 120, 220), x + 5, y, color(255, 120, 220), 0);
             C2D_DrawTriangle(x, y + 7, color(190, 60, 170), x - 5, y, color(190, 60, 170), x + 5, y, color(190, 60, 170), 0);
         }
-        C2D_DrawRectSolid(0, 0, 0, 400, probe.label.empty() ? 32 : 46, color(4, 9, 26, 0.7f));
-        if (!probe.label.empty()) label(probe.label.c_str(), 200, 31, 0.4f, color(255, 170, 235), true);
+        const auto& figure = scene.figureState();
+        const float probeLine = 31, figureLine = probe.label.empty() ? 31 : 45;
+        C2D_DrawRectSolid(0, 0, 0, 400, (figure.empty() ? probe.label.empty() ? 17 : probeLine : figureLine) + 15,
+                          color(4, 9, 26, 0.7f));
+        if (!probe.label.empty()) label(probe.label.c_str(), 200, probeLine, 0.4f, color(255, 170, 235), true);
+        if (!figure.empty()) label(figure.c_str(), 200, figureLine, 0.4f, color(255, 214, 150), true);
         label(scene.title().c_str(), 200, 3, 0.4f, color(229, 239, 255), true);
         // The system font's glyphs are about 30 px; below 0.4 the linear filter drops thin strokes.
         if (!scene.gravityHere().empty())
@@ -164,7 +176,7 @@ void TouchUi::drawTop(const InputFrame& input, const NativePad& pad, SceneRender
             label(("Mario's start: " + scene.startGravity()).c_str(), 200, 181, 0.4f, color(150, 214, 192), true);
         if (!scene.startLanding().empty()) label(scene.startLanding().c_str(), 200, 195, 0.4f, color(150, 214, 192), true);
         label(scene.status().c_str(), 200, 209, 0.4f, color(173, 198, 223), true);
-        label("Pad fly   C-Stick look   A up   ZL down   X fast   L reset", 200, 223, 0.4f, color(194, 210, 230), true);
+        label("Pad fly   C-Stick look   A up   ZL down   X fast   L view", 200, 223, 0.4f, color(194, 210, 230), true);
     } else {
         background(400, frame_);
         label("SMG-3DS", 200, 18, 0.9f, color(236, 243, 255), true);
