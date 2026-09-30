@@ -502,11 +502,8 @@ int main(int argc, char** argv) {
             // The game's own loading attaches the disc's bytes: turned native in place, every value must match.
             std::vector<std::uint32_t> disc((entry.size+3)/4);
             std::memcpy(disc.data(),storage.data()+entry.offset,entry.size);
-            if (const char* problem = smgNativeBcsvProblem(disc.data())) {
-                ++bcsvRepack;
-                if (bcsvRepack <= 5) std::fprintf(stderr,"BCSV in place %s :: %s: %s\n",path.c_str(),entry.path.c_str(),problem);
-                continue;
-            }
+            if (smgNativeBcsvProblem(disc.data())) ++bcsvRepack;
+            else ++bcsvInPlace;
             JMapInfo attached;
             attached.attach(disc.data());
             bool same = attached.getNumEntries()==table.info().getNumEntries() && attached.getNumFields()==table.info().getNumFields();
@@ -522,8 +519,8 @@ int main(int argc, char** argv) {
                     }
                 }
             }
-            if (same) ++bcsvInPlace;
-            else { ++bcsvDiffer; std::fprintf(stderr,"BCSV in place %s :: %s: values differ\n",path.c_str(),entry.path.c_str()); }
+            if (attached.mData != reinterpret_cast<const JMapData*>(disc.data())) std::free(const_cast<JMapData*>(attached.mData));
+            if (!same) { ++bcsvDiffer; std::fprintf(stderr,"BCSV attached %s :: %s: values differ\n",path.c_str(),entry.path.c_str()); }
         }
         if (!models) continue;
         // BRKs, set on the archive's models: every register table should name one of their materials.
@@ -668,8 +665,8 @@ int main(int argc, char** argv) {
     }
     std::printf("%zu archives, %zu resources, %zu BCSV tables, %zu records, %zu errors\n",
         archives.size(),resources,tables,records,errors);
-    std::printf("%zu BCSV tables turn native in place as the game attaches them, every value as the port's loader reads it;"
-                " %zu need repacking for ARM; %zu differ\n", bcsvInPlace, bcsvRepack, bcsvDiffer);
+    std::printf("BCSV tables attached as the game attaches them: %zu turned native in place, %zu repacked for ARM;"
+                " %zu differ from the port's loader\n", bcsvInPlace, bcsvRepack, bcsvDiffer);
     if (models) {
         std::size_t failed = 0;
         for (const auto& [reason, count] : modelErrors) { std::printf("%6zu  %s\n", count, reason.c_str()); failed += count; }

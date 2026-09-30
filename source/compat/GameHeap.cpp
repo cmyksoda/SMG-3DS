@@ -2,6 +2,7 @@
 // as the original operator does; before that (static initialization, the port's own start-up) it takes from the
 // free store. delete asks where the memory is: inside the Wii arenas, its JKRHeap frees it.
 #include <JSystem/JKernel/JKRHeap.hpp>
+#include <smg/NativeResources.hpp>
 #include <cstdlib>
 #include <new>
 
@@ -19,6 +20,15 @@ void release(void* memory) {
     if (smgInWiiArena(memory)) JKRHeap::free(memory, nullptr);
     else std::free(memory);
 }
+
+// A repacked BCSV table goes into the heap its original came from, so it lives exactly as long.
+void* besideInItsHeap(const void* beside, u32 size) {
+    if (smgInWiiArena(beside)) {
+        if (JKRHeap* heap = JKRHeap::findFromRoot(const_cast<void*>(beside))) return heap->alloc(size, 4);
+    }
+    return std::malloc(size);
+}
+const bool sBcsvAllocatorSet = (smgBcsvAllocator = besideInItsHeap, true);
 } // namespace
 
 void* operator new(std::size_t size) { return allocate(size); }

@@ -11,7 +11,7 @@ fixes = [
     ("case JMAP_VALUE_TYPE_STRING_PTR:\n", "case JMAP_VALUE_TYPE_STRING_PTR: {\n"),
     # Tables come big-endian from the disc; attaching turns one native in place (compat/smg/NativeResources.hpp).
     ('#include <JSystem/JGadget/hashcode.hpp>\n', '#include <JSystem/JGadget/hashcode.hpp>\n#include <smg/NativeResources.hpp>\n'),
-    ("    mData = static_cast< const JMapData* >(pData);", "    smgNativeBcsv(const_cast< void* >(pData));\n    mData = static_cast< const JMapData* >(pData);"),
+    ("    mData = static_cast< const JMapData* >(pData);", "    mData = static_cast< const JMapData* >(smgNativeBcsv(const_cast< void* >(pData)));"),
     ("*pValueOut = pStringTable + *reinterpret_cast< const u32* >(valuePtr);\n        break;",
      "*pValueOut = pStringTable + *reinterpret_cast< const u32* >(valuePtr);\n        break;\n    }"),
     ("if (item->mShift != 0) {\n        goto FAIL;\n    }",

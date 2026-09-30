@@ -72,6 +72,14 @@ int runBcsvTests() {
     check(info.getValue(1,"name",&string) && std::strcmp(string,"BCD")==0,"repacked second row string");
     check(info.getValue(0,"speed",&real) && real==1.5f,"unaligned float decoded");
     check(info.getValue(1,"speed",&real) && real==-2.5f,"odd-stride second row float decoded");
+    // Attached as the game attaches it, a table ARM cannot read in place comes back as a repacked native copy.
+    std::vector<std::uint32_t> packedDisc((packed.size()+3)/4);
+    std::memcpy(packedDisc.data(),packed.data(),packed.size());
+    JMapInfo packedAttached;
+    check(packedAttached.attach(packedDisc.data()) && packedAttached.mData!=reinterpret_cast<const JMapData*>(packedDisc.data()),"odd-stride table attaches as a copy");
+    check(packedAttached.getValue(1,"flag",&integer) && integer==7 && packedAttached.getValue(1,"speed",&real) && real==-2.5f,"repacked copy reads as the port's loader");
+    check(packedAttached.getValue(1,"name",&string) && std::strcmp(string,"BCD")==0,"repacked copy keeps its strings");
+    std::free(const_cast<JMapData*>(packedAttached.mData));
     // The game's own loading hands JMapInfo the disc's big-endian table; attaching turns it native in place.
     std::vector<std::uint32_t> disc((bytes.size()+3)/4);
     std::memcpy(disc.data(),bytes.data(),bytes.size());
