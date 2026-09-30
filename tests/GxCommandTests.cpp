@@ -106,7 +106,8 @@ void vertices() {
     gpu->cp[0x60] = 0;
     gpu->cp[0x72] = 1u << 0 | 4u << 1;
     displayList.assign(64, 0);
-    const std::uint8_t second[] = {0x41, 0x20, 0, 0, 0xC0, 0x40, 0, 0, 0x3F, 0, 0, 0};  // 10, -3, 0.5 at element 1
+    // Arrays are memory the CPU wrote, so in its own order (the stream's index stays the GPU's).
+    const float second[] = {10.0f, -3.0f, 0.5f};  // element 1
     std::memcpy(displayList.data() + 16 + 12, second, sizeof second);
     gpu->cp[0xA0] = 16;
     gpu->cp[0xB0] = 12;
@@ -114,7 +115,7 @@ void vertices() {
     const std::uint8_t index = 1;
     const smg::GxVertex indexed = gpu->readVertex(&index, 2);
     check(indexed.position[0] == 10.0f && indexed.position[1] == -3.0f && indexed.position[2] == 0.5f,
-          "an indexed position read from its array at base plus index times stride");
+          "an indexed position read from its array at base plus index times stride, in the CPU's order");
     delete gpu;
 }
 } // namespace

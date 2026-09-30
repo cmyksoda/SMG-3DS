@@ -5,6 +5,17 @@ namespace smg {
 namespace {
 std::uint32_t word(const std::uint8_t* at) { return std::uint32_t(at[0]) << 24 | std::uint32_t(at[1]) << 16 | std::uint32_t(at[2]) << 8 | at[3]; }
 std::uint32_t half(const std::uint8_t* at) { return std::uint32_t(at[0]) << 8 | at[1]; }
+// Arrays in memory are the CPU's (big-endian on the Wii, native here); commands and display lists stay the GPU's.
+std::uint32_t half(const std::uint8_t* at, bool native) {
+    std::uint16_t value;
+    std::memcpy(&value, at, 2);
+    return native ? value : half(at);
+}
+std::uint32_t word(const std::uint8_t* at, bool native) {
+    std::uint32_t value;
+    std::memcpy(&value, at, 4);
+    return native ? value : word(at);
+}
 std::uint32_t field(std::uint32_t reg, int shift, int size) { return reg >> shift & ((1u << size) - 1); }
 
 // The CP's registers for vertices, as private/cp_reg.h and gd/GDGeometry.h number them.
@@ -12,15 +23,15 @@ constexpr int VcdLo = 0x50, VcdHi = 0x60, VatA = 0x70, VatB = 0x80, VatC = 0x90,
 
 // A component's bytes by its format: u8, s8, u16, s16, f32.
 std::uint32_t componentSize(std::uint32_t format) { return format == 4 ? 4 : format >= 2 ? 2 : 1; }
-float component(const std::uint8_t* at, std::uint32_t format, std::uint32_t shift) {
+float component(const std::uint8_t* at, std::uint32_t format, std::uint32_t shift, bool native) {
     float value;
     switch (format) {
     case 0: value = at[0]; break;
     case 1: value = static_cast<std::int8_t>(at[0]); break;
-    case 2: value = static_cast<float>(half(at)); break;
-    case 3: value = static_cast<std::int16_t>(half(at)); break;
+    case 2: value = static_cast<float>(half(at, native)); break;
+    case 3: value = static_cast<std::int16_t>(half(at, native)); break;
     default: {
-        const std::uint32_t bits = word(at);
+        const std::uint32_t bits = word(at, native);
         std::memcpy(&value, &bits, 4);
         return value;
     }
@@ -29,11 +40,11 @@ float component(const std::uint8_t* at, std::uint32_t format, std::uint32_t shif
 }
 // A colour's bytes by its format: RGB565, RGB888, RGB888x, RGBA4444, RGBA6666, RGBA8888.
 std::uint32_t colorSize(std::uint32_t format) { static const std::uint8_t sizes[] = {2, 3, 4, 2, 3, 4, 4, 4}; return sizes[format & 7]; }
-void readColor(const std::uint8_t* at, std::uint32_t format, std::uint8_t out[4]) {
+void readColor(const std::uint8_t* at, std::uint32_t format, bool native, std::uint8_t out[4]) {
     // A field of `bits` widened to eight, its top bits repeated below as the GPU widens it.
     const auto widen = [](std::uint32_t value, int bits) { return static_cast<std::uint8_t>(value << (8 - bits) | value >> (2 * bits - 8)); };
     if (format == 0) {  // RGB565
-        const std::uint32_t v = half(at);
+        const std::uint32_t v = half(at, native);
         out[0] = widen(v >> 11, 5);
         out[1] = widen(v >> 5 & 63, 6);
         out[2] = widen(v & 31, 5);
@@ -42,7 +53,7 @@ void readColor(const std::uint8_t* at, std::uint32_t format, std::uint8_t out[4]
         std::memcpy(out, at, 3);
         out[3] = 255;
     } else if (format == 3) {  // RGBA4444
-        const std::uint32_t v = half(at);
+        const std::uint32_t v = half(at, native);
         for (int i = 0; i < 4; ++i) out[i] = static_cast<std::uint8_t>((v >> (12 - 4 * i) & 15) * 17);
     } else if (format == 4) {  // RGBA6666
         const std::uint32_t v = std::uint32_t(at[0]) << 16 | std::uint32_t(at[1]) << 8 | at[2];
@@ -79,7 +90,9 @@ GxVertex GxCommandProcessor::readVertex(const std::uint8_t* at, std::uint8_t for
     if (field(lo, 0, 1)) vertex.matrixIndex = *at++;
     for (int i = 0; i < 8; ++i) if (field(lo, 1 + i, 1)) vertex.texMatrixIndex[i] = *at++;
     // An attribute's own bytes: in the stream when direct, else in its array at the index the stream gives.
+    bool native = false;
     const auto source = [&](std::uint32_t type, int array, std::uint32_t directSize) -> const std::uint8_t* {
+        native = type != 1;
         if (type == 1) { const std::uint8_t* here = at; at += directSize; return here; }
         const std::uint32_t index = type == 2 ? *at : half(at);
         at += type == 2 ? 1 : 2;
@@ -88,7 +101,7 @@ GxVertex GxCommandProcessor::readVertex(const std::uint8_t* at, std::uint8_t for
     if (const std::uint32_t type = field(lo, 9, 2)) {
         const std::uint32_t count = field(a, 0, 1) + 2, fmt = field(a, 1, 3), size = componentSize(fmt);
         const std::uint8_t* data = source(type, 0, count * size);
-        for (std::uint32_t i = 0; i < count; ++i) vertex.position[i] = component(data + i * size, fmt, field(a, 4, 5));
+        for (std::uint32_t i = 0; i < count; ++i) vertex.position[i] = component(data + i * size, fmt, field(a, 4, 5), native);
     }
     if (const std::uint32_t type = field(lo, 11, 2)) {
         // Normals take a fixed point by their format: six fraction bits for s8, fourteen for s16.
@@ -96,12 +109,13 @@ GxVertex GxCommandProcessor::readVertex(const std::uint8_t* at, std::uint8_t for
         const bool nbt = field(a, 9, 1), threeIndexes = nbt && field(a, 31, 1);
         const std::uint8_t* data = source(type, 1, (nbt ? 9 : 3) * size);
         if (threeIndexes && type != 1) at += 2 * (type == 2 ? 1 : 2);  // binormal and tangent indexes, not kept
-        for (int i = 0; i < 3; ++i) vertex.normal[i] = component(data + i * size, fmt, shift);
+        for (int i = 0; i < 3; ++i) vertex.normal[i] = component(data + i * size, fmt, shift, native);
     }
     for (int channel = 0; channel < 2; ++channel) {
         if (const std::uint32_t type = field(lo, 13 + 2 * channel, 2)) {
             const std::uint32_t fmt = field(a, 14 + 4 * channel, 3);
-            readColor(source(type, 2 + channel, colorSize(fmt)), fmt, vertex.color[channel]);
+            const std::uint8_t* data = source(type, 2 + channel, colorSize(fmt));
+            readColor(data, fmt, native, vertex.color[channel]);
         }
     }
     const std::uint32_t tex[8][3] = {{field(a, 21, 1), field(a, 22, 3), field(a, 25, 5)}, {field(b, 0, 1), field(b, 1, 3), field(b, 4, 5)},
@@ -112,7 +126,7 @@ GxVertex GxCommandProcessor::readVertex(const std::uint8_t* at, std::uint8_t for
         if (const std::uint32_t type = field(hi, 2 * i, 2)) {
             const std::uint32_t count = tex[i][0] + 1, size = componentSize(tex[i][1]);
             const std::uint8_t* data = source(type, 4 + i, count * size);
-            for (std::uint32_t k = 0; k < count; ++k) vertex.texcoord[i][k] = component(data + k * size, tex[i][1], tex[i][2]);
+            for (std::uint32_t k = 0; k < count; ++k) vertex.texcoord[i][k] = component(data + k * size, tex[i][1], tex[i][2], native);
         }
     }
     return vertex;
