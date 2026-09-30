@@ -29,6 +29,7 @@ add_library(petari_core STATIC
   source/compat/StringUtil.cpp
   source/compat/Math.cpp
   source/compat/GameRandom.cpp
+  source/compat/Heap.cpp
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/MathUtil.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/MtxUtil.cpp"
   "${PETARI}/src/JSystem/JMath/random.cpp"
@@ -49,6 +50,8 @@ target_include_directories(petari_core SYSTEM PUBLIC "${CMAKE_CURRENT_BINARY_DIR
   "${PETARI}/libs/RVL_SDK/include" "${PETARI}/libs/JSystem/include")
 # Original resource interfaces reinterpret stored numeric fields through several types.
 target_compile_options(petari_core PUBLIC -fno-strict-aliasing)
+# Plain char is unsigned on the Wii and the 3DS; hashes of Shift-JIS names depend on it, so hosts match.
+target_compile_options(petari_core PUBLIC -funsigned-char)
 
 set(GRAVITY_SHAPES PlanetGravity PointGravity ParallelGravity CubeGravity DiskGravity DiskTorusGravity
   ConeGravity SegmentGravity WireGravity)
@@ -62,6 +65,23 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PETARI}/src/Ga
   "${PETARI}/include/Game/Util/MathUtil.hpp" "${PETARI}/libs/JSystem/include/JSystem/JGeometry/TMatrix.hpp")
 add_library(petari_gravity STATIC ${GRAVITY_SOURCES})
 target_link_libraries(petari_gravity PUBLIC petari_core)
+
+add_library(petari_nameobj STATIC
+  source/compat/Scene.cpp
+  "${PETARI}/src/Game/NameObj/NameObj.cpp"
+  "${PETARI}/src/Game/NameObj/NameObjRegister.cpp"
+  "${PETARI}/src/Game/NameObj/NameObjGroup.cpp"
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/NameObj/NameObjHolder.cpp"
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/HashUtil.cpp"
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/ObjUtilNameObj.cpp"
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/SystemUtilSceneNameObj.cpp")
+target_link_libraries(petari_nameobj PUBLIC petari_core)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  "${PETARI}/src/Game/NameObj/NameObjHolder.cpp" "${PETARI}/src/Game/Util/HashUtil.cpp"
+  "${PETARI}/src/Game/Util/ObjUtil.cpp" "${PETARI}/src/Game/Util/SystemUtil.cpp"
+  "${PETARI}/include/Game/NameObj/NameObjHolder.hpp" "${PETARI}/include/Game/Util/ObjUtil.hpp"
+  "${PETARI}/libs/JSystem/include/JSystem/JSupport/JSUList.hpp"
+  "${PETARI}/libs/JSystem/include/JSystem/JKernel/JKRHeap.hpp")
 
 add_library(smg_platform STATIC
   source/core/Input.cpp source/core/Motion.cpp source/core/Settings.cpp source/core/Session.cpp
@@ -96,11 +116,12 @@ if(NINTENDO_3DS)
   option(SMG_BUILD_VALIDATION "Build a separate on-device math/input test app" OFF)
   if(SMG_BUILD_VALIDATION)
     add_executable(native_validation tests/NativeTests.cpp tests/MathTests.cpp tests/PadTests.cpp tests/BcsvTests.cpp
-      tests/ModelTests.cpp tests/CombinerTests.cpp tests/GravityTests.cpp tests/Etc1Tests.cpp tests/GpuTests.cpp)
+      tests/ModelTests.cpp tests/CombinerTests.cpp tests/GravityTests.cpp tests/Etc1Tests.cpp tests/GpuTests.cpp
+      tests/NameObjTests.cpp)
     set_target_properties(native_validation PROPERTIES SUFFIX ".elf")
     target_compile_definitions(native_validation PRIVATE SMG_TEST_RUNNER)
     target_link_directories(native_validation PRIVATE "${DEVKITPRO}/libctru/lib")
-    target_link_libraries(native_validation PRIVATE smg_platform petari_gravity citro2d citro3d ctru m)
+    target_link_libraries(native_validation PRIVATE smg_platform petari_gravity petari_nameobj citro2d citro3d ctru m)
     target_compile_options(native_validation PRIVATE -Wall -Wextra -Werror)
     add_custom_command(TARGET native_validation POST_BUILD
       COMMAND "${DEVKITPRO}/tools/bin/3dsxtool" "$<TARGET_FILE:native_validation>"
@@ -150,6 +171,10 @@ else()
   target_link_libraries(gravity_tests PRIVATE petari_gravity)
   target_compile_options(gravity_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME original_gravity COMMAND gravity_tests)
+  add_executable(nameobj_tests tests/NameObjTests.cpp)
+  target_link_libraries(nameobj_tests PRIVATE petari_nameobj)
+  target_compile_options(nameobj_tests PRIVATE -Wall -Wextra -Werror)
+  add_test(NAME original_nameobj COMMAND nameobj_tests)
   add_executable(combiner_tests tests/CombinerTests.cpp)
   target_link_libraries(combiner_tests PRIVATE smg_platform)
   target_compile_options(combiner_tests PRIVATE -Wall -Wextra -Werror)

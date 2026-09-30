@@ -37,6 +37,29 @@ def adapt(relative, target, replacements):
         destination.write_text(text)
 
 
+def extract(relative, target, prologue, first_lines, epilogue=""):
+    """Copy whole function definitions, found by their first line, out of a file too entangled to compile."""
+    text = (root / relative).read_text()
+    bodies = []
+    for first in first_lines:
+        if text.count(first) != 1:
+            raise SystemExit(f"Upstream changed; review {relative}: {first!r}")
+        start = text.rfind("\n", 0, text.index(first)) + 1
+        depth, end = 0, text.index("{", text.index(first))
+        while True:
+            depth += {"{": 1, "}": -1}.get(text[end], 0)
+            end += 1
+            if depth == 0:
+                break
+        bodies.append(text[start:end])
+    text = (f"// Generated from Petari's {relative}: only these functions; see tools/prepare-petari.py.\n"
+            + prologue + "\n" + "\n\n".join(bodies) + "\n" + epilogue)
+    destination = output / target
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if not destination.exists() or destination.read_text() != text:
+        destination.write_text(text)
+
+
 adapt("libs/JSystem/include/JSystem/JMath/JMath.hpp", "include/JSystem/JMath/JMath.hpp", [
     ("#include <revolution/types.h>", "#include <revolution/types.h>\n#include <cmath>\n#include <cstring>", 1),
     ("        return input;\n    }\n#endif", "        return input;\n    }\n#else\n    return input > 0.0f ? std::sqrt(input) : input;\n#endif", 1),
@@ -128,7 +151,12 @@ void* operator new(std::size_t, JKRHeap*);
 void* operator new(std::size_t, JKRHeap*, int);
 void* operator new[](std::size_t, int);
 void* operator new[](std::size_t, JKRHeap*, int);""", 1),
-    ("#include <revolution.h>", "#include <revolution.h>\n#include <cstddef>", 1),
+    # A mutex is all it uses from the SDK; the umbrella defines the GX FIFO in every includer.
+    ("#include <revolution.h>", "#include <revolution/os/OSMutex.h>\n#include <cstddef>", 1),
+])
+
+adapt("libs/JSystem/include/JSystem/JSupport/JSUList.hpp", "include/JSystem/JSupport/JSUList.hpp", [
+    ("#include <revolution.h>", "#include <revolution/types.h>\n#include <cstddef>", 1),
 ])
 
 adapt("include/Game/Util/MathUtil.hpp", "include/Game/Util/MathUtil.hpp", [
@@ -224,6 +252,39 @@ for name in ["PlanetGravity", "PointGravity", "ParallelGravity", "CubeGravity", 
         # The umbrella also brings the actor-based gravity objects, and with them most of the game.
         ('#include "Game/Gravity.hpp"', f'#include "Game/Gravity/{name}.hpp"', text.count('#include "Game/Gravity.hpp"')),
     ])
+
+adapt("include/Game/NameObj/NameObjHolder.hpp", "include/Game/NameObj/NameObjHolder.hpp", [
+    ("#include <revolution.h>", "#include <revolution/types.h>", 1),
+])
+
+adapt("include/Game/Util/ObjUtil.hpp", "include/Game/Util/ObjUtil.hpp", [
+    ("#include <revolution/gx.h>", "#include <revolution/gx/GXStruct.h>", 1),
+])
+
+# std::mem_fun left the standard library in C++17; std::mem_fn calls the member the same way.
+adapt("src/Game/NameObj/NameObjHolder.cpp", "Game/NameObj/NameObjHolder.cpp", [
+    ("std::mem_fun(pMethod)", "std::mem_fn(pMethod)", 1),
+    ("#include <algorithm>", "#include <algorithm>\n#include <functional>", 1),
+])
+
+adapt("src/Game/Util/HashUtil.cpp", "Game/Util/HashUtil.cpp", [
+    # MSL's "C" locale table lowers only ASCII letters; every other byte, Shift-JIS included, passes through.
+    ("#include <locale.h>\n\n// needed here for inlining reasons\ninline int tolower(int c) {\n"
+     "    return ((c < 0) || (c >= 0x100)) ? c : (int)(_current_locale.ctype_cmpt_ptr->lower_map_ptr[c]);\n}",
+     "static int lowerAscii(int c) {\n    return c >= 'A' && c <= 'Z' ? c + ('a' - 'A') : c;\n}", 1),
+    ("hash = tolower(*pStr) + hash * 31;", "hash = lowerAscii(*pStr) + hash * 31;", 1),
+])
+
+# ObjUtil and SystemUtil reach most of the game; NameObj needs only these.
+extract("src/Game/Util/ObjUtil.cpp", "Game/Util/ObjUtilNameObj.cpp",
+        '#include "Game/Util/ObjUtil.hpp"\n#include "Game/NameObj/NameObj.hpp"\n',
+        ["void MR::requestMovementOn(NameObj* pObj) {", "void MR::requestMovementOff(NameObj* pObj) {"])
+extract("src/Game/Util/SystemUtil.cpp", "Game/Util/SystemUtilSceneNameObj.cpp",
+        '#include "Game/Util/SystemUtil.hpp"\n#include "Game/NameObj/NameObjHolder.hpp"\n\n'
+        "// Held by GameSystemSceneController in the game; answered by the native scene (source/compat/Scene.cpp).\n"
+        "NameObjHolder* getSceneNameObjHolder();\n\nnamespace MR {",
+        ["void callMethodAllSceneNameObj(NameObjMethod pMethod) {", "void suspendAllSceneNameObj() {",
+         "void resumeAllSceneNameObj() {", "void syncWithFlagsAllSceneNameObj() {"], "};  // namespace MR\n")
 
 adapt("include/Game/System/WPadButton.hpp", "include/Game/System/WPadButton.hpp", [
     ("#include <revolution.h>", "#include <revolution/kpad.h>", 1),

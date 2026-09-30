@@ -49,6 +49,14 @@ completion does not make those interfaces portable to ARM11/PICA200.
   and quaternion routines they call have portable implementations. `MR::getRandom` reads a
   natively held `TRandom_fast_` seeded as `GameSystemObjHolder` seeds it. Point, parallel,
   disk and segment gravity are under test; cube, cone, wire and torus compile but are not yet.
+- The original `NameObj`, `NameObjRegister`, `NameObjHolder` and `NameObjGroup` compile for ARM,
+  with `MR::getHashCode` from `HashUtil` (MSL's locale table replaced by the "C" locale's ASCII
+  lowering it holds) and ObjUtil's and SystemUtil's NameObj helpers copied out of their files
+  verbatim by `tools/prepare-petari.py`. Their scene is the native scene described below. Plain
+  `char` is unsigned on every build, as on the Wii and the 3DS, so Shift-JIS names hash the same.
+- JKRHeap's placement `operator new` forms allocate from the C++ free store, which stands in for
+  the current heap. A request naming a `JKRHeap`, or wanting more alignment than the free store
+  gives, stops the program with a message: neither exists in the port yet.
 - `loadStage` resolves a galaxy's scenario, zones and layers into world-space placements.
   The renderer streams those models in one per frame, packs them into indexed 36-byte
   vertices and native texture formats, and draws them with the translated combiners, a GX
@@ -105,7 +113,7 @@ Placed gravity, collision and every actor sit on `NameObj`. Its 13 sources split
 
 | Slice | Needs |
 | --- | --- |
-| `NameObj`, `NameObjRegister`, `NameObjHolder`, `NameObjGroup` | `SingletonHolder`, `MR::getHashCode`, movement on/off requests |
+| `NameObj`, `NameObjRegister`, `NameObjHolder`, `NameObjGroup` (running) | `SingletonHolder`, `MR::getHashCode`, movement on/off requests |
 | `NameObjListExecutor` | draw/movement list functors and camera types - the scheduler |
 | `NameObjExecuteHolder`, `NameObjFinder` | `GameSystem`, `GameSystemSceneController`, `SceneObjHolder` |
 
@@ -121,6 +129,22 @@ Three ways forward:
    has brought up - `PlanetGravityManager` first, so `GravityCreator` can build a zone's
    real gravity from `planetobjinfo`. It is an explicit, removable boundary like
    `smgGameRandom()`, replaced by the original once `GameSystem` runs.
+
+## The native scene boundary
+
+`smg::NativeScene` (`compat/smg/Scene.hpp`, `source/compat/Scene.cpp`) holds what
+`GameSystemSceneController` owns in the game, for the objects the port has brought up:
+
+- the scene's `NameObjHolder` (same capacity, 0x1300), set as `NameObjRegister`'s current holder,
+  so every `NameObj` registers itself as it does in the game;
+- the movement-sync request. `MR::notifyRequestNameObjMovementOnOff` asks for it, and
+  `NativeScene::movement()` answers it the way the first half of
+  `SceneNameObjMovementController::movement()` does. The stop-scene states in its second half
+  (demos, pause categories) are not brought up.
+
+Everything else about the scene still belongs to `GameSystem`. Asking for the scene before one
+exists stops the program with a message. Once `GameSystem` and `SceneObjHolder` run, delete the
+native scene and the `getSceneNameObjHolder` it answers.
 
 ## Pointer details to preserve
 
@@ -173,6 +197,6 @@ across 12 zones; the preview draws 56 rigid models in 172 placements.
 
 The portable math tests check tolerances and conventions, not bit-identical Gekko rounding.
 The native validation app passes 1,069 math, 37 WPad, 179 BCSV, 1,043 J3D model/texture,
-4,404 TEV combiner, 23 original gravity, 7 ETC1 and 8 GPU texture checks on emulated ARM
+4,404 TEV combiner, 23 original gravity, 21 NameObj, 7 ETC1 and 8 GPU texture checks on emulated ARM
 in Azahar; the GPU checks compare the hardware's ETC1 decoding against ours. Of the disc's
 7,780 materials, 7,526 translate to the combiner exactly. No physical console has been tested.
