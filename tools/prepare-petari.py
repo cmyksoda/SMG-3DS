@@ -255,6 +255,8 @@ adapt("libs/JSystem/include/JSystem/JGeometry/TVec.hpp", "include/JSystem/JGeome
     ("        f32 squared(const TVec3& rB) const;", "        f32 squared(const TVec3& rB) const { return JMathInlineVEC::PSVECSquareDistance(this, &rB); }", 1),
     ("__fabsf(JMAATan2", "std::fabs(JMAATan2", 1),
     ("                    f32 estimate = __frsqrte(length);\n                    inverse = (0.5f * estimate) * (3.0f - length * (estimate * estimate));", "                    inverse = 1.0f / std::sqrt(length);", 1),
+    # The same floats by row and column: indexing past a row's four is undefined to gcc, which may drop the reads.
+    ("set< f32 >((*mtx)[3], (*mtx)[7], (*mtx)[11]);", "set< f32 >(mtx[0][3], mtx[1][3], mtx[2][3]);", 1),
 ])
 
 adapt("libs/JSystem/include/JSystem/JGeometry/TMatrix.hpp", "include/JSystem/JGeometry/TMatrix.hpp", [
@@ -1525,6 +1527,28 @@ adapt("src/JSystem/JKernel/JKRHeap.cpp", "JSystem/JKernel/JKRHeap.cpp", [
      "    if (memory == nullptr) {\n"
      "        OSReport(\"JKRHeap %p could not give %lu bytes aligned %d (%lu free, %lu in one block)\\n\", this, (unsigned long)size, align,\n"
      "                 (unsigned long)getTotalFreeSize(), (unsigned long)getFreeSize());\n    }\n    return memory;\n}", 1),
+])
+# Reads past an array, which gcc treats as unreachable and may fold the surrounding loop or copy away.
+# Nintendo's loop runs past three horizontal tasks into mInfinityTasks, which createInfinityTask then replaces;
+# stopping at three leaves the same tasks, less four leaked allocations.
+adapt("src/Game/Camera/CameraShaker.cpp", "Game/Camera/CameraShaker.cpp", [
+    ("    // Should be i < NR_HORIZONTAL_TASKS\n    for (u32 i = 0; i < NR_VERTICAL_TASKS; i++) {",
+     "    for (u32 i = 0; i < NR_HORIZONTAL_TASKS; i++) {", 1),
+])
+# Petari's J3DMatBlock.cpp doesn't match yet; the block has four texture numbers, as patchTexNo above reads them.
+adapt("src/JSystem/J3DGraphBase/J3DMatBlock.cpp", "JSystem/J3DGraphBase/J3DMatBlock.cpp", [
+    ("    u32 tevStageNum = mTevStageNum;\n\n    for (u32 i = 0; i < 8; i++) {\n        if (mTexNo[i] != 0xffff) {",
+     "    u32 tevStageNum = mTevStageNum;\n\n    for (u32 i = 0; i < ARRAY_SIZE(mTexNo); i++) {\n        if (mTexNo[i] != 0xffff) {", 1),
+])
+adapt("src/Game/MapObj/Swinger.cpp", "Game/MapObj/Swinger.cpp", [
+    ("_3C((*a2)[0], (*a2)[4], (*a2)[8]),\n      _48((*a2)[1], (*a2)[5], (*a2)[9]), _54((*a2)[2], (*a2)[6], (*a2)[10])",
+     "_3C(a2[0][0], a2[1][0], a2[2][0]),\n      _48(a2[0][1], a2[1][1], a2[2][1]), _54(a2[0][2], a2[1][2], a2[2][2])", 1),
+])
+# The projection copies sixteen floats from the 3x4 table; on the Wii the last four came from the next object in
+# .data (a vtable and a string), which a zero row stands in for.
+adapt("src/Game/Screen/StarPointerDirector.cpp", "Game/Screen/StarPointerDirector.cpp", [
+    ("    static f32 mtx_identity[3][4] = {{1.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f, 0.0f}};",
+     "    static f32 mtx_identity[4][4] = {{1.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f, 0.0f}, {}};", 1),
 ])
 
 # Last: everything above may adapt a file these build on.
