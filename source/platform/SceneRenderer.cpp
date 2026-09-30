@@ -4,6 +4,12 @@
 #include <smg/Animation.hpp>
 #include <smg/Archive.hpp>
 #include <smg/Etc1.hpp>
+#include <smg/J3DImage.hpp>
+#include <Game/Animation/XanimeCore.hpp>
+#include <JSystem/J3DGraphAnimator/J3DJoint.hpp>
+#include <JSystem/J3DGraphAnimator/J3DModel.hpp>
+#include <JSystem/J3DGraphAnimator/J3DMtxBuffer.hpp>
+#include <JSystem/J3DGraphLoader/J3DModelLoader.hpp>
 #include <smg/Scene.hpp>
 #include <smg/StageCollision.hpp>
 #include <smg/StageGravity.hpp>
@@ -348,14 +354,18 @@ bool endsWith(const std::string& text, const std::string& suffix) {
 }
 } // namespace
 
-// Mario's model with its skin kept: the CPU skins one vertex buffer while the GPU draws from the other.
+// Mario's model with its skin kept: the CPU skins one vertex buffer while the GPU draws from the other. Its
+// joints are posed as the game poses an actor's: the original J3DModel, with the game's XanimeCore playing
+// the BCK, both used from the main thread only (J3D keeps its state in statics).
 struct SceneRenderer::Figure {
     Model model;
     std::vector<std::uint32_t> origin; // the model vertex behind each packed one
     JointAnimation wait;
     J3DFrameCtrl frames;
-    std::vector<JointTransform> pose;
-    std::vector<std::array<float, 12>> world, draws;
+    J3DSkeletonImage skeleton;
+    J3DModel* j3d = nullptr;
+    XanimeCore* core = nullptr;
+    std::vector<std::array<float, 12>> draws;
     std::unique_ptr<GpuModel> gpu;
     void* buffers[2]{};
     int drawing = 0;
@@ -367,6 +377,8 @@ struct SceneRenderer::Figure {
     ~Figure() {
         if (gpu) gpu->vertices = nullptr; // one of the two buffers, freed here
         for (void* buffer : buffers) if (buffer) linearFree(buffer);
+        if (core) forgetXanimeCore(core);
+        if (j3d) forgetJ3DSkeleton(j3d);
     }
 };
 
@@ -440,6 +452,7 @@ std::unique_ptr<SceneRenderer::Prepared> prepareFigure(const std::string& root) 
     if (model == entries.end()) { error = "Mario.arc has no mario.bdl"; return out; }
     out->result = SceneRenderer::Prepared::Result::Failed;
     if (!loadModel({storage.data() + model->offset, model->size}, figure->model, ModelBudget, error, true)) return out;
+    if (!figure->skeleton.load({storage.data() + model->offset, model->size}, error)) return out;
     out->result = SceneRenderer::Prepared::Result::Missing;
     if (!readArchive((root + "/ObjectData/MarioAnime.arc").c_str(), storage, entries, ArchiveBudget, error)) return out;
     const auto wait = find("wait.bck");
@@ -452,14 +465,6 @@ std::unique_ptr<SceneRenderer::Prepared> prepareFigure(const std::string& root) 
     out->mesh = packMesh(mario, &figure->origin);
     for (const auto& texture : mario.textures) out->textures.push_back(tile(texture));
     for (const auto& material : mario.materials) out->materials.push_back(prepare(material));
-    // Joints the animation leaves alone keep their bind pose.
-    for (const auto& joint : mario.joints) {
-        JointTransform t;
-        std::copy(joint.scale, joint.scale + 3, t.scale);
-        std::copy(joint.rotation, joint.rotation + 3, t.rotation);
-        std::copy(joint.translation, joint.translation + 3, t.translation);
-        figure->pose.push_back(t);
-    }
     // As J3D's animation controls start a BCK: its length, its own play mode, one frame per game frame.
     figure->frames.init(figure->wait.key().mFrameMax);
     figure->frames.setAttribute(figure->wait.key().mAttribute);
@@ -828,6 +833,14 @@ void SceneRenderer::placeFigure(Prepared& prepared) {
                                placed[row * 4 + 2] * model.center[2] + placed[row * 4 + 3];
     instance.radius = model.radius;
     instances_.push_back(instance);
+    // XanimePlayer's setup for one BCK: the core over the model's joints in its mode, then the root's matrix calc.
+    J3DModelLoader_v26 loader;
+    J3DModelData* data = loader.load(figure->skeleton.data(), 0);
+    figure->j3d = new J3DModel(data, 0, 1);
+    figure->core = new XanimeCore(1, data->getJointNum(), data->getFlag() & 0xf);
+    figure->core->initT(data);
+    figure->core->setBck(0, &figure->wait.key());
+    data->getJointNodePointer(0)->setMtxCalc(figure->core);
     figure_ = std::move(figure);
     animateFigure(0);
 }
@@ -841,9 +854,18 @@ void SceneRenderer::animateFigure(float seconds) {
         // After a long stall, catch up by a few frames rather than all of them.
         if (++steps == 4) figure.sinceStep = 0;
     }
-    figure.wait.pose(figure.frames.getFrame(), figure.pose);
-    poseSkeleton(figure.model, figure.pose, figure.world);
-    skinMatrices(figure.model, figure.world, figure.draws);
+    const float frameMax = std::max<float>(1, figure.wait.key().mFrameMax);
+    figure.core->mFrameRatio = figure.frames.getFrame() / frameMax;
+    figure.core->updateFrame();
+    figure.j3d->calcAnmMtx();
+    figure.j3d->mMtxBuffer->calcWeightEnvelopeMtx();
+    // Each draw matrix is a joint's or an envelope's, as the model's DRW1 names it.
+    const auto& skinDraws = figure.model.skin.draws;
+    figure.draws.resize(skinDraws.size());
+    for (std::size_t d = 0; d < skinDraws.size(); ++d) {
+        const MtxPtr m = skinDraws[d].weighted ? figure.j3d->getWeightAnmMtx(skinDraws[d].index) : figure.j3d->getAnmMtx(skinDraws[d].index);
+        std::memcpy(figure.draws[d].data(), m, sizeof(figure.draws[d]));
+    }
     // The GPU may still be drawing last frame's buffer; the other one finished before this frame began.
     figure.drawing ^= 1;
     auto* out = static_cast<PackedVertex*>(figure.buffers[figure.drawing]);
@@ -851,7 +873,7 @@ void SceneRenderer::animateFigure(float seconds) {
     GSPGPU_FlushDataCache(out, figure.origin.size() * sizeof(PackedVertex));
     figure.gpu->vertices = out;
     char text[128];
-    std::snprintf(text, sizeof text, "Mario: wait.bck frame %.0f of %d, %s", figure.frames.getFrame(), figure.wait.key().mFrameMax,
+    std::snprintf(text, sizeof text, "Mario: wait.bck in XanimeCore, frame %.0f of %d, %s", figure.frames.getFrame(), figure.wait.key().mFrameMax,
                   figure.where.c_str());
     figureState_ = text;
 }

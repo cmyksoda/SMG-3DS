@@ -324,6 +324,13 @@ stands in until then.
    `J3DGetTranslateRotateMtx` and `JMAMTXApplyScale`, and `resource_audit --models` finds all 1,758
    skeletons agree with `J3DModel` to 1e-4. (The earlier bind-pose check could not see it: the port's
    loader baked its vertices with the same composition it was checked against.)
+   Animated actors are posed by the game's own `XanimeCore`, a `J3DMtxCalc` of blended BCK tracks, which
+   builds on the model's `J3DModel` (`petari_anim`). It turns joints through quaternions made from
+   half-angle sine lookups, so over the disc's 2,769 BCKs that fit a model of their archive it sits a
+   little apart from J3D's own Euler calc (median 0.009 of a unit, worst 3.8 at the end of BigBigFly's long
+   chain); the preview now poses Mario with `XanimeCore` itself, as `XanimePlayer` sets it up for one BCK,
+   and only skins and draws what `J3DModel` computes. J3D keeps its state in statics, so it runs on the
+   main thread only; the loader thread uses the port's own composition, which agrees with `J3DModel`.
    J3D's CPU side (`J3DModel::calc`, joints, envelope matrices) is portable; `J3DModelData` gets a native loader from the port's parsers instead of J3D's in-place
    big-endian loader. `XanimePlayer`/`XanimeCore` blend Mario's animations; the renderer draws what
    the original matrices say.
