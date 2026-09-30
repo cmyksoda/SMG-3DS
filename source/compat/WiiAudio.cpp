@@ -62,9 +62,23 @@ void aiInterrupt(__OSInterrupt, OSContext*) {
     if (sDmaCallback) sDmaCallback();
 }
 
+// The first block with sound in it, said once in the log: the proof that the game's mixing reaches the output.
+void noteFirstSound(const s16* samples, u32 count) {
+    static bool heard = false;
+    static u32 blocks = 0;
+    if (heard) return;
+    ++blocks;
+    int peak = 0;
+    for (u32 i = 0; i < count; ++i) peak = std::max(peak, std::abs(int(samples[i])));
+    if (peak == 0) return;
+    heard = true;
+    std::fprintf(stderr, "The game's audio: first sound in DMA block %lu (peak %d of 32767)\n", static_cast<unsigned long>(blocks), peak);
+}
+
 // Copies the buffer the game handed over into the next wave, as the DMA took it, and tells the game it began.
 void startBlock(ndspWaveBuf* wave) {
     const u32 length = std::min<u32>(u32(sDmaLength), MaxBuffer);
+    if (sDmaStart && length) noteFirstSound(reinterpret_cast<const s16*>(static_cast<uintptr_t>(sDmaStart)), length / 2);
     if (wave) {
         s16* samples = const_cast<s16*>(wave->data_pcm16);
         if (sDmaStart && length) std::memcpy(samples, reinterpret_cast<const void*>(static_cast<uintptr_t>(sDmaStart)), length);
