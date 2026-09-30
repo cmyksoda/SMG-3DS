@@ -79,7 +79,8 @@ Rgba gx(const smg::ModelMaterial& m, const Inputs& in) {
 Rgba pica(const smg::CombinerProgram& p, const Inputs& in) {
     using smg::CombineOperand;
     using smg::CombineSource;
-    Rgba previous{};
+    // As Citra models it: stage 0 reads zero, and an update shows up two stages later.
+    Rgba previous{}, buffer{}, next = p.bufferColor;
     for (unsigned i = 0; i < p.stageCount; ++i) {
         const auto& s = p.stages[i];
         const auto source = [&](CombineSource source) -> Rgba {
@@ -88,7 +89,7 @@ Rgba pica(const smg::CombinerProgram& p, const Inputs& in) {
             case CombineSource::Texture0: case CombineSource::Texture1: case CombineSource::Texture2:
                 return in.texture[p.units[static_cast<int>(source) - static_cast<int>(CombineSource::Texture0)].texture];
             case CombineSource::Constant: return s.constant;
-            case CombineSource::Buffer: return p.bufferColor;
+            case CombineSource::Buffer: return buffer;
             default: return previous;
             }
         };
@@ -125,6 +126,9 @@ Rgba pica(const smg::CombinerProgram& p, const Inputs& in) {
         }
         out[3] = std::clamp(apply(s.alphaFunc, v[0], v[1], v[2]) * s.alphaScale, 0.0f, 1.0f);
         previous = out;
+        buffer = next;
+        if (i < 4 && (p.bufferUpdate[0] & (1 << i))) for (int c = 0; c < 3; ++c) next[c] = out[c];
+        if (i < 4 && (p.bufferUpdate[1] & (1 << i))) next[3] = out[3];
     }
     return previous;
 }
@@ -191,11 +195,42 @@ smg::ModelMaterial beanFace() {
 void realMaterial(std::mt19937& rng) {
     const auto material = beanFace();
     const auto program = smg::compileTev(material);
-    check(program.exact && program.stageCount == 3, "bean planet face compiles exactly to three stages");
+    check(program.exact && program.stageCount == 4, "bean planet face needs a leading stage to read two constants");
     check(program.unitCount == 2 && program.units[0].texture == 1 && program.units[1].texCoord == 1, "texture units in first-use order");
     for (int i = 0; i < 200; ++i) {
         const auto in = randomInputs(rng);
         check(same(gx(material, in), pica(program, in)), "bean planet face matches GX");
+    }
+}
+
+// d + lerp(a, b, c) with the previous value as both d and c needs it after the first op.
+void previousTwice(std::mt19937& rng) {
+    smg::ModelMaterial m;
+    m.textures[0] = 0;
+    m.textures[1] = 1;
+    m.tevStageCount = 2;
+    auto& first = m.stages[0];
+    std::uint8_t firstColor[4]{15, 8, 10, 15}, firstAlpha[4]{7, 4, 5, 7};
+    std::copy(firstColor, firstColor + 4, first.colorIn);
+    std::copy(firstAlpha, firstAlpha + 4, first.alphaIn);
+    first.texMap = first.texCoord = 0;
+    first.channel = 4;
+    auto& second = m.stages[1];
+    std::uint8_t secondColor[4]{8, 10, 1, 0}, secondAlpha[4]{7, 4, 0, 0};
+    std::copy(secondColor, secondColor + 4, second.colorIn);
+    std::copy(secondAlpha, secondAlpha + 4, second.alphaIn);
+    second.texMap = second.texCoord = 1;
+    second.channel = 4;
+    const auto program = smg::compileTev(m);
+    if (!program.exact || program.bufferUpdate[0] != 0 || program.bufferUpdate[1] != 1) {
+        std::fprintf(stderr, "exact %d (%s) updates %u %u\n", program.exact, program.approximation ? program.approximation : "",
+                     program.bufferUpdate[0], program.bufferUpdate[1]);
+        dump(m, program, randomInputs(rng));
+    }
+    check(program.exact && program.bufferUpdate[0] == 0 && program.bufferUpdate[1] == 1, "previous alpha kept in the buffer");
+    for (int i = 0; i < 200; ++i) {
+        const auto in = randomInputs(rng);
+        check(same(gx(m, in), pica(program, in)), "buffered previous value matches GX");
     }
 }
 
@@ -249,6 +284,7 @@ void randomMaterials(std::mt19937& rng) {
 int runCombinerTests() {
     std::mt19937 rng(1234);
     realMaterial(rng);
+    previousTwice(rng);
     randomMaterials(rng);
     std::printf("%u TEV combiner checks passed\n", checks);
     return 0;

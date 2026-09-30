@@ -10,6 +10,7 @@ namespace smg {
 struct SceneRenderer::Material {
     C3D_TexEnv env[CombinerProgram::MaxStages];
     u32 bufferColor = 0;
+    int bufferUpdate[2]{};
     int textures[CombinerProgram::MaxUnits]{-1, -1, -1};
     C3D_FVec texgen[CombinerProgram::MaxUnits][3];
     C3D_FVec materialColor, ambientColor, colorSelect;
@@ -185,6 +186,8 @@ SceneRenderer::Material prepare(const ModelMaterial& m) {
         C3D_TexEnvColor(env, packColor(s.constant.data()));
     }
     out.bufferColor = packColor(program.bufferColor.data());
+    out.bufferUpdate[0] = program.bufferUpdate[0];
+    out.bufferUpdate[1] = program.bufferUpdate[1];
 
     for (unsigned unit = 0; unit < CombinerProgram::MaxUnits; ++unit) {
         float rows[2][3]{{1, 0, 0}, {0, 1, 0}}, select[3]{1, 0, 0};
@@ -407,6 +410,8 @@ void SceneRenderer::drawInstance(const Instance& instance, const C3D_Mtx& view, 
             current = &m;
             for (unsigned i = 0; i < CombinerProgram::MaxStages; ++i) *C3D_GetTexEnv(i) = m.env[i];
             C3D_TexEnvBufColor(m.bufferColor);
+            C3D_TexEnvBufUpdate(C3D_RGB, m.bufferUpdate[0]);
+            C3D_TexEnvBufUpdate(C3D_Alpha, m.bufferUpdate[1]);
             for (unsigned unit = 0; unit < CombinerProgram::MaxUnits; ++unit) {
                 if (m.textures[unit] >= 0) C3D_TexBind(unit, const_cast<C3D_Tex*>(&model.textures[m.textures[unit]]));
                 for (int row = 0; row < 3; ++row) {

@@ -25,7 +25,10 @@ struct CombinerProgram {
     static constexpr unsigned MaxStages = 6, MaxUnits = 3;
     unsigned stageCount = 0;
     CombineStage stages[MaxStages];
-    std::array<float, 4> bufferColor{}; // a second constant, read through the never-updated buffer
+    // The buffer reads as zero in stage 0 and as bufferColor after; a stage whose bit is set in
+    // bufferUpdate (color, alpha) replaces it from two stages later.
+    std::array<float, 4> bufferColor{};
+    std::uint8_t bufferUpdate[2]{};
     unsigned unitCount = 0;
     struct Unit { int texture = -1; std::uint8_t texCoord = 0; } units[MaxUnits];
     bool exact = true; // false when some GX feature had to be approximated

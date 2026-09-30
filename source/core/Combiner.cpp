@@ -92,7 +92,12 @@ struct Compiler {
         program.exact = false;
     }
 
-    explicit Compiler(const ModelMaterial& material) : m(material) {
+    bool leading;           // stage 0 is a pass-through so stage 1 can already read the buffer color
+    bool wantsLeading = false;
+    int saved[2]{-1, -1};   // the stage whose output the buffer keeps, per color and alpha
+    int constantLast[2]{-1, -1};
+
+    Compiler(const ModelMaterial& material, bool leadingStage) : m(material), leading(leadingStage) {
         registers[0] = m.tevColors[3];
         for (int i = 0; i < 3; ++i) registers[i + 1] = m.tevColors[i];
         for (auto& row : unitFor) for (int& unit : row) unit = -1;
@@ -191,12 +196,10 @@ struct Compiler {
         } else if (form == Product && !subtract) {
             ops.push_back({CombineFunc::MultiplyAdd, {x, y, d}});
         } else if (!subtract && usesPrev(d)) {
-            // d + a(1 - c) + bc keeps the incoming previous value in the first op only.
-            if (usesPrev(a) || usesPrev(b) || usesPrev(c)) approximate("previous value needed twice");
+            // d + a(1 - c) + bc reads the incoming previous value in the first op when it can.
             ops.push_back({CombineFunc::MultiplyAdd, {a, invert(c), d}});
             ops.push_back({CombineFunc::MultiplyAdd, {b, c, temp}});
         } else {
-            if (usesPrev(d)) approximate("previous value needed twice");
             if (form == Product) ops.push_back({CombineFunc::Modulate, {x, y}});
             else ops.push_back({CombineFunc::Interpolate, {b, a, c}});
             ops.push_back({subtract ? CombineFunc::Subtract : CombineFunc::Add, {d, temp}});
@@ -235,14 +238,28 @@ struct Compiler {
     struct Slots { bool used = false; float value[3]{}; };
 
     // Maps an op argument to a combiner source, placing constants in the stage slot or the buffer.
-    void place(const Arg& arg, bool alpha, bool firstOfStage, CombineStage& stage, Slots& slot, Slots& buffer,
+    void place(const Arg& arg, bool alpha, int index, int first, CombineStage& stage, Slots& slot, Slots& buffer,
                CombineSource& source, CombineOperand& operand) {
+        // The buffer keeps color and alpha apart; what matters is the component read, not the combiner.
+        const bool readsAlpha = arg.operand == CombineOperand::Alpha || arg.operand == CombineOperand::OneMinusAlpha;
+        const int part = arg.kind == Arg::Prev ? (readsAlpha ? 1 : 0) : (alpha ? 1 : 0);
         operand = arg.operand;
         switch (arg.kind) {
-        case Arg::Prev:
-            if (!firstOfStage) approximate("previous value needed twice");
+        case Arg::Prev: {
             source = CombineSource::Previous;
+            if (index == first) return;
+            // Keep the incoming value by letting the stage that made it write the buffer.
+            const int maker = first - 1;
+            if (maker < 0 || maker > 3 || (saved[part] >= 0 && saved[part] != maker) ||
+                constantLast[part] > maker + 1 || index < maker + 2) {
+                approximate("previous value needed twice");
+                return;
+            }
+            saved[part] = maker;
+            program.bufferUpdate[part] |= 1 << maker;
+            source = CombineSource::Buffer;
             return;
+        }
         case Arg::Temp: source = CombineSource::Previous; return;
         case Arg::Texture: source = static_cast<CombineSource>(static_cast<int>(CombineSource::Texture0) + arg.unit); return;
         case Arg::Raster: source = CombineSource::Primary; return;
@@ -264,7 +281,10 @@ struct Compiler {
             else for (int i = 0; i < 3; ++i) stage.constant[i] = value[i];
             source = CombineSource::Constant;
         } else {
-            if (buffer.used && !matches(buffer)) approximate("more than two constants");
+            if (index == 0) wantsLeading = true;
+            if (index == 0 || (buffer.used && !matches(buffer)) || (saved[part] >= 0 && index > saved[part] + 1))
+                approximate("more than two constants");
+            constantLast[part] = std::max(constantLast[part], index);
             buffer.used = true;
             for (int i = 0; i < count; ++i) buffer.value[i] = value[i];
             if (alpha) program.bufferColor[3] = value[0];
@@ -277,8 +297,10 @@ struct Compiler {
 
     void emit(const std::vector<Op>& colorOps, const std::vector<Op>& alphaOps) {
         const std::size_t count = std::max(colorOps.size(), alphaOps.size());
+        const int first = program.stageCount;
         for (std::size_t i = 0; i < count; ++i) {
             if (program.stageCount == CombinerProgram::MaxStages) { approximate("more than six stages"); return; }
+            const int index = program.stageCount;
             auto& stage = program.stages[program.stageCount++];
             Slots colorSlot, alphaSlot;
             const Op pass{CombineFunc::Replace, {kind(Arg::Temp)}};
@@ -290,13 +312,17 @@ struct Compiler {
             stage.colorScale = color.scale;
             stage.alphaScale = alpha.scale;
             for (int k = 0; k < 3; ++k) {
-                place(color.args[k], false, i == 0, stage, colorSlot, colorBuffer, stage.colorSource[k], stage.colorOperand[k]);
-                place(alpha.args[k], true, i == 0, stage, alphaSlot, alphaBuffer, stage.alphaSource[k], stage.alphaOperand[k]);
+                place(color.args[k], false, index, first, stage, colorSlot, colorBuffer, stage.colorSource[k], stage.colorOperand[k]);
+                place(alpha.args[k], true, index, first, stage, alphaSlot, alphaBuffer, stage.alphaSource[k], stage.alphaOperand[k]);
             }
         }
     }
 
     CombinerProgram run() {
+        if (leading) {
+            auto& pass = program.stages[program.stageCount++];
+            pass.colorSource[0] = pass.alphaSource[0] = CombineSource::Constant;
+        }
         for (unsigned i = 0; i < m.tevStageCount; ++i) {
             const auto& s = m.stages[i];
             const auto colorOps = build(colorInput(s, s.colorIn[0]), colorInput(s, s.colorIn[1]), colorInput(s, s.colorIn[2]),
@@ -322,6 +348,11 @@ struct Compiler {
 } // namespace
 
 CombinerProgram compileTev(const ModelMaterial& material) {
-    return Compiler(material).run();
+    Compiler direct(material, false);
+    const auto program = direct.run();
+    if (program.exact || !direct.wantsLeading) return program;
+    // Stage 0 cannot read the buffer color; spending a stage lets stage 1 read it instead.
+    const auto shifted = Compiler(material, true).run();
+    return shifted.exact ? shifted : program;
 }
 } // namespace smg
