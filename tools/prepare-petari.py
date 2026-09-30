@@ -566,6 +566,61 @@ adapt("libs/RVL_SDK/include/revolution/wpad.h", "include/revolution/wpad.h", [
     ('static void WPADiShutdown(BOOL);', 'void WPADiShutdown(BOOL);', 1),
 ])
 
+# PowerPC fabs and fsel as plain C++: fsel takes the first value when cond >= 0, else (and for NaN) the second.
+adapt("libs/nw4r/include/nw4r/math/arithmetic.h", "include/nw4r/math/arithmetic.h", [
+    ("""            __asm {
+                fabs ax, x
+            }
+            ;""", """#ifdef __MWERKS__
+            __asm {
+                fabs ax, x
+            }
+            ;
+#else
+            ax = __builtin_fabsf(x);
+#endif""", 1),
+    ("""            asm { fsel   ret, cond, ifPos, ifNeg }""", """#ifdef __MWERKS__
+            asm { fsel   ret, cond, ifPos, ifNeg }
+#else
+            ret = cond >= 0.0f ? ifPos : ifNeg;
+#endif""", 1),
+])
+
+# A typedef befriends with "friend Self;"; Metrowerks also took the elaborated "friend class Self;".
+adapt("libs/nw4r/include/nw4r/ut/LinkList.h", "include/nw4r/ut/LinkList.h", [
+    ("friend class Self;", "friend Self;", 1),
+])
+
+# The ripper's own inline callers pass u32, which is unsigned long on the Wii and ARM but not on 64-bit hosts.
+adapt("libs/JSystem/include/JSystem/JKernel/JKRDvdRipper.hpp", "include/JSystem/JKernel/JKRDvdRipper.hpp", [
+    ("""    static void* loadToMainRAM(const char*, unsigned char*, JKRExpandSwitch, unsigned long, JKRHeap*, EAllocDirection, unsigned long, int*,
+                               unsigned long*);""",
+     """    static void* loadToMainRAM(const char*, unsigned char*, JKRExpandSwitch, u32, JKRHeap*, EAllocDirection, u32, int*, u32*);""", 1),
+    ("""    static void* loadToMainRAM(long, unsigned char*, JKRExpandSwitch, unsigned long, JKRHeap*, EAllocDirection, unsigned long, int*, unsigned long*);""",
+     """    static void* loadToMainRAM(s32, unsigned char*, JKRExpandSwitch, u32, JKRHeap*, EAllocDirection, u32, int*, u32*);""", 1),
+    ("""    static void* loadToMainRAM(JKRDvdFile*, unsigned char*, JKRExpandSwitch, unsigned long, JKRHeap*, EAllocDirection, unsigned long, int*,
+                               unsigned long*);""",
+     """    static void* loadToMainRAM(JKRDvdFile*, unsigned char*, JKRExpandSwitch, u32, JKRHeap*, EAllocDirection, u32, int*, u32*);""", 1),
+])
+
+# Class operator new and delete take size_t, which is unsigned int on ARM where u32 is unsigned long.
+adapt("libs/JSystem/include/JSystem/JAudio2/JASHeapCtrl.hpp", "include/JSystem/JAudio2/JASHeapCtrl.hpp", [
+    ('#include "JSystem/JAudio2/JASCriticalSection.hpp"', '#include "JSystem/JAudio2/JASCriticalSection.hpp"\n#include <cstddef>', 1),
+    ("static void* operator new(u32 size) {", "static void* operator new(std::size_t size) {", 2),
+    ("static void operator delete(void* addr, u32 size) {", "static void operator delete(void* addr, std::size_t size) {", 2),
+])
+
+# GCC refuses members with constructors in an anonymous struct; the array alone is the same storage.
+adapt("include/Game/Player/Mario.hpp", "include/Game/Player/Mario.hpp", [
+    ("""    union {
+        struct {
+            /* 0x8B0 */ TVec3f _8B0;
+            /* 0x8BC */ TVec3f _8BC;
+        };
+        /* 0x8B0 */ TVec3f mRelativeWallPos[2];
+    };""", """    /* 0x8B0 */ TVec3f mRelativeWallPos[2]; // _8B0 and _8BC in the original union""", 1),
+])
+
 adapt("libs/RVL_SDK/include/revolution/os/OSTime.h", "include/revolution/os/OSTime.h", [
     ("vu32 OS_BUS_CLOCK_SPEED;", "extern vu32 OS_BUS_CLOCK_SPEED;", 1),
 ])

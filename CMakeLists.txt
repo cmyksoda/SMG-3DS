@@ -49,7 +49,7 @@ add_library(petari_core STATIC
 target_include_directories(petari_core PUBLIC compat)
 # Upstream headers are compiled as they are; their warnings are not ours to fail on.
 target_include_directories(petari_core SYSTEM PUBLIC "${CMAKE_CURRENT_BINARY_DIR}/petari/include" "${PETARI}/include"
-  "${PETARI}/libs/RVL_SDK/include" "${PETARI}/libs/JSystem/include")
+  "${PETARI}/libs/RVL_SDK/include" "${PETARI}/libs/JSystem/include" "${PETARI}/libs/nw4r/include")
 # Original resource interfaces reinterpret stored numeric fields through several types.
 target_compile_options(petari_core PUBLIC -fno-strict-aliasing)
 # Plain char is unsigned on the Wii and the 3DS; hashes of Shift-JIS names depend on it, so hosts match.
@@ -131,7 +131,10 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
   "${PETARI}/src/Game/AreaObj/AreaForm.cpp" "${PETARI}/src/Game/AreaObj/AreaObj.cpp"
   "${PETARI}/include/Game/AreaObj/AreaForm.hpp" "${PETARI}/src/JSystem/J3DGraphAnimator/J3DAnimation.cpp"
   "${PETARI}/libs/RVL_SDK/include/revolution/os.h"
-  "${PETARI}/libs/JSystem/include/JSystem/J3DGraphAnimator/J3DAnimation.hpp")
+  "${PETARI}/libs/JSystem/include/JSystem/J3DGraphAnimator/J3DAnimation.hpp"
+  "${PETARI}/libs/nw4r/include/nw4r/math/arithmetic.h" "${PETARI}/libs/JSystem/include/JSystem/JAudio2/JASHeapCtrl.hpp"
+  "${PETARI}/include/Game/Player/Mario.hpp" "${PETARI}/libs/nw4r/include/nw4r/ut/LinkList.h"
+  "${PETARI}/libs/JSystem/include/JSystem/JKernel/JKRDvdRipper.hpp")
 
 add_library(smg_platform STATIC
   source/core/Input.cpp source/core/Motion.cpp source/core/Settings.cpp source/core/Session.cpp

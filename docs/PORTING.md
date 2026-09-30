@@ -237,18 +237,23 @@ Measured 2026-09-30. The decompilation is complete: every function the Korean bu
 in `Game/Player` has source, and so does nearly everything else. The work left is porting, not waiting.
 
 **What GCC already accepts.** A syntax-only pass of all 1,605 `src/Game` files with devkitARM's
-`arm-none-eabi-g++` and the port's include order compiles 830 unchanged (52%): Camera 120 of 127,
-Boss 134 of 169, Enemy 74 of 110, but Player only 19 of 107 and Screen 24 of 136. On the 3DS `u32` is
-`unsigned long` as on the Wii, so the host's 64-bit mismatches (`JKRDvdRipper`, pointer casts) are
-not target problems. The failures cluster on a few shared headers:
+`arm-none-eabi-g++` and the port's include order first compiled 830 unchanged (52%). On the 3DS `u32`
+is `unsigned long` as on the Wii, so a 64-bit host's mismatches (`JKRDvdRipper`, pointer casts) are
+not target problems. The failures clustered on a few shared headers, and five adaptations took the
+count to 1,208 (75%): Camera 126 of 127, Gravity 14 of 14, MapObj 266 of 317, Player 82 of 107.
 
 | Blocker | Files | Fix |
 | --- | --- | --- |
-| nw4r `math/arithmetic.h` inline PowerPC `__asm` (`FAbs`, ...) via the layout headers | 364 | generated copy with portable bodies, as `os.h` |
-| `Mario.hpp`: an anonymous struct of `TVec3f` inside a union (`_8B0`/`_8BC` over `mRelativeWallPos`) | 86 | generated header; two sources use the names |
-| `operator new(u32)` where GCC wants `size_t` (`unsigned int` on ARM) | 46 | `size_t` in the generated headers |
-| names declared later or elsewhere under Metrowerks' lookup | ~100 | per-file adaptations |
-| `NO_INLINE` after a definition's declarator | 359 on the first pass | done: empty, as upstream's own `types.h` has it for non-Metrowerks compilers |
+| `NO_INLINE` after a definition's declarator | 359 on the first pass | empty, as upstream's own `types.h` has it for non-Metrowerks compilers |
+| nw4r `math/arithmetic.h` inline PowerPC `__asm` (`FAbs`, `FSelect`) | 364 | generated copy with plain C++ bodies |
+| nw4r `ut/LinkList.h` `friend class Self;` naming a typedef | 369 behind the asm | `friend Self;` |
+| `Mario.hpp`: an anonymous struct of `TVec3f` inside a union (`_8B0`/`_8BC` over `mRelativeWallPos`) | 86 | the array alone; two sources use the old names |
+| `operator new(u32)` where GCC wants `size_t` (`unsigned int` on ARM) | 46 | `size_t` in `JASHeapCtrl.hpp` |
+| Metrowerks' `<mem.h>` | a few | `compat/mem.h` includes `<cstring>` |
+
+What remains is per file: names declared later or elsewhere under Metrowerks' lookup (~140),
+`ATTR_WEAK` on existing definitions (47), attributes on definitions outside `NO_INLINE` (43), and
+the audio DSP headers Petari does not have.
 
 **Why LiveActor is the gateway.** `LiveActor::movement` updates the model manager and animation,
 calculates gravity, runs sensors, the nerve, `control()`, then `updateBinder`, which moves the actor
