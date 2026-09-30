@@ -446,6 +446,14 @@ That needs `wchar_t` settled (below): the game reads its UTF-16 text through `wc
 open design: the command processor has the state, and turning primitives into citro3d draws is next, with the
 port's TEV-to-PICA combiner and texture conversion.
 
+**Colours as words.** nw4r's `ut::Color` and JSystem's `JUtility::TColor` turned to and from `u32` through
+memory, which on the Wii's big-endian CPU packs `0xRRGGBBAA`. On ARM the same code reverses the bytes, so a
+literal like `0x000000FF` would have been transparent red instead of opaque black, and J3D's material and
+ambient colours (`loadMatColors`, `loadAmbColors`, `J3DGDWrite_u32(*(u32*)color)`) would have gone to the GPU as
+ABGR. All three now pack and unpack the value the Wii's way (R in the top byte); `tests/ColorTests.cpp` pins it.
+Resource colours the game reads as `u32` (BRLYT's `vtxCols` and `textCols`) must therefore be word-swapped
+when their format is turned native, like any other word.
+
 **Upstream fallbacks that compile to nothing.** Besides the asm blocks, some SDK headers give non-Metrowerks
 compilers empty definitions meant only for an editor's parser: `GXRegs.h`'s `FAST_FLAG_SET` (which packs every
 GX register's fields) and its counter reads, `GXFDLShortcut.h`'s `FAST_GPFLAGSET`. Each now has a real body
@@ -618,6 +626,6 @@ across 12 zones; the preview draws 56 rigid models in 172 placements.
 
 The portable math tests check tolerances and conventions, not bit-identical Gekko rounding.
 The native validation app passes 1,069 math, 37 WPad, 190 BCSV, 1,043 J3D model/texture,
-8,810 TEV combiner, 27 original gravity, 27 NameObj, 89 scene and gravity creator, 48 collision, 21 J3D animation, 13 original actor, 6 J3D transform, 6 J3D skeleton, 14 GX command processor, 19 BMG text, 7 ETC1 and 8 GPU texture checks on emulated ARM
+8,810 TEV combiner, 27 original gravity, 27 NameObj, 89 scene and gravity creator, 48 collision, 21 J3D animation, 13 original actor, 6 J3D transform, 6 J3D skeleton, 14 GX command processor, 19 BMG text, 6 colour packing, 7 ETC1 and 8 GPU texture checks on emulated ARM
 in Azahar; the GPU checks compare the hardware's ETC1 decoding against ours. Of the disc's
 7,780 materials, 6,987 translate to the combiner exactly. No physical console has been tested.

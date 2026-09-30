@@ -1541,6 +1541,22 @@ adapt("src/nw4r/lyt/lyt_layout.cpp", "nw4r/lyt/lyt_layout.cpp", [
      "            }\n"
      "            if (!detail::TestFileHeader(*pFileHead, 'RLYT')) {\n", 1),
 ])
+# Colours packed into a u32 through memory read 0xRRGGBBAA on the Wii and byte-reversed on ARM; these pack and
+# unpack the value the Wii's way, so literals like 0xFF0000FF and u32s bound for the GPU keep their meaning.
+adapt("libs/nw4r/include/nw4r/ut/Color.h", "include/nw4r/ut/Color.h", [
+    ("                ToU32ref() = color;\n                return *this;",
+     "                r = static_cast< u8 >(color >> 24);\n                g = static_cast< u8 >(color >> 16);\n"
+     "                b = static_cast< u8 >(color >> 8);\n                a = static_cast< u8 >(color);\n                return *this;", 1),
+    ("                return operator=(*reinterpret_cast< const u32* >(&color));",
+     "                *static_cast< GXColor* >(this) = color;\n                return *this;", 1),
+    ("            operator u32() const {\n                return ToU32ref();\n            }",
+     "            operator u32() const {\n                return u32(r) << 24 | u32(g) << 16 | u32(b) << 8 | a;\n            }", 1),
+])
+adapt("libs/JSystem/include/JSystem/JUtility/TColor.hpp", "include/JSystem/JUtility/TColor.hpp", [
+    ("            *reinterpret_cast< u32* >(&r) = u32Color;",
+     "            set(u8(u32Color >> 24), u8(u32Color >> 16), u8(u32Color >> 8), u8(u32Color));", 1),
+    ("            return *reinterpret_cast< const u32* >(&r);", "            return u32(r) << 24 | u32(g) << 16 | u32(b) << 8 | a;", 1),
+])
 # Reads past an array, which gcc treats as unreachable and may fold the surrounding loop or copy away.
 # Nintendo's loop runs past three horizontal tasks into mInfinityTasks, which createInfinityTask then replaces;
 # stopping at three leaves the same tasks, less four leaked allocations.
@@ -1552,6 +1568,10 @@ adapt("src/Game/Camera/CameraShaker.cpp", "Game/Camera/CameraShaker.cpp", [
 adapt("src/JSystem/J3DGraphBase/J3DMatBlock.cpp", "JSystem/J3DGraphBase/J3DMatBlock.cpp", [
     ("    u32 tevStageNum = mTevStageNum;\n\n    for (u32 i = 0; i < 8; i++) {\n        if (mTexNo[i] != 0xffff) {",
      "    u32 tevStageNum = mTevStageNum;\n\n    for (u32 i = 0; i < ARRAY_SIZE(mTexNo); i++) {\n        if (mTexNo[i] != 0xffff) {", 1),
+    # Material and ambient colours go to the GPU as the word the Wii's load of their bytes gave: R on top.
+    ("#include <cstdio>\n", "#include <cstdio>\n\nstatic inline u32 smgColorWord(const GXColor& c) { return u32(c.r) << 24 | u32(c.g) << 16 | u32(c.b) << 8 | c.a; }\n", 1),
+    ("    J3DGDWrite_u32(*(u32*)color);\n    J3DGDWrite_u32(*(u32*)(color + 1));",
+     "    J3DGDWrite_u32(smgColorWord(color[0]));\n    J3DGDWrite_u32(smgColorWord(color[1]));", 2),
 ])
 adapt("src/Game/MapObj/Swinger.cpp", "Game/MapObj/Swinger.cpp", [
     ("_3C((*a2)[0], (*a2)[4], (*a2)[8]),\n      _48((*a2)[1], (*a2)[5], (*a2)[9]), _54((*a2)[2], (*a2)[6], (*a2)[10])",
