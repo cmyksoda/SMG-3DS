@@ -1699,6 +1699,16 @@ adapt("src/JSystem/JAudio2/JASSeqParser.cpp", "JSystem/JAudio2/JASSeqParser.cpp"
      "    const u8* taps = (const u8*)track->getSeqCtrl()->getAddr(args[0]);\n    s16 fir[8];\n    for (u32 i = 0; i < 8; i++) {\n"
      "        fir[i] = s16(taps[2 * i] << 8 | taps[2 * i + 1]);\n    }\n    track->setFIR(fir);", 1),
 ])
+# The unit heap's table marks unit i as bit 0x80 >> (i & 7) of byte i / 8 (Overwrite.cpp's do_alloc and do_free), and
+# its searches read four bytes at once, testing 0x80000000 >> bit: the Wii's byte order, so they read it big-endian.
+adapt("src/JSystem/JKernel/JKRUnitHeap.cpp", "JSystem/JKernel/JKRUnitHeap.cpp", [
+    ("static const u8 bitTable[] = {0x80, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02, 0x01};\n",
+     "static const u8 bitTable[] = {0x80, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02, 0x01};\n\n"
+     "static inline u32 batWord(const u32* word) {\n    const u8* bytes = reinterpret_cast< const u8* >(word);\n"
+     "    return u32(bytes[0]) << 24 | u32(bytes[1]) << 16 | u32(bytes[2]) << 8 | bytes[3];\n}\n", 1),
+    ("            word = *words;\n", "            word = batWord(words);\n", 2),
+    ("        u32 word = words != end ? *words : 0xFFFFFFFF;\n", "        u32 word = words != end ? batWord(words) : 0xFFFFFFFF;\n", 2),
+])
 # MSL's own wide-string functions, built as C over newlib's headers (compat/smg/MslWide.h stands in for MSL's).
 adapt("src/MSL_C/wstring.c", "MSL_C/wstring.c", [('#include "size_t.h"\n#include "wchar_t.h"\n', "#include <smg/MslWide.h>\n", 1)])
 adapt("src/MSL_C/wmem.c", "MSL_C/wmem.c", [('#include "wchar_io.h"\n#include "cstring"\n', "#include <smg/MslWide.h>\n", 1)])
