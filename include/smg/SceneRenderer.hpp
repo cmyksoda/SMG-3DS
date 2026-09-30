@@ -25,6 +25,7 @@ public:
     bool loading() const { return next_ < pending_.size(); }
     const std::string& status() const { return status_; }
     const std::string& title() const { return title_; }
+    const std::string& summary() const { return summary_; } // short enough for the bottom screen
 
     struct Material;
     struct GpuModel;
@@ -44,7 +45,7 @@ private:
     bool programReady_ = false;
     int projection_ = -1, modelView_ = -1, materialColor_ = -1, ambientColor_ = -1;
     int lightDirection_ = -1, lightColor_ = -1, colorSelect_ = -1, texgen_[3]{-1, -1, -1};
-    std::string root_, title_, status_ = "No stage loaded";
+    std::string root_, title_, status_ = "No stage loaded", summary_;
     Stage stage_;
     std::vector<std::string> pending_;
     std::size_t next_ = 0, skinned_ = 0, missing_ = 0, failed_ = 0;

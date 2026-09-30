@@ -4,6 +4,7 @@
 #include <Game/Util/StringUtil.hpp>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 
 namespace smg {
@@ -381,9 +382,15 @@ void SceneRenderer::update(const InputFrame& input, float seconds) {
         loadNext();
         status_ = "Loading " + std::to_string(next_) + "/" + std::to_string(pending_.size()) + "  " +
                   (next_ < pending_.size() ? pending_[next_] : std::string("done"));
-        if (!loading())
+        summary_ = "loading " + std::to_string(next_) + " of " + std::to_string(pending_.size()) + " models";
+        if (!loading()) {
+            char memory[48];
+            std::snprintf(memory, sizeof(memory), "; %.1f MB linear free", linearSpaceFree() / (1024.0 * 1024.0));
             status_ = std::to_string(models_.size()) + " models, " + std::to_string(instances_.size()) + " placed; skipped " +
-                      std::to_string(skinned_) + " animated, " + std::to_string(missing_) + " without models";
+                      std::to_string(skinned_) + " animated" + memory;
+            std::snprintf(memory, sizeof(memory), "%zu models, %.1f MB free", models_.size(), linearSpaceFree() / (1024.0 * 1024.0));
+            summary_ = memory;
+        }
     }
     if (input.camera.pressed) resetCamera();
     if (!std::isfinite(seconds) || seconds < 0 || seconds > 0.25f) return;

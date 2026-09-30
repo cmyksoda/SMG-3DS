@@ -175,7 +175,7 @@ void TouchUi::drawTop(const InputFrame& input, const NativePad& pad, SceneRender
     }
 }
 
-void TouchUi::drawPlayPage(const InputFrame& input, const Settings& settings, bool motionReady) {
+void TouchUi::drawPlayPage(const InputFrame& input, const Settings& settings, bool motionReady, const std::string& summary) {
     const bool stylus = input.pointerMode == PointerMode::Stylus;
     const float opacity = touchButtonOpacity(input);
     if (stylus) {
@@ -216,6 +216,7 @@ void TouchUi::drawPlayPage(const InputFrame& input, const Settings& settings, bo
     }
     button(CameraButton, false, input.cameraButtonHeld, opacity, camera_, "CAM", "RESET");
     chip(OptionsButton, "Options", false, input.optionsButtonHeld);
+    if (!stylus && !summary.empty()) label(summary.c_str(), 160, 212, 0.32f, color(139, 156, 192), true);
 }
 
 void TouchUi::drawOptionsPage(const InputFrame& input, const Settings& settings) {
@@ -272,7 +273,7 @@ void TouchUi::draw(const InputFrame& input, const Settings& settings, const Nati
     background(320, frame_);
     if (input.remapOpen) drawRemapPage(input, settings);
     else if (input.optionsOpen) drawOptionsPage(input, settings);
-    else drawPlayPage(input, settings, motionReady);
+    else drawPlayPage(input, settings, motionReady, scene.summary());
     C3D_FrameEnd(0);
     ++frame_;
 }

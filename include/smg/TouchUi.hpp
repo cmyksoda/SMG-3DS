@@ -13,7 +13,7 @@ public:
               bool coreReady, const char* assetStatus, bool motionReady);
 private:
     void drawTop(const InputFrame& input, const NativePad& pad, SceneRenderer& scene, bool coreReady, const char* assetStatus);
-    void drawPlayPage(const InputFrame& input, const Settings& settings, bool motionReady);
+    void drawPlayPage(const InputFrame& input, const Settings& settings, bool motionReady, const std::string& summary);
     void drawOptionsPage(const InputFrame& input, const Settings& settings);
     void drawRemapPage(const InputFrame& input, const Settings& settings);
     void background(float width, unsigned phase);
