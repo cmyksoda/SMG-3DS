@@ -1640,6 +1640,14 @@ adapt("src/JSystem/JAudio2/JASAudioThread.cpp", "JSystem/JAudio2/JASAudioThread.
     ("    JASDriver::startDMA();\n", "    JASDriver::startDMA();\n    sStarted = true;\n", 1),
     ("void JASAudioThread::create(s32 threadPriority) {", "static volatile bool sStarted = false;\n\nvoid JASAudioThread::create(s32 threadPriority) {", 1),
 ])
+# A failed allocation panics with an empty message on the Wii; the port's names the heap, size and alignment.
+adapt("src/Game/System/HeapMemoryWatcher.cpp", "Game/System/HeapMemoryWatcher.cpp", [
+    ("void HeapMemoryWatcher::memoryErrorCallback(void*, u32, int) {\n    OSPanic(__FILE__, 537, \"\");",
+     "void HeapMemoryWatcher::memoryErrorCallback(void* pHeap, u32 size, int align) {\n"
+     "    JKRHeap* heap = static_cast< JKRHeap* >(pHeap);\n"
+     "    OSPanic(__FILE__, 537, \"heap %p (%lu of %lu bytes free, %lu in one block) could not give %lu bytes aligned %d\", pHeap,\n"
+     "            (unsigned long)heap->getTotalFreeSize(), (unsigned long)heap->mSize, (unsigned long)heap->getFreeSize(), (unsigned long)size, align);", 1),
+])
 # MSL's own wide-string functions, built as C over newlib's headers (compat/smg/MslWide.h stands in for MSL's).
 adapt("src/MSL_C/wstring.c", "MSL_C/wstring.c", [('#include "size_t.h"\n#include "wchar_t.h"\n', "#include <smg/MslWide.h>\n", 1)])
 adapt("src/MSL_C/wmem.c", "MSL_C/wmem.c", [('#include "wchar_io.h"\n#include "cstring"\n', "#include <smg/MslWide.h>\n", 1)])

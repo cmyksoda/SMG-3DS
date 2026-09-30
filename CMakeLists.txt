@@ -349,7 +349,7 @@ if(NINTENDO_3DS)
   # boundary stops come after it, for what the game does not define.
   target_link_libraries(mario_probe PRIVATE -Wl,--start-group smg_platform petari_game petari_scene petari_anim petari_j3d
     petari_gravity petari_core msl_wide smg_pica -Wl,--end-group petari_game_boundaries citro2d citro3d ctru m)
-  target_link_options(mario_probe PRIVATE -Wl,--gc-sections "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/mario_probe.map")
+  target_link_options(mario_probe PRIVATE -Wl,--gc-sections "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/mario_probe.map" -Wl,--wrap=abort)
   add_custom_command(TARGET mario_probe POST_BUILD
     COMMAND "${DEVKITPRO}/tools/bin/3dsxtool" "$<TARGET_FILE:mario_probe>" "${CMAKE_CURRENT_BINARY_DIR}/mario_probe.3dsx" VERBATIM)
 
