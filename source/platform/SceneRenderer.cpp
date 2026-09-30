@@ -2,6 +2,11 @@
 #include <ModelShader.hpp>
 #include <smg/Archive.hpp>
 #include <smg/Etc1.hpp>
+#include <smg/Scene.hpp>
+#include <smg/StageGravity.hpp>
+#include <Game/Gravity/GravityInfo.hpp>
+#include <Game/Gravity/PlanetGravityManager.hpp>
+#include <Game/Scene/SceneObjHolder.hpp>
 #include <Game/Util/StringUtil.hpp>
 #include <algorithm>
 #include <cmath>
@@ -286,6 +291,26 @@ void setMatrix(C3D_Mtx& out, const Transform& t) {
     }
 }
 
+// "Disk in DiskGardenZone, pull 0.00 -1.00 0.00": the gravity the original manager picks at a point.
+std::string describeGravity(const NativeScene& scene, const Stage& stage, const float at[3]) {
+    TVec3f pull;
+    GravityInfo info;
+    auto* manager = MR::getSceneObj<PlanetGravityManager>(SceneObj_PlanetGravityManager);
+    if (!manager->calcTotalGravityVector(&pull, &info, TVec3f(at[0], at[1], at[2]), GRAVITY_TYPE_NORMAL, 0)) return "none";
+    std::string kind = "?", zone = "?";
+    for (const auto& placed : scene.placedGravities()) {
+        if (placed.gravity != info.mGravityInstance) continue;
+        kind = placed.name, zone = stage.zones[placed.zone].name;
+    }
+    if (kind.rfind("Global", 0) == 0) kind.erase(0, 6);
+    if (const auto word = kind.find("Gravity"); word != std::string::npos) kind.erase(word, 7);
+    char text[128];
+    // Adding zero turns -0.00 into 0.00.
+    std::snprintf(text, sizeof text, "%s in %s, pull %.2f %.2f %.2f", kind.c_str(), zone.c_str(), pull.x + 0.0f,
+                  pull.y + 0.0f, pull.z + 0.0f);
+    return text;
+}
+
 bool endsWith(const std::string& text, const std::string& suffix) {
     return text.size() >= suffix.size() && MR::isEqualStringCase(text.c_str() + text.size() - suffix.size(), suffix.c_str());
 }
@@ -411,6 +436,14 @@ void SceneRenderer::loadStage(const std::string& root, const std::string& galaxy
     if (!smg::loadStage(root, galaxy, scenario, stage_, error)) { status_ = error; return; }
     for (const auto& object : stage_.objects)
         if (std::find(names_.begin(), names_.end(), object.name) == names_.end()) names_.push_back(object.name);
+    gravity_.reset();
+    gravity_ = std::make_unique<NativeScene>();
+    if (smg::placeStageGravity(root, stage_, *gravity_, error)) {
+        startGravity_ = describeGravity(*gravity_, stage_, stage_.start.data());
+    } else {
+        startGravity_ = "unavailable: " + error;
+        gravity_.reset();
+    }
     resetCamera();
     status_ = std::to_string(stage_.objects.size()) + " placements, " + std::to_string(names_.size()) + " models to load";
     // Just below the main thread, so decoding fills the time the main thread spends waiting on the GPU.
@@ -516,6 +549,7 @@ void SceneRenderer::update(const InputFrame& input, float seconds) {
     const float rise = static_cast<float>(input.jump.held) - input.crouch.held;
     for (int i = 0; i < 3; ++i)
         position_[i] += (forward[i] * input.moveY + right[i] * input.moveX) * speed + (i == 1 ? rise * speed : 0);
+    if (gravity_) gravityHere_ = describeGravity(*gravity_, stage_, position_);
 }
 
 void SceneRenderer::drawInstance(const Instance& instance, const C3D_Mtx& view, bool translucent, const Material*& current) {

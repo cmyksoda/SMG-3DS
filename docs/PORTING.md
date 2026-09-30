@@ -65,7 +65,8 @@ completion does not make those interfaces portable to ARM11/PICA200.
   row to the native scene, which does what `GlobalGravityObj` does (see below). For Good Egg
   scenario 1 that is 111 gravities in 16 zones. `gravity_tool` asks a stage for the pull at any
   point and follows it to the first placed model: from scenario 1's start, a disk gravity in
-  `DiskGardenZone` pulls straight down onto `DiskGardenPlanet`, 9.2 units below.
+  `DiskGardenZone` pulls straight down onto `DiskGardenPlanet`, 9.2 units below. The preview
+  shows the same answer at Mario's start and, live, at the camera.
 - newlib's `<ctype.h>` defines `_U`, `_L`, `_N`, `_S`, `_P`, `_C`, `_X` and `_B` as macros, and
   Petari uses some of them as member names. ARM builds force-include `compat/smg/NewlibCtype.hpp`,
   which lets libstdc++ read them once and then undefines them.
