@@ -78,6 +78,8 @@ smg::RawInput readInput(const Motion& motion) {
 } // namespace
 
 int main() {
+    // stderr goes to svcOutputDebugString, so a stop at a boundary is named in the emulator's log.
+    consoleDebugInit(debugDevice_SVC);
     gfxInitDefault();
     gfxSet3D(false);
     osSetSpeedupEnable(true);
