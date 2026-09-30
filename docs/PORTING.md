@@ -237,7 +237,8 @@ Measured 2026-09-30. The decompilation is complete: every function the Korean bu
 in `Game/Player` has source, and so does nearly everything else. The work left is porting, not waiting.
 
 **What GCC already accepts.** A syntax-only pass of all 1,605 `src/Game` files with devkitARM's
-`arm-none-eabi-g++` and the port's include order first compiled 830 unchanged (52%). On the 3DS `u32`
+`arm-none-eabi-g++` and the port's include order (`tools/petari-syntax-scan.sh BUILD_DIR OUT.tsv`)
+first compiled 830 unchanged (52%). On the 3DS `u32`
 is `unsigned long` as on the Wii, so a 64-bit host's mismatches (`JKRDvdRipper`, pointer casts) are
 not target problems. The failures clustered on a few shared headers, and five adaptations took the
 count to 1,208 (75%): Camera 126 of 127, Gravity 14 of 14, MapObj 266 of 317, Player 82 of 107.
