@@ -8,39 +8,50 @@ source files provide the running state machine, original button/stick handling, 
 level-table lookup, and trigonometric tables. Nine compile unchanged; JMapInfo and the
 trigonometric table source have adaptations applied to generated copies outside the checkout.
 The Wii renderer, Mario/actor simulation, levels, audio, saves, and game menus still need integration.
-Both original and New Nintendo 3DS are targets, starting with New 3DS.
+The target is the New Nintendo 3DS and New 2DS family.
 
-## Controls and touchscreen
+## Controls
 
-| Action | 3DS input |
+The layout follows the Switch release of Super Mario Galaxy, so anyone who played it in
+3D All-Stars or the Galaxy 1+2 collection already knows it. SMG-3DS targets the New
+Nintendo 3DS and New 2DS family; the original models lack ZL, ZR and the C-Stick.
+
+| Action | New 3DS |
 | --- | --- |
 | Move | Circle Pad |
+| Camera | C-Stick, unless it drives the pointer |
 | Jump / swim | A or B |
-| Spin / activate | X or Y |
-| Crouch / ground pound | L or R |
-| Aim / collect star bits | Touchscreen, shooting toggle off |
-| Shoot star bits | Touchscreen, shooting toggle on |
-| Recenter camera | Bottom-left touch button |
-| First-person camera adjustment | D-pad |
+| Spin | X or Y |
+| Crouch / ground pound | ZL |
+| Shoot star bits | ZR |
+| Reset camera | L |
+| Recenter the pointer | R |
+| First-person view and camera nudges | D-pad |
 | Pause | Start |
 
-The complete 320×240 touch surface maps to the complete 400×240 upper screen.
-The pointer appears only during an aiming touch and disappears immediately on lift.
-Both corner buttons become **50% transparent during aiming**. A pointer drag can cross
-either button without activating it. A fresh touch starting on a button is captured by
-that button until release. The bottom-right button toggles shooting once per fresh tap;
-its selected state has an amber border and an ON label. The bottom-left button is momentary.
-The diagnostic build exits with Start + Select.
+The star pointer has three modes, chosen on the bottom screen's **Options** page:
 
-The current build can preview the static Good Egg model in
-`ObjectData/BroadBeanPlanetB.arc`. This new rendering path compiles but has not yet
-been visually verified. It decodes indexed geometry and CMPR textures, with a partial
-base-material shader; full J3D materials and gameplay remain unfinished. In this preview,
-D-pad orbits the model and the camera button resets the view.
-These mappings are not yet
-connected to Mario, camera movement, star-bit collection, or shooting in the game world.
-Original game icons load from the user's SD card; until imported, the development screen
-explicitly uses text labels and a diagnostic reticle.
+- **Motion** (default) — tilt and turn the console, like handheld mode in the Switch
+  release. Sideways movement follows turns about the real vertical, measured against
+  gravity, so it works at any holding angle. A resting gyro offset is learned while the
+  console is still. R recenters.
+- **C-Stick** — the nub moves the pointer, with fine control near the center. R recenters.
+- **Stylus** — touching the bottom screen aims at the matching spot on the top screen,
+  and the pointer disappears the moment the stylus lifts. ZR shoots; the bottom-right
+  button toggles touch-to-shoot. A touch that starts on a button belongs to that button
+  until release, and a drag can cross any button without pressing it. The corner buttons
+  turn 50% transparent while aiming.
+
+Options also sets motion and C-Stick speed, inverts either axis, and restores the Switch
+layout. Settings are saved to `sdmc:/3ds/SMG-3DS/settings.ini`; buttons are remapped by
+editing its `bind.` lines, for example `bind.shoot=ZR+R`. The bottom screen's corner
+buttons reset the camera and recenter the pointer, and it lists the current bindings.
+
+The current build previews the static Good Egg model from `ObjectData/BroadBeanPlanetB.arc`
+on the top screen; the C-Stick and D-pad orbit it and the camera button resets the view.
+None of these inputs reach Mario, the camera, or star bits in a running stage yet.
+Original game icons load from the SD card once imported; until then the screens use text
+labels and a plain reticle. The diagnostic build exits with Start + Select.
 
 ## Build
 

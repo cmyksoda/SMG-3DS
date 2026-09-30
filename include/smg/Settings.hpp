@@ -1,0 +1,40 @@
+#pragma once
+#include <array>
+#include <cstdint>
+#include <string>
+
+namespace smg {
+enum Key : std::uint32_t {
+    A = 1u << 0, B = 1u << 1, X = 1u << 2, Y = 1u << 3,
+    L = 1u << 4, R = 1u << 5, Up = 1u << 6, Down = 1u << 7,
+    Left = 1u << 8, Right = 1u << 9, Start = 1u << 10, Select = 1u << 11,
+    ZL = 1u << 12, ZR = 1u << 13
+};
+inline constexpr unsigned KeyCount = 14;
+const char* keyName(unsigned bit);
+
+// Remappable game actions; the D-pad and both sticks keep fixed roles.
+enum Action : unsigned { Jump, Spin, Crouch, Shoot, CameraReset, PointerReset, Pause, Minus, ActionCount };
+const char* actionName(Action action);
+using Bindings = std::array<std::uint32_t, ActionCount>;
+// The Switch release's layout, so its players can pick this up without relearning.
+Bindings defaultBindings();
+
+enum class PointerMode : std::uint8_t { Motion, CStick, Stylus };
+
+struct Settings {
+    PointerMode pointer = PointerMode::Motion;
+    Bindings bindings = defaultBindings();
+    int motionSpeed = 100, stickSpeed = 100; // percent
+    bool invertX = false, invertY = false;
+    static constexpr int MinSpeed = 25, MaxSpeed = 300, SpeedStep = 25;
+};
+bool operator==(const Settings& a, const Settings& b);
+inline bool operator!=(const Settings& a, const Settings& b) { return !(a == b); }
+
+// Plain key=value text; unknown keys and bad values are skipped so old files keep loading.
+Settings parseSettings(const std::string& text, Settings base = {});
+std::string formatSettings(const Settings& settings);
+bool loadSettings(const char* path, Settings& settings);
+bool saveSettings(const char* path, const Settings& settings);
+} // namespace smg

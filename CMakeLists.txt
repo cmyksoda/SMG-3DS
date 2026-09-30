@@ -44,7 +44,9 @@ target_include_directories(petari_core PUBLIC compat "${CMAKE_CURRENT_BINARY_DIR
 # Original resource interfaces reinterpret stored numeric fields through several types.
 target_compile_options(petari_core PUBLIC -fno-strict-aliasing)
 
-add_library(smg_platform STATIC source/core/Input.cpp source/core/Session.cpp source/core/Archive.cpp source/core/Bcsv.cpp source/core/Model.cpp source/compat/NativePad.cpp)
+add_library(smg_platform STATIC
+  source/core/Input.cpp source/core/Motion.cpp source/core/Settings.cpp source/core/Session.cpp
+  source/core/Archive.cpp source/core/Bcsv.cpp source/core/Model.cpp source/compat/NativePad.cpp)
 target_include_directories(smg_platform PUBLIC include)
 target_link_libraries(smg_platform PUBLIC petari_core)
 target_compile_options(smg_platform PRIVATE -Wall -Wextra -Werror)

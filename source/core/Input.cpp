@@ -3,68 +3,202 @@
 #include <cmath>
 
 namespace smg {
+namespace {
+// A 36-degree turn crosses the top screen at 100% speed.
+constexpr float PixelsPerDegree = TopWidth / 36.0f;
+constexpr float StickPixelsPerSecond = 420.0f;
+
+void radial(int rawX, int rawY, float deadzone, float fullTravel, float& outX, float& outY) {
+    const float x = static_cast<float>(rawX), y = static_cast<float>(rawY);
+    const float radius = std::sqrt(x * x + y * y);
+    outX = outY = 0;
+    if (radius <= deadzone) return;
+    const float magnitude = std::min(1.0f, (radius - deadzone) / (fullTravel - deadzone));
+    outX = x / radius * magnitude;
+    outY = y / radius * magnitude;
+}
+
+int stepSpeed(int speed, int direction) {
+    return std::clamp(speed + direction * Settings::SpeedStep, Settings::MinSpeed, Settings::MaxSpeed);
+}
+} // namespace
+
+Settings applyOption(Option option, Settings settings) {
+    switch (option) {
+    case Option::PointerMotion: settings.pointer = PointerMode::Motion; break;
+    case Option::PointerCStick: settings.pointer = PointerMode::CStick; break;
+    case Option::PointerStylus: settings.pointer = PointerMode::Stylus; break;
+    case Option::MotionSlower: settings.motionSpeed = stepSpeed(settings.motionSpeed, -1); break;
+    case Option::MotionFaster: settings.motionSpeed = stepSpeed(settings.motionSpeed, 1); break;
+    case Option::StickSlower: settings.stickSpeed = stepSpeed(settings.stickSpeed, -1); break;
+    case Option::StickFaster: settings.stickSpeed = stepSpeed(settings.stickSpeed, 1); break;
+    case Option::InvertX: settings.invertX = !settings.invertX; break;
+    case Option::InvertY: settings.invertY = !settings.invertY; break;
+    case Option::ResetButtons: settings.bindings = defaultBindings(); break;
+    default: break;
+    }
+    return settings;
+}
+
+bool optionActive(Option option, const Settings& settings) {
+    switch (option) {
+    case Option::PointerMotion: return settings.pointer == PointerMode::Motion;
+    case Option::PointerCStick: return settings.pointer == PointerMode::CStick;
+    case Option::PointerStylus: return settings.pointer == PointerMode::Stylus;
+    case Option::InvertX: return settings.invertX;
+    case Option::InvertY: return settings.invertY;
+    default: return false;
+    }
+}
+
+Input::Input(const Settings& settings) : settings_(settings) {}
+
 Button Input::sample(TriggerChecker& checker, bool held) {
     checker.update(held);
     return {checker.getLevel(), checker.getOnTrigger(), checker.getOffTrigger()};
 }
 
-const InputFrame& Input::update(const RawInput& raw) {
-    const auto isHeld = [&](std::uint32_t keys) { return (raw.held & keys) != 0; };
-    frame_ = {};
-    frame_.jump = sample(jump_, isHeld(A | B));
-    frame_.spin = sample(spin_, isHeld(X | Y));
-    frame_.crouch = sample(crouch_, isHeld(L | R));
-    frame_.pause = sample(pause_, isHeld(Start));
-    frame_.select = sample(select_, isHeld(Select));
-    frame_.dpadUp = sample(up_, isHeld(Up));
-    frame_.dpadDown = sample(down_, isHeld(Down));
-    frame_.dpadLeft = sample(left_, isHeld(Left));
-    frame_.dpadRight = sample(right_, isHeld(Right));
-
-    const float x = static_cast<float>(raw.circleX);
-    const float y = static_cast<float>(raw.circleY);
-    const float radius = std::sqrt(x*x + y*y);
-    constexpr float deadzone = 15.0f;
-    constexpr float fullTravel = 156.0f;
-    if (radius > deadzone) {
-        const float magnitude = std::min(1.0f, (radius - deadzone) / (fullTravel - deadzone));
-        frame_.moveX = x / radius * magnitude;
-        frame_.moveY = y / radius * magnitude;
+void Input::setSettings(const Settings& settings) {
+    if (settings.pointer != settings_.pointer) {
+        motion_.reset();
+        recenter();
     }
+    settings_ = settings;
+}
 
+bool Input::takeSettingsChanged() {
+    const bool changed = settingsChanged_;
+    settingsChanged_ = false;
+    return changed;
+}
+
+void Input::recenter() {
+    pointerX_ = (TopWidth - 1) / 2;
+    pointerY_ = (TopHeight - 1) / 2;
+}
+
+void Input::setPointer(float x, float y) {
+    pointerX_ = std::clamp(x, 0.0f, TopWidth - 1);
+    pointerY_ = std::clamp(y, 0.0f, TopHeight - 1);
+    frame_.pointer = {true, pointerX_, pointerY_,
+                      2.0f * pointerX_ / (TopWidth - 1) - 1.0f, 1.0f - 2.0f * pointerY_ / (TopHeight - 1)};
+}
+
+void Input::beginGesture(const RawInput& raw) {
+    const int x = raw.touchX, y = raw.touchY;
+    const bool stylus = settings_.pointer == PointerMode::Stylus;
+    gesture_ = Gesture::Ignored;
+    gestureOption_ = -1;
+    if (optionsOpen_) {
+        for (const auto& button : OptionButtons) {
+            if (!button.bounds.contains(x, y)) continue;
+            gesture_ = Gesture::Option;
+            gestureOption_ = static_cast<int>(button.option);
+            if (button.option == Option::Done) {
+                optionsOpen_ = false;
+            } else if (const auto next = applyOption(button.option, settings_); next != settings_) {
+                setSettings(next);
+                settingsChanged_ = true;
+            }
+            break;
+        }
+        return;
+    }
+    if (OptionsButton.contains(x, y)) {
+        gesture_ = Gesture::OptionsTab;
+        optionsOpen_ = true;
+    } else if (CameraButton.contains(x, y)) {
+        gesture_ = Gesture::Camera;
+    } else if (ShootButton.contains(x, y)) {
+        gesture_ = stylus ? Gesture::Shoot : Gesture::Recenter;
+        if (stylus) shootMode_ = !shootMode_;
+    } else if (stylus && AimArea.contains(x, y)) {
+        gesture_ = Gesture::Aim;
+    }
+}
+
+const InputFrame& Input::update(const RawInput& raw, float seconds) {
+    const float dt = std::isfinite(seconds) && seconds > 0 && seconds <= 0.25f ? seconds : 0.0f;
     if (!raw.touching) {
         gesture_ = Gesture::None;
+        gestureOption_ = -1;
         suppressUntilLift_ = false;
     } else if (!touching_ && !suppressUntilLift_) {
-        if (CameraButton.contains(raw.touchX, raw.touchY)) gesture_ = Gesture::Camera;
-        else if (ShootButton.contains(raw.touchX, raw.touchY)) {
-            gesture_ = Gesture::Shoot;
-            shootMode_ = !shootMode_;
-        } else if (AimArea.contains(raw.touchX, raw.touchY)) gesture_ = Gesture::Aim;
-        else gesture_ = Gesture::Ignored;
+        beginGesture(raw);
     }
     touching_ = raw.touching;
-    frame_.shootMode = shootMode_;
-    frame_.cameraButtonHeld = raw.touching && gesture_ == Gesture::Camera && !suppressUntilLift_;
-    frame_.shootButtonHeld = raw.touching && gesture_ == Gesture::Shoot && !suppressUntilLift_;
-    if (raw.touching && gesture_ == Gesture::Aim && !suppressUntilLift_) {
-        // Clamp a captured aim drag to the field; never turn it into a UI press.
-        const float u = std::clamp(raw.touchX, AimArea.x, AimArea.x + AimArea.width - 1) / 319.0f;
-        const float v = std::clamp(raw.touchY, AimArea.y, AimArea.y + AimArea.height - 1) / 239.0f;
-        frame_.pointer = {true, u * 399.0f, v * 239.0f, 2.0f*u - 1.0f, 1.0f - 2.0f*v};
+    const bool touchActive = raw.touching && !suppressUntilLift_;
+    const bool stylus = settings_.pointer == PointerMode::Stylus;
+
+    Button actions[ActionCount];
+    for (unsigned action = 0; action < ActionCount; ++action)
+        actions[action] = sample(actions_[action], (raw.held & settings_.bindings[action]) != 0);
+    frame_ = {};
+    frame_.pointerMode = settings_.pointer;
+    frame_.jump = actions[Jump];
+    frame_.spin = actions[Spin];
+    frame_.crouch = actions[Crouch];
+    frame_.pause = actions[Pause];
+    frame_.minus = actions[Minus];
+    frame_.dpadUp = sample(up_, (raw.held & Up) != 0);
+    frame_.dpadDown = sample(down_, (raw.held & Down) != 0);
+    frame_.dpadLeft = sample(left_, (raw.held & Left) != 0);
+    frame_.dpadRight = sample(right_, (raw.held & Right) != 0);
+    radial(raw.circleX, raw.circleY, 15.0f, 156.0f, frame_.moveX, frame_.moveY);
+    float stickX, stickY;
+    radial(raw.cstickX, raw.cstickY, 15.0f, 140.0f, stickX, stickY);
+
+    frame_.cameraButtonHeld = touchActive && gesture_ == Gesture::Camera;
+    frame_.shootButtonHeld = touchActive && gesture_ == Gesture::Shoot;
+    frame_.recenterButtonHeld = touchActive && gesture_ == Gesture::Recenter;
+    frame_.heldOption = touchActive && gesture_ == Gesture::Option ? gestureOption_ : -1;
+    frame_.optionsButtonHeld = touchActive &&
+        (gesture_ == Gesture::OptionsTab || frame_.heldOption == static_cast<int>(Option::Done));
+    frame_.camera = sample(camera_, actions[CameraReset].held || frame_.cameraButtonHeld);
+    frame_.recenter = sample(recenter_, !stylus && (actions[PointerReset].held || frame_.recenterButtonHeld));
+    if (frame_.recenter.pressed) recenter();
+
+    if (stylus) {
+        if (touchActive && gesture_ == Gesture::Aim) {
+            // Clamp a captured aim drag to the field; never turn it into a UI press.
+            const float u = std::clamp(raw.touchX, AimArea.x, AimArea.x + AimArea.width - 1) / 319.0f;
+            const float v = std::clamp(raw.touchY, AimArea.y, AimArea.y + AimArea.height - 1) / 239.0f;
+            setPointer(u * (TopWidth - 1), v * (TopHeight - 1));
+        }
+    } else if (settings_.pointer == PointerMode::Motion) {
+        if (raw.motion) motion_.update(raw.gyro, raw.accel, dt);
+        const float scale = PixelsPerDegree * settings_.motionSpeed / 100.0f * dt;
+        const float yaw = raw.motion ? motion_.yawRate() : 0.0f, pitch = raw.motion ? motion_.pitchRate() : 0.0f;
+        setPointer(pointerX_ + (settings_.invertX ? 1 : -1) * yaw * scale,
+                   pointerY_ + (settings_.invertY ? 1 : -1) * pitch * scale);
+    } else {
+        // Squared response keeps small C-stick nudges precise.
+        const float magnitude = std::sqrt(stickX * stickX + stickY * stickY);
+        const float scale = StickPixelsPerSecond * settings_.stickSpeed / 100.0f * magnitude * dt;
+        setPointer(pointerX_ + (settings_.invertX ? -1 : 1) * stickX * scale,
+                   pointerY_ - (settings_.invertY ? -1 : 1) * stickY * scale);
     }
-    frame_.camera = sample(camera_, frame_.cameraButtonHeld);
-    frame_.shoot = sample(shoot_, shootMode_ && frame_.pointer.visible);
+    if (settings_.pointer != PointerMode::CStick) {
+        frame_.cameraX = stickX;
+        frame_.cameraY = stickY;
+    }
+    frame_.shootMode = stylus && shootMode_;
+    const bool touchShot = frame_.shootMode && touchActive && gesture_ == Gesture::Aim;
+    frame_.shoot = sample(shoot_, frame_.pointer.visible && (actions[Shoot].held || touchShot));
+    frame_.optionsOpen = optionsOpen_;
     return frame_;
 }
 
 void Input::cancelGesture() {
     gesture_ = Gesture::None;
+    gestureOption_ = -1;
     suppressUntilLift_ = true;
-    frame_.pointer.visible = false;
+    if (frame_.pointerMode == PointerMode::Stylus) frame_.pointer.visible = false;
     frame_.shoot = {};
     frame_.camera = {};
-    frame_.cameraButtonHeld = frame_.shootButtonHeld = false;
+    frame_.cameraButtonHeld = frame_.shootButtonHeld = frame_.recenterButtonHeld = false;
+    frame_.optionsButtonHeld = false;
+    frame_.heldOption = -1;
     shoot_.setInput(false);
     camera_.setInput(false);
 }
@@ -81,11 +215,15 @@ WiiInput toWiiInput(const InputFrame& frame) {
     add(frame.crouch, WiiZ);
     add(frame.camera, WiiC);
     add(frame.pause, WiiPlus);
-    add(frame.select, WiiMinus);
-    add(frame.dpadUp, WiiUp); add(frame.dpadDown, WiiDown);
-    add(frame.dpadLeft, WiiLeft); add(frame.dpadRight, WiiRight);
-    result.stickX = frame.moveX; result.stickY = frame.moveY;
-    result.swing = frame.spin.held; result.swingTrigger = frame.spin.pressed;
+    add(frame.minus, WiiMinus);
+    add(frame.dpadUp, WiiUp);
+    add(frame.dpadDown, WiiDown);
+    add(frame.dpadLeft, WiiLeft);
+    add(frame.dpadRight, WiiRight);
+    result.stickX = frame.moveX;
+    result.stickY = frame.moveY;
+    result.swing = frame.spin.held;
+    result.swingTrigger = frame.spin.pressed;
     result.pointer = frame.pointer;
     return result;
 }

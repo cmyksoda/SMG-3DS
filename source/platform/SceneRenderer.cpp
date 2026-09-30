@@ -116,8 +116,8 @@ void SceneRenderer::shutdown() {
 void SceneRenderer::update(const InputFrame& input, float seconds) {
     if (input.camera.pressed) { yaw_ = 0; pitch_ = 0.35f; }
     if (!std::isfinite(seconds) || seconds < 0 || seconds > 0.25f) return;
-    yaw_ += (static_cast<int>(input.dpadRight.held) - input.dpadLeft.held) * seconds;
-    pitch_ += (static_cast<int>(input.dpadDown.held) - input.dpadUp.held) * seconds;
+    yaw_ += (static_cast<int>(input.dpadRight.held) - input.dpadLeft.held + input.cameraX * 2) * seconds;
+    pitch_ += (static_cast<int>(input.dpadDown.held) - input.dpadUp.held - input.cameraY * 2) * seconds;
     pitch_ = std::clamp(pitch_, -1.5f, 1.5f);
 }
 

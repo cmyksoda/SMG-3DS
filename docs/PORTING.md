@@ -67,29 +67,38 @@ borrows its owner's sample storage rather than allocating the Wii's 120-sample I
    gravity, collision, stage placement, Mario, animation, and camera using the real resources.
    Integrate the input boundary into `GamePadUtil`/`WPad`, including explicit digital spin input.
    Skip the Wii pointer's multi-frame loss-of-IR delay: stylus lift must hide it immediately.
+   The Switch release's right-stick camera needs new camera code; the C-Stick value is ready.
 5. **Complete gameplay.** Stage transitions, menus, save migration/format, audio through NDSP,
    cutscenes, effects, motion-controlled minigames, and all game-specific exceptions.
 6. **Hardware validation and optimization.** Frame time, draw count, texture/material limits,
    heap peaks, streaming stalls, suspend/resume, and input accuracy on a real 3DS.
 
-Both original and New Nintendo 3DS are targets, with New 3DS first for engine bring-up
-and initial performance work. Original 3DS needs separate memory and frame-time validation.
-The bootstrap uses ARMv6K/libctru APIs and has no New-3DS-only controls. This does not establish
-that full Galaxy gameplay can fit or run acceptably on either model.
+The New Nintendo 3DS and New 2DS family is the target: the controls need ZL, ZR and the
+C-Stick, and the faster CPU and larger memory are what full Galaxy needs most. Nothing so
+far establishes that full gameplay fits or runs acceptably even there.
 
 ## Pointer details to preserve
 
-`StarPieceShooter::tryShoot` consumes both Wii B hold and trigger states. The touchscreen
-adapter exposes a trigger on the first aiming sample in shooting mode and hold while the
-stylus remains down; the original game should retain ownership of shot timing and charge.
-The mode-toggle tap itself never emits B. Camera presses map to Nunchuk C, jump aliases to
-Wii A, crouch aliases to Nunchuk Z, and the D-pad preserves its four original bits.
+`StarPieceShooter::tryShoot` consumes both Wii B hold and trigger states, so ZR (and the
+stylus touch-to-shoot toggle) produce B's trigger on the first pointed sample and hold
+while it continues; the original game keeps ownership of shot timing and charge. B is
+only reported while the pointer is valid, as with the Wii's IR. The toggle tap itself
+never emits B. The camera reset maps to Nunchuk C, jump aliases to Wii A, crouch to
+Nunchuk Z, spin to a digital shake, and the D-pad keeps its four original bits. Pointer
+recentering is native and never reaches the game.
 
 Aliased physical buttons are combined before transition detection, so pressing B while
 holding A does not create a second jump edge, and releasing one does not release the other.
 
+The motion pointer reads the gyro in the HID ring's order - pitch, yaw, roll, as Azahar
+lays them out; libctru's `angularRate` names the same fields x, z, y. Which way each axis
+turns on hardware, and the accelerometer's sign, still need checking on a console; the
+tracker already accepts either gravity sign, and Options can invert both axes.
+
 ## Required validation
 
+- Motion pointer direction, speed and drift at several holding angles on a New 3DS and a
+  New 2DS XL; C-Stick range and deadzone on hardware.
 - Exact top-screen corner mapping, lift-to-hide, both button aliases per action, and diagonal
   Circle Pad magnitude. Repeat these on hardware because touch calibration is device-specific.
 - Toggle taps, long holds, drags onto/off either button, half-opacity feedback, camera in shooting

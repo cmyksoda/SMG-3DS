@@ -16,7 +16,9 @@ int runPadTests() {
     check(MR::getWPad(0) == nullptr && MR::getWPad(-1) == nullptr, "unbound and invalid channels");
     {
         smg::NativePad pad;
-        smg::Input input;
+        smg::Settings stylus;
+        stylus.pointer = smg::PointerMode::Stylus;
+        smg::Input input(stylus);
         smg::RawInput raw;
         const auto sample = [&] { pad.update(input.update(raw)); };
         check(pad.pad().getKPadStatus(0) == nullptr, "no stale status before first sample");
@@ -45,15 +47,20 @@ int runPadTests() {
         raw = {};
         sample();
 
-        raw.held = smg::L | smg::R;
+        raw.held = smg::ZL;
         sample();
         check(pad.buttons().testButtonZ() && pad.buttons().testTriggerZ(), "crouch uses original Z");
-        raw.held = smg::R;
+        raw.held = smg::ZL | smg::L;
         sample();
-        check(!pad.buttons().testReleaseZ(), "crouch alias retained");
+        check(!pad.buttons().testReleaseZ() && pad.buttons().testTriggerC(), "camera reset joins a held crouch");
         raw = {};
         sample();
-        check(pad.buttons().testReleaseZ(), "original Z release");
+        check(pad.buttons().testReleaseZ() && !pad.buttons().testButtonC(), "original Z and C release");
+        raw.held = smg::ZR;
+        sample();
+        check(!pad.buttons().testButtonB(), "ZR cannot shoot while the stylus pointer is hidden");
+        raw = {};
+        sample();
 
         raw.held = smg::Up | smg::Left | smg::Start | smg::Select;
         sample();

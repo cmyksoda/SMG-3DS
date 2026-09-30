@@ -1,29 +1,50 @@
 #pragma once
 
 #include <Game/Util/TriggerChecker.hpp>
+#include <smg/Motion.hpp>
+#include <smg/Settings.hpp>
 #include <cstdint>
 
 namespace smg {
-enum Key : std::uint32_t {
-    A = 1u << 0, B = 1u << 1, X = 1u << 2, Y = 1u << 3,
-    L = 1u << 4, R = 1u << 5, Up = 1u << 6, Down = 1u << 7,
-    Left = 1u << 8, Right = 1u << 9, Start = 1u << 10, Select = 1u << 11
-};
 struct Rect {
     int x, y, width, height;
     constexpr bool contains(int px, int py) const {
         return px >= x && py >= y && px < x + width && py < y + height;
     }
 };
+// Bottom-screen touch targets. The corner button on the right shoots in stylus mode
+// and recenters the pointer otherwise.
 inline constexpr Rect AimArea{0, 0, 320, 240};
 inline constexpr Rect CameraButton{8, 190, 48, 44};
 inline constexpr Rect ShootButton{264, 190, 48, 44};
+inline constexpr Rect RecenterButton = ShootButton;
+inline constexpr Rect OptionsButton{252, 4, 64, 24};
+inline constexpr float TopWidth = 400, TopHeight = 240;
+
+enum class Option : std::uint8_t {
+    PointerMotion, PointerCStick, PointerStylus, MotionSlower, MotionFaster,
+    StickSlower, StickFaster, InvertX, InvertY, ResetButtons, Done, Count
+};
+struct OptionButton { Option option; Rect bounds; };
+inline constexpr OptionButton OptionButtons[]{
+    {Option::PointerMotion, {88, 36, 72, 30}}, {Option::PointerCStick, {164, 36, 72, 30}},
+    {Option::PointerStylus, {240, 36, 72, 30}},
+    {Option::MotionSlower, {88, 74, 40, 30}}, {Option::MotionFaster, {272, 74, 40, 30}},
+    {Option::StickSlower, {88, 112, 40, 30}}, {Option::StickFaster, {272, 112, 40, 30}},
+    {Option::InvertX, {88, 150, 110, 30}}, {Option::InvertY, {202, 150, 110, 30}},
+    {Option::ResetButtons, {88, 196, 224, 30}}, {Option::Done, OptionsButton},
+};
+Settings applyOption(Option option, Settings settings);
+bool optionActive(Option option, const Settings& settings);
 
 struct RawInput {
     std::uint32_t held = 0;
     int circleX = 0, circleY = 0;
+    int cstickX = 0, cstickY = 0;
     bool touching = false;
     int touchX = 0, touchY = 0;
+    bool motion = false;
+    float gyro[3]{}, accel[3]{}; // HID order: pitch, yaw, roll in deg/s; accel in any unit
 };
 struct Button {
     bool held = false, pressed = false, released = false;
@@ -35,27 +56,45 @@ struct Pointer {
 };
 struct InputFrame {
     float moveX = 0.0f, moveY = 0.0f;
-    Button jump, spin, crouch, shoot, camera, pause, select;
+    float cameraX = 0.0f, cameraY = 0.0f; // C-stick, unless it drives the pointer
+    Button jump, spin, crouch, shoot, camera, recenter, pause, minus;
     Button dpadUp, dpadDown, dpadLeft, dpadRight;
     Pointer pointer;
-    bool shootMode = false;
-    bool shootButtonHeld = false, cameraButtonHeld = false;
+    PointerMode pointerMode = PointerMode::Motion;
+    bool shootMode = false; // stylus mode's touch-to-shoot toggle
+    bool shootButtonHeld = false, cameraButtonHeld = false, recenterButtonHeld = false;
+    bool optionsOpen = false, optionsButtonHeld = false;
+    int heldOption = -1;
 };
 inline float touchButtonOpacity(const InputFrame& frame) {
-    return frame.pointer.visible ? 0.5f : 1.0f;
+    return frame.pointerMode == PointerMode::Stylus && frame.pointer.visible ? 0.5f : 1.0f;
 }
 
 class Input {
 public:
-    const InputFrame& update(const RawInput& raw);
+    explicit Input(const Settings& settings = {});
+    const InputFrame& update(const RawInput& raw, float seconds = 1.0f / 60.0f);
     void cancelGesture();
     const InputFrame& frame() const { return frame_; }
+    const Settings& settings() const { return settings_; }
+    void setSettings(const Settings& settings);
+    // True once after an options-page change, so the caller can save it.
+    bool takeSettingsChanged();
 private:
-    enum class Gesture { None, Aim, Camera, Shoot, Ignored };
+    enum class Gesture { None, Aim, Camera, Shoot, Recenter, OptionsTab, Option, Ignored };
     static Button sample(TriggerChecker& checker, bool held);
+    void beginGesture(const RawInput& raw);
+    void recenter();
+    void setPointer(float x, float y);
+    Settings settings_;
+    MotionTracker motion_;
     Gesture gesture_ = Gesture::None;
+    int gestureOption_ = -1;
     bool touching_ = false, suppressUntilLift_ = false, shootMode_ = false;
-    TriggerChecker jump_, spin_, crouch_, shoot_, camera_, pause_, select_;
+    bool optionsOpen_ = false, settingsChanged_ = false;
+    float pointerX_ = (TopWidth - 1) / 2, pointerY_ = (TopHeight - 1) / 2;
+    TriggerChecker actions_[ActionCount];
+    TriggerChecker shoot_, camera_, recenter_;
     TriggerChecker up_, down_, left_, right_;
     InputFrame frame_;
 };
