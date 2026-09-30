@@ -56,7 +56,6 @@ void NANDWrite() { unported("NANDWrite"); }
 void OSCreateAlarm() { unported("OSCreateAlarm"); }
 void OSFillFPUContext() { unported("OSFillFPUContext"); }
 void OSGetCurrentContext() { unported("OSGetCurrentContext"); }
-void OSGetResetButtonState() { unported("OSGetResetButtonState"); }
 void OSGetStackPointer() { unported("OSGetStackPointer"); }
 void OSGetThreadPriority() { unported("OSGetThreadPriority"); }
 void OSProtectRange() { unported("OSProtectRange"); }
@@ -65,9 +64,7 @@ void OSRestart() { unported("OSRestart"); }
 void OSReturnToMenu() { unported("OSReturnToMenu"); }
 void OSSetAlarm() { unported("OSSetAlarm"); }
 void OSSetPeriodicAlarm() { unported("OSSetPeriodicAlarm"); }
-void OSSetPowerCallback() { unported("OSSetPowerCallback"); }
 void OSSetThreadPriority() { unported("OSSetThreadPriority"); }
-void OSShutdownSystem() { unported("OSShutdownSystem"); }
 // RFL
 void RFLDrawOpa() { unported("RFLDrawOpa"); }
 void RFLDrawOpaCore() { unported("RFLDrawOpaCore"); }

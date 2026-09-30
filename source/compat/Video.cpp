@@ -6,6 +6,8 @@
 #include <cstdio>
 #include <cstdlib>
 
+extern "C" void smgServiceApplet();  // source/compat/OsReset.cpp
+
 namespace {
 LightLock sLock = 1;
 CondVar sRetrace;
@@ -20,6 +22,7 @@ Thread sThread;
 void retraces(void*) {
     while (true) {
         gspWaitForEvent(GSPGPU_EVENT_VBlank0, true);
+        smgServiceApplet();
         LightLock_Lock(&sLock);
         const u32 count = ++sRetraceCount;
         // The flushed buffer takes over at the retrace, as the VI latched it.
