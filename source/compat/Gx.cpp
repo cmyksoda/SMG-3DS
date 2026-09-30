@@ -72,8 +72,13 @@ void GXSetVtxAttrFmt(GXVtxFmt, GXAttr, GXCompCnt, GXCompType, u8) { unported("GX
 void GXSetZCompLoc(GXBool) { unported("GXSetZCompLoc"); }
 void GXSetZMode(GXBool, GXCompare, GXBool) { unported("GXSetZMode"); }
 
+// The SDK's NTSC interlaced mode, as GXFrameBuf.c defines it; JUTException sizes its screen from it.
+#include <revolution/gx/GXFrameBuf.h>
+GXRenderModeObj GXNtsc480Int = {VI_TVMODE_NTSC_INT, 640, 480, 480, 40, 0, 640, 480, VI_XFBMODE_DF, 0, 0,
+                                {{6, 6}, {6, 6}, {6, 6}, {6, 6}, {6, 6}, {6, 6}, {6, 6}, {6, 6}, {6, 6}, {6, 6}, {6, 6}, {6, 6}},
+                                {0, 0, 21, 22, 21, 0, 0}};
+
 // J3D's own drawing entry points that Petari has no body for yet.
 #include <JSystem/J3DGraphBase/J3DPacket.hpp>
 #include <JSystem/J3DGraphBase/J3DShape.hpp>
 void J3DPacket::draw() { unported("J3DPacket::draw"); }
-void J3DShapeMtx::loadMtxIndx_PNGP(int, u16) const { unported("J3DShapeMtx::loadMtxIndx_PNGP"); }

@@ -38,6 +38,7 @@ add_library(petari_core STATIC
   "${CMAKE_CURRENT_BINARY_DIR}/petari/JSystem/JMath/JMATrigonometric.cpp"
   "${JMAP_SOURCE}"
   "${PETARI}/src/JSystem/JGadget/hashcode.cpp"
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/JSystem/JMath/JMath.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/JSystem/J3DGraphAnimator/J3DAnimationKeys.cpp"
   "${PETARI}/src/JSystem/JUtility/JUTNameTab.cpp"
   "${PETARI}/src/Game/LiveActor/Nerve.cpp"
@@ -89,7 +90,15 @@ add_library(petari_j3d STATIC
   "${J3D}/J3DGraphLoader/J3DMaterialFactory_v21.cpp" "${J3D}/J3DGraphLoader/J3DModelLoaderCalcSize.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/JSystem/J3DGraphLoader/J3DModelLoader.cpp" "${J3D}/J3DGraphLoader/J3DShapeFactory.cpp"
   source/compat/Gx.cpp)
-target_link_libraries(petari_j3d PUBLIC petari_core)
+target_link_libraries(petari_j3d PUBLIC petari_core petari_game_boundaries)
+# Loud stops for game classes the whole-game library builds for real. As a library linked after the scene and
+# J3D libraries, a program takes a stop only when nothing earlier defines the entry point.
+add_library(petari_game_boundaries STATIC source/compat/GameBoundaries.cpp)
+# The stops construct members the scene library defines; the two static libraries link each other.
+target_link_libraries(petari_game_boundaries PUBLIC petari_scene)
+if(NOT NINTENDO_3DS)
+  set_source_files_properties(source/compat/GameBoundaries.cpp PROPERTIES COMPILE_OPTIONS "-fno-sanitize=vptr")
+endif()
 if(NOT NINTENDO_3DS)
   # UBSan's vptr check needs the type info of the deform and vertex color classes J3DModel calls through;
   # their key functions are not in the game, so neither is their type info. The 3DS build has no RTTI.
@@ -169,7 +178,7 @@ add_library(petari_scene STATIC
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/ActorMovementUtilCore.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/MapUtilCore.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/LiveActor/ShadowRequests.cpp")
-target_link_libraries(petari_scene PUBLIC petari_gravity)
+target_link_libraries(petari_scene PUBLIC petari_gravity petari_game_boundaries)
 # Metrowerks stored a constant that does not fit, such as -1 in a table of u32, as its bit pattern; so does GCC
 # once the narrowing is not an error.
 foreach(library petari_core petari_gravity petari_j3d petari_anim petari_scene)
@@ -247,6 +256,50 @@ if(NINTENDO_3DS)
     COMMAND "${DEVKITPRO}/tools/bin/3dsxtool" "$<TARGET_FILE:SMG-3DS>"
       "${CMAKE_CURRENT_BINARY_DIR}/SMG-3DS.3dsx" "--smdh=${CMAKE_CURRENT_BINARY_DIR}/SMG-3DS.smdh"
     VERBATIM)
+  # The rest of the game, JSystem and nw4r, for code the port brings up whole (MarioActor first). Programs link it
+  # with --gc-sections, keeping only what they reach. Sources built above stay out; for a file cut into extracts
+  # above, tools/prepare-petari.py writes the rest of it.
+  # 3DS only for now: 94 of these files still need 64-bit host fixes (docs/PORTING.md, "Road to Mario").
+  file(GLOB_RECURSE PETARI_GAME_CANDIDATES CONFIGURE_DEPENDS RELATIVE "${PETARI}/src"
+    "${PETARI}/src/Game/*.cpp" "${PETARI}/src/JSystem/*.cpp" "${PETARI}/src/nw4r/*.cpp")
+  set(PETARI_BUILT_ELSEWHERE)
+  foreach(library petari_core petari_gravity petari_j3d petari_anim petari_scene)
+    get_target_property(library_sources ${library} SOURCES)
+    foreach(source ${library_sources})
+      string(REPLACE "${PETARI}/src/" "" source "${source}")
+      string(REPLACE "${CMAKE_CURRENT_BINARY_DIR}/petari/" "" source "${source}")
+      list(APPEND PETARI_BUILT_ELSEWHERE "${source}")
+    endforeach()
+  endforeach()
+  set(PETARI_GAME_SOURCES source/compat/Sdk.cpp source/compat/Nw4rDb.cpp source/compat/DolTables.cpp
+    "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/LiveActor/RailRiderCamera.cpp"
+    "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/LiveActor/LiveActorSound.cpp")
+  foreach(source ${PETARI_GAME_CANDIDATES})
+    if(source IN_LIST PETARI_BUILT_ELSEWHERE)
+      continue()
+    elseif(EXISTS "${CMAKE_CURRENT_BINARY_DIR}/petari/${source}")
+      list(APPEND PETARI_GAME_SOURCES "${CMAKE_CURRENT_BINARY_DIR}/petari/${source}")
+    else()
+      list(APPEND PETARI_GAME_SOURCES "${PETARI}/src/${source}")
+    endif()
+  endforeach()
+  add_library(petari_game STATIC ${PETARI_GAME_SOURCES})
+  target_link_libraries(petari_game PUBLIC petari_scene petari_anim)
+  target_include_directories(petari_game PRIVATE include)
+  target_compile_options(petari_game PRIVATE -Wno-narrowing -ffunction-sections -fdata-sections)
+
+  add_executable(mario_probe source/probe/MarioProbe.cpp)
+  set_target_properties(mario_probe PROPERTIES SUFFIX ".elf")
+  target_include_directories(mario_probe PRIVATE "${DEVKITPRO}/libctru/include")
+  target_link_directories(mario_probe PRIVATE "${DEVKITPRO}/libctru/lib")
+  # The game and the port's libraries call each other: GNU ld rescans the group until nothing more resolves. The
+  # boundary stops come after it, for what the game does not define.
+  target_link_libraries(mario_probe PRIVATE -Wl,--start-group smg_platform petari_game petari_scene petari_anim petari_j3d
+    petari_gravity petari_core -Wl,--end-group petari_game_boundaries citro2d citro3d ctru m)
+  target_link_options(mario_probe PRIVATE -Wl,--gc-sections "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/mario_probe.map")
+  add_custom_command(TARGET mario_probe POST_BUILD
+    COMMAND "${DEVKITPRO}/tools/bin/3dsxtool" "$<TARGET_FILE:mario_probe>" "${CMAKE_CURRENT_BINARY_DIR}/mario_probe.3dsx" VERBATIM)
+
   option(SMG_BUILD_VALIDATION "Build a separate on-device math/input test app" OFF)
   if(SMG_BUILD_VALIDATION)
     add_executable(native_validation tests/NativeTests.cpp tests/MathTests.cpp tests/PadTests.cpp tests/BcsvTests.cpp

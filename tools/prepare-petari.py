@@ -37,6 +37,64 @@ def definition(text, relative, first):
             return start, end
 
 
+# Definitions the port owns natively, left out of the originals' copies so the whole-game library never defines
+# them twice: (reason, first lines) per source.
+NATIVE_SCENE = "the native scene's (source/compat/Scene.cpp, Area.cpp, Actor.cpp)"
+NATIVE = {
+    "src/Game/Util/SceneUtil.cpp": (NATIVE_SCENE, [
+        "    bool isPlacementLocalStage() {", "    s32 getPlacedZoneId(const JMapInfoIter& rIter) {",
+        "    const TPos3f* getZonePlacementMtx(const JMapInfoIter& rIter) {",
+        "    void getRailInfo(JMapInfoIter* pRailIter, const JMapInfo** ppPointInfo, const JMapInfoIter& rIter) {",
+        "    s32 getZoneNum() {", "    const char* getZoneNameFromZoneId(s32 zoneId) {", "    s32 getCurrentPlacementZoneId() {",
+        "    bool isInitializeStatePlacementSomething() {"]),
+    "src/Game/Scene/SceneObjHolder.cpp": (NATIVE_SCENE, [
+        "NameObj* SceneObjHolder::newEachObj(int id) {", "    SceneObjHolder* getSceneObjHolder() {", "    bool isExistSceneObj(int id) {"]),
+    "src/Game/Map/LightFunction.cpp": (NATIVE_SCENE, [
+        "s32 LightFunction::createLightDataParser(JMapInfo** pOut) {", "s32 LightFunction::createZoneDataParser(const char* pZone, JMapInfo** pOut) {",
+        "const char* LightFunction::getDefaultAreaLightName() {", "void LightFunction::registerLightAreaHolder(LightAreaHolder* pHolder) {",
+        "bool LightFunction::tryFindNewAreaLightID(const TVec3f& rPos, ZoneLightID* pId) {"]),
+    "src/Game/Util/ObjUtil.cpp": (NATIVE_SCENE, [
+        "void MR::listenNameObjStageSwitchOnOffAppear(const NameObj* pObj, const StageSwitchCtrl* pSwitchCtrl, const MR::FunctorBase& rOnFunctor,"]),
+    "src/Game/Util/CameraUtil.cpp": (NATIVE_SCENE, [
+        "    f32 getAspect() {", "    f32 getFovy() {", "    f32 getFarZ() {", "    const TPos3f& getCameraViewMtx() {",
+        "    bool isSubjectiveCameraOnForObjClipping() {"]),
+    "src/Game/Camera/CameraPolygonCodeUtil.cpp": (NATIVE_SCENE, [
+        "    void initCameraCodeCollection(const char* pName, s32 code) {", "    void registerCameraCode(u32 code) {",
+        "    void termCameraCodeCollection() {"]),
+    "src/Game/NameObj/NameObjExecuteHolder.cpp": (NATIVE_SCENE, [
+        "    void registerNameObjToExecuteHolder(NameObj* pObj, int movementType, int calcAnimType, int drawBufferType, int drawType) {",
+        "    void connectToSceneTemporarily(NameObj* pObj) {", "    void disconnectToSceneTemporarily(NameObj* pObj) {",
+        "    void connectToDrawTemporarily(NameObj* pObj) {", "    void disconnectToDrawTemporarily(NameObj* pObj) {"]),
+    "src/Game/Scene/SceneNameObjMovementController.cpp": (NATIVE_SCENE, ["    void notifyRequestNameObjMovementOnOff() {"]),
+    "src/Game/Util/AreaObjUtil.cpp": (NATIVE_SCENE, ["    AreaObjMgr* getAreaObjManager(const char* pMgrName) {"]),
+    "src/Game/AreaObj/AreaObjFollower.cpp": (NATIVE_SCENE, ["    bool addBaseMatrixFollowerAreaObj(AreaObj* pObj, const JMapInfoIter& rIter) {"]),
+    "src/Game/Map/SleepControllerHolder.cpp": (NATIVE_SCENE, ["    void addSleepControl(AreaObj* pObj, const JMapInfoIter& rIter) {"]),
+    "src/Game/System/WPad.cpp": ("the port's pad (source/compat/NativePad.cpp)", [
+        "WPad::WPad(s32 channel)", "void WPad::setReadInfo(WPadReadDataInfo* pReadInfo) {", "KPADStatus* WPad::getKPadStatus(u32 index) const {",
+        "s32 WPad::getValidStatusCount() const {", "    bool isDeviceFreeStyle(const KPADStatus* pStatus) {"]),
+    "src/Game/System/WPadHolder.cpp": ("the port's pad (source/compat/NativePad.cpp)", [
+        "WPadReadDataInfo::WPadReadDataInfo() : mStatusArray(), mValidStatusCount() {",
+        "KPADStatus* WPadReadDataInfo::getKPadStatus(u32 index) const {", "u32 WPadReadDataInfo::getValidStatusCount() const {",
+        "    WPad* getWPad(s32 channel) {"]),
+    # Replacing the global allocator hands every allocation to a JKRHeap, which the port does not set up yet.
+    "src/JSystem/JKernel/JKRHeap.cpp": ("the port allocates from the free store (source/compat/Heap.cpp)", [
+        "void* operator new(size_t size) {", "void* operator new(size_t size, int align) {", "void* operator new(size_t size, JKRHeap* pHeap, int align) {",
+        "void* operator new[](size_t size) {", "void* operator new[](size_t size, int align) {",
+        "void* operator new[](size_t size, JKRHeap* pHeap, int align) {", "void operator delete(void* pData) {", "void operator delete[](void* pData) {"]),
+}
+written = {}  # source -> (target, text) for each adapted copy, which remainders build on
+extracted = {}  # source -> first lines copied into extracts
+extracted_fixes = {}  # source -> fixes that hold for the rest of the file too
+
+
+def drop_definitions(text, relative, firsts, reason):
+    for first in firsts:
+        start, end = definition(text, relative, first)
+        indent = text[start:text.index(first)] + first[:len(first) - len(first.lstrip())]
+        text = text[:start] + f"{indent}// Left out, {reason}: {first.strip().rstrip(' {')}" + text[end:]
+    return text
+
+
 def msl_binders(text):
     """MSL's binder2nd names the bound argument's type as a second parameter; the standard one reads it from the
     function object, and every use in the game binds exactly that type, so the second parameter goes."""
@@ -89,10 +147,10 @@ def adapt(relative, target, replacements, drop=(), reason="", cases=()):
     for label in cases:
         text = scoped_case(text, relative, label)
     text = msl_binders(text)
-    for first in drop:
-        start, end = definition(text, relative, first)
-        indent = text[start:text.index(first)] + first[:len(first) - len(first.lstrip())]
-        text = text[:start] + f"{indent}// Left out, {reason}: {first.strip().rstrip(' {')}" + text[end:]
+    text = drop_definitions(text, relative, drop, reason)
+    if relative in NATIVE:
+        text = drop_definitions(text, relative, *reversed(NATIVE[relative]))
+    written[relative] = (target, text)
     destination = output / target
     destination.parent.mkdir(parents=True, exist_ok=True)
     text = "// Generated Petari adaptation; see tools/prepare-petari.py.\n" + text
@@ -100,12 +158,15 @@ def adapt(relative, target, replacements, drop=(), reason="", cases=()):
         destination.write_text(text)
 
 
-def extract(relative, target, prologue, first_lines, epilogue="", fixes=()):
+def extract(relative, target, prologue, first_lines, epilogue="", fixes=(), rest_fixes=()):
     """Copy whole function definitions, found by their first line, out of a file too entangled to compile.
 
     A (namespace, first line) pair copies a definition that sits inside that namespace's block ("" for an
-    anonymous one); `fixes` are exact (before, after) replacements made in the copied text."""
+    anonymous one); `fixes` are exact (before, after) replacements made in the copied text; `rest_fixes` also hold
+    for the rest of the file, which the whole-game library builds."""
     text = (root / relative).read_text()
+    extracted.setdefault(relative, []).extend(first if isinstance(first, str) else first[1] for first in first_lines)
+    extracted_fixes.setdefault(relative, []).extend(rest_fixes)
     bodies = []
     for first in first_lines:
         space, first = first if isinstance(first, tuple) else (None, first)
@@ -564,6 +625,25 @@ for header, fix in [("libs/JSystem/include/JSystem/J3DGraphAnimator/J3DAnimation
                     ("libs/JSystem/include/JSystem/JUtility/JUTNameTab.hpp", "#include <revolution/types.h>")]:
     # __memcpy is a Metrowerks intrinsic for the standard function.
     extra = [("__memcpy(", "memcpy(", 5)] if header.endswith("J3DStruct.hpp") else []
+    if header.endswith("J3DStruct.hpp"):
+        extra.append(("""            psq_st xy, 0(dst), 0, 0
+        }
+        ;
+#endif
+    }""", """            psq_st xy, 0(dst), 0, 0
+        }
+        ;
+#else
+        mScaleX = other.mScaleX;
+        mScaleY = other.mScaleY;
+        mRotation = other.mRotation;
+        mTranslationX = other.mTranslationX;
+        mTranslationY = other.mTranslationY;
+#endif
+    }""", 1))
+    if header.endswith("J3DTransform.hpp"):
+        extra.append(("        return *this;\n    }\n#endif\n};", "        return *this;\n    }\n#else\n"
+                      "    // GCC's implicit copy assigns every member, which is what the paired singles did.\n#endif\n};", 1))
     adapt(header, header.replace("libs/JSystem/include/", "include/"), [("#include <revolution.h>", fix, 1)] + extra)
 extract("src/JSystem/J3DGraphAnimator/J3DAnimation.cpp", "JSystem/J3DGraphAnimator/J3DAnimationKeys.cpp",
         '#include "JSystem/J3DGraphAnimator/J3DAnimation.hpp"\n#include "JSystem/J3DGraphBase/J3DStruct.hpp"\n'
@@ -585,7 +665,10 @@ extract("src/JSystem/J3DGraphAnimator/J3DAnimation.cpp", "JSystem/J3DGraphAnimat
                 "    return value;\n#else\n    return JMAHermiteInterpolation(pp1, *pp2, *pp3, *pp4, *pp5, *pp6, *pp7);\n#endif\n}"),
                ("f32 J3DGetKeyFrameInterpolation(f32 frame", "template < typename T >\nf32 J3DGetKeyFrameInterpolation(f32 frame"),
                # Rotations are often negative; shifting one left is undefined before C++20 (slw just scales it).
-               ("<< mDecShift", "* (1 << mDecShift)", 8)])
+               ("<< mDecShift", "* (1 << mDecShift)", 8)],
+        rest_fixes=[("    return value;\n#endif\n}",
+                     "    return value;\n#else\n    return JMAHermiteInterpolation(pp1, *pp2, *pp3, *pp4, *pp5, *pp6, *pp7);\n#endif\n}"),
+                    ("<< mDecShift", "* (1 << mDecShift)")])
 
 adapt("include/Game/System/WPadButton.hpp", "include/Game/System/WPadButton.hpp", [
     ("#include <revolution.h>", "#include <revolution/kpad.h>", 1),
@@ -1249,6 +1332,8 @@ galaxy_map_destructors = "".join(f"template <>\ninline MR::Vector< MR::Assignabl
                                  for icon in ["GalaxyMapIcon", "GalaxyMapCometIcon", "GalaxyMapDomeIcon", "GalaxyMapTicoIcon"])
 adapt("src/Game/Screen/GalaxyMap.cpp", "Game/Screen/GalaxyMap.cpp", [
     (galaxy_map_destructors, "", 1),
+    ('#include "Game/System/GameDataConst.hpp"', '#include "Game/System/GameDataConst.hpp"\n#include <smg/DolTables.hpp>', 1),
+    ("galaxyInfo.attach(&GalaxyIDBCSV);", 'galaxyInfo.attach(smg::dolTable("GalaxyIDBCSV"));', 1),
     ("GalaxyMap::GalaxyMap()\n", galaxy_map_destructors + "GalaxyMap::GalaxyMap()\n", 1),
 ])
 demo_ring_buffer = (root / "src/Game/Demo/DemoStartRequestHolder.cpp").read_text()
@@ -1260,14 +1345,6 @@ adapt("src/Game/Demo/DemoStartRequestHolder.cpp", "Game/Demo/DemoStartRequestHol
     ("DemoStartInfo::DemoStartInfo() {\n", increment.rstrip("\n") + "\n\n" + constructor + push_back + "DemoStartInfo::DemoStartInfo() {\n", 1),
 ])
 
-# The paired-single quantized casts, as Dolphin's interpreter models them: clamp to the type's range, then truncate.
-adapt("libs/RVL_SDK/include/revolution/os/OSFastCast.h", "include/revolution/os/OSFastCast.h", [
-    ('#define OSf32tou16(in, out) asm volatile("psq_st   %1, 0(%0), 1, 3 " : : "b"(out), "f"(*(in)) : "memory")\n#endif\n'
-     '#define OSu16tof32(in, out) asm volatile("psq_l   %0, 0(%1), 1, 3  " : "=f"(*(out)) : "b"(in))',
-     "static inline void OSf32tou16(const f32* in, volatile u16* out) {\n"
-     "    *out = (u16)(*in < 0.0f ? 0.0f : *in > 65535.0f ? 65535.0f : *in);\n}\n#endif\n"
-     "static inline void OSu16tof32(const u16* in, f32* out) {\n    *out = *in;\n}", 1),
-])
 for relative, anchor, include in [
     ("libs/JSystem/include/JSystem/JKernel/JKRAramHeap.hpp", '#include "JSystem/JKernel/JKRDisposer.hpp"', "<revolution/os.h>"),
     ("libs/JSystem/include/JSystem/JKernel/JKRDvdFile.hpp", '#include "JSystem/JKernel/JKRDisposer.hpp"', "<revolution/dvd.h>\n#include <revolution/os.h>"),
@@ -1311,3 +1388,113 @@ adapt("src/nw4r/db/db_assert.cpp", "nw4r/db/db_assert.cpp", [
 adapt("src/nw4r/lyt/lyt_arcResourceAccessor.cpp", "nw4r/lyt/lyt_arcResourceAccessor.cpp", [
     ("#include <extras.h>", "#include <cstring>\n#include <extras.h>", 1),
 ])
+
+# What the scene libraries leave out of their copies, for the whole-game library (petari_game in CMakeLists.txt).
+extract("src/Game/LiveActor/RailRider.cpp", "Game/LiveActor/RailRiderCamera.cpp",
+        '#include "Game/LiveActor/RailRider.hpp"\n#include "Game/Util/JMapInfo.hpp"\n#include "Game/Util/JMapUtil.hpp"\n'
+        '#include "Game/Util/MathUtil.hpp"\n#include "Game/Util/SceneUtil.hpp"\n', ["RailRider::RailRider(s32 a1, s32 a2)"])
+extract("src/Game/LiveActor/LiveActor.cpp", "Game/LiveActor/LiveActorSound.cpp",
+        '#include "Game/LiveActor/LiveActor.hpp"\n#include "Game/AudioLib/AudAnmSoundObject.hpp"\n#include "Game/Util/MemoryUtil.hpp"\n',
+        ["void LiveActor::initSound(int param1, bool is2D) {", "void LiveActor::addToSoundObjHolder() {"])
+# Metrowerks emitted this NO_INLINE body for the other files that call it; GCC only does for a plain definition.
+adapt("src/Game/Effect/ParticleEmitterHolder.cpp", "Game/Effect/ParticleEmitterHolder.cpp", [
+    ("inline bool ParticleEmitter::isContinuousParticle() const NO_INLINE {", "bool ParticleEmitter::isContinuousParticle() const {", 1),
+])
+# SpinDriverPathDrawer writes the GPU FIFO directly; through the one write point it stops by name like every GX call.
+adapt("src/Game/MapObj/SpinDriverPathDrawer.cpp", "Game/MapObj/SpinDriverPathDrawer.cpp", [
+    (f"    GXWGFifo.f32 = {value};", f"    GXWGFIFO_PUT(f32, {value});", 1) for value in ["rA1.x", "rA1.y", "rA1.z", "a2", "a3"]
+])
+# Tables linked into main.dol rather than read from an archive; the port asks smg::dolTable for them by name.
+dol_table = '#include <smg/DolTables.hpp>\n'
+adapt("src/Game/System/GameEventFlagTable.cpp", "Game/System/GameEventFlagTable.cpp", [
+    ("extern const JMapData GalaxyIDBCSV;\n", dol_table, 1),
+    ("        info.attach(&GalaxyIDBCSV);", '        info.attach(smg::dolTable("GalaxyIDBCSV"));', 1),
+])
+adapt("src/Game/System/GalaxyNameSortTable.cpp", "Game/System/GalaxyNameSortTable.cpp", [
+    ("extern const JMapData GalaxyIDBCSV;\n", dol_table, 1),
+    ("    info.attach(&GalaxyIDBCSV);", '    info.attach(smg::dolTable("GalaxyIDBCSV"));', 1),
+])
+adapt("src/Game/System/GameDataHolder.cpp", "Game/System/GameDataHolder.cpp", [
+    ("extern const u8 StoryEventBCSV[];\n", dol_table, 1),
+    ("    mMapInfo->attach(StoryEventBCSV);", '    mMapInfo->attach(smg::dolTable("StoryEventBCSV"));', 1),
+])
+adapt("src/Game/System/GameDataConst.cpp", "Game/System/GameDataConst.cpp", [
+    ('#include "Game/System/GameDataConst.hpp"', '#include "Game/System/GameDataConst.hpp"\n' + dol_table.rstrip("\n"), 1),
+    ("    info.attach(&GalaxyIDBCSV);", '    info.attach(smg::dolTable("GalaxyIDBCSV"));', 2),
+])
+adapt("src/Game/Screen/GalaxyMapDomeIcon.cpp", "Game/Screen/GalaxyMapDomeIcon.cpp", [
+    ('#include <cstdio>', '#include <cstdio>\n' + dol_table.rstrip("\n"), 1),
+    ("    mapInfo.attach(&GalaxyIDBCSV);", '    mapInfo.attach(smg::dolTable("GalaxyIDBCSV"));', 2),
+])
+
+# Paired-single bodies Metrowerks alone compiled, with nothing for GCC: each gets the C++ of what its asm computes
+# (tools/mwerks-only-asm.py finds them). Quantized casts clamp to the type's range and truncate, as Dolphin models them.
+adapt("src/JSystem/J3DGraphBase/J3DShapeMtx.cpp", "JSystem/J3DGraphBase/J3DShapeMtx.cpp", [
+    ("        stfs fr0, 0x20(destination)\n    }\n#endif", "        stfs fr0, 0x20(destination)\n    }\n#else\n"
+     "    for (int row = 0; row < 3; ++row) for (int col = 0; col < 3; ++col) dst[row][col] = src[row][col];\n#endif", 1),
+    ("        stfs v, 32(dst)\n    }\n#endif", "        stfs v, 32(dst)\n    }\n#else\n"
+     "    for (int row = 0; row < 3; ++row) for (int col = 0; col < 3; ++col) dst[row][col] = src[row][col];\n#endif", 1),
+])
+adapt("src/JSystem/J3DGraphBase/J3DStruct.cpp", "JSystem/J3DGraphBase/J3DStruct.cpp", [
+    ("    mEffectMtx[3][2] = kIdentityZero;\n    mEffectMtx[3][3] = kIdentityW;\n#endif",
+     "    mEffectMtx[3][2] = kIdentityZero;\n    mEffectMtx[3][3] = kIdentityW;\n#else\n"
+     "    for (int row = 0; row < 3; ++row) for (int col = 0; col < 4; ++col) mEffectMtx[row][col] = param_0[row][col];\n"
+     "    mEffectMtx[3][0] = mEffectMtx[3][1] = mEffectMtx[3][2] = 0.0f;\n    mEffectMtx[3][3] = 1.0f;\n#endif", 1),
+])
+adapt("src/JSystem/J3DGraphBase/J3DSys.cpp", "JSystem/J3DGraphBase/J3DSys.cpp", [
+    ("        mtspr   0x395, r3\n        }\n#endif", "        mtspr   0x395, r3\n        }\n#else\n"
+     "    // The quantization registers belong to the Wii's paired-single unit; the port's casts are plain C++.\n#endif", 1),
+])
+adapt("libs/RVL_SDK/include/revolution/os/OSFastCast.h", "include/revolution/os/OSFastCast.h", [
+    ('#define OSf32tou16(in, out) asm volatile("psq_st   %1, 0(%0), 1, 3 " : : "b"(out), "f"(*(in)) : "memory")\n#endif\n'
+     '#define OSu16tof32(in, out) asm volatile("psq_l   %0, 0(%1), 1, 3  " : "=f"(*(out)) : "b"(in))',
+     "static inline void OSf32tou16(const f32* in, volatile u16* out) {\n"
+     "    *out = (u16)(*in < 0.0f ? 0.0f : *in > 65535.0f ? 65535.0f : *in);\n}\n#endif\n"
+     "static inline void OSu16tof32(const u16* in, f32* out) {\n    *out = *in;\n}", 1),
+    ("        mtspr   0x395, r3\n    }\n#endif", "        mtspr   0x395, r3\n    }\n#else\n"
+     "    // The quantization registers belong to the Wii's paired-single unit; the port's casts are plain C++.\n#endif", 1),
+])
+adapt("libs/JSystem/include/JSystem/J3DGraphAnimator/J3DMtxBuffer.hpp", "include/JSystem/J3DGraphAnimator/J3DMtxBuffer.hpp", [
+    ("            stfs v, 32(destination)\n        }\n#endif", "            stfs v, 32(destination)\n        }\n#else\n"
+     "        for (int row = 0; row < 3; ++row) for (int col = 0; col < 3; ++col) mpNrmMtxArr[1][mCurrentViewNo][idx][row][col] = mtx[row][col];\n#endif", 1),
+])
+adapt("libs/JSystem/include/JSystem/J3DGraphBase/J3DDrawBuffer.hpp", "include/JSystem/J3DGraphBase/J3DDrawBuffer.hpp", [
+    ("    return out;\n#endif\n}", "    return out;\n#else\n    return m[2][0] * v.x + m[2][1] * v.y + m[2][2] * v.z + m[2][3];\n#endif\n}", 1),
+])
+adapt("src/JSystem/JMath/JMath.cpp", "JSystem/JMath/JMath.cpp", [
+    ("        ps_sum0     dp, dp, dp, dp\n    }\n#endif", "        ps_sum0     dp, dp, dp, dp\n    }\n#else\n"
+     "    dp = p->x * q->x + p->y * q->y + p->z * q->z + p->w * q->w;\n#endif", 1),
+    ("        psq_st rz, 8(dst), 1, 0\n\t}\n#endif", "        psq_st rz, 8(dst), 1, 0\n\t}\n#else\n"
+     "    dst->x = vec1->x * scale + vec2->x;\n    dst->y = vec1->y * scale + vec2->y;\n    dst->z = vec1->z * scale + vec2->z;\n#endif", 1),
+    ("        stfs bz, 8(dst)\n    }\n#endif", "        stfs bz, 8(dst)\n    }\n#else\n"
+     "    dst->x = (b->x - a->x) * t + a->x;\n    dst->y = (b->y - a->y) * t + a->y;\n    dst->z = (b->z - a->z) * t + a->z;\n#endif", 1),
+])
+
+
+# The rest of each file the scene libraries take extracts from, for the whole-game library: the same copy the
+# build would use otherwise, less what the extracts already define.
+for relative, firsts in extracted.items():
+    target, text = written.get(relative, (relative[len("src/"):], (root / relative).read_text()))
+    # A copy that already leaves them out (LiveActor.cpp, RailRider.cpp) is the whole file its library builds.
+    lines = text.splitlines()
+
+    def kept_here(first):
+        # Inline and template definitions stay: the rest of the file uses them, and copies of those link fine.
+        at = next((i for i, line in enumerate(lines) if first in line and "// Left out" not in line), None)
+        return at is None or first.startswith("inline ") or (at > 0 and lines[at - 1].startswith("template"))
+    present = [first for first in firsts if not kept_here(first)]
+    for before, after in extracted_fixes.get(relative, []):
+        if before not in text:
+            raise SystemExit(f"Upstream changed; review {relative}: {before!r}")
+        text = text.replace(before, after)
+    text = drop_definitions(text, relative, present, "built from an extract of this file")
+    if relative in NATIVE and relative not in written:
+        text = drop_definitions(text, relative, *reversed(NATIVE[relative]))
+    text = "// Generated Petari adaptation; see tools/prepare-petari.py.\n" + text.removeprefix("// Generated Petari adaptation; see tools/prepare-petari.py.\n")
+    destination = output / target
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if not destination.exists() or destination.read_text() != text:
+        destination.write_text(text)
+for relative in NATIVE:
+    if relative not in written and relative not in extracted:
+        adapt(relative, relative[len("src/"):], [])

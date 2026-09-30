@@ -1,0 +1,54 @@
+#!/usr/bin/env python3
+"""Lists code that only Metrowerks gets: #if/#ifdef __MWERKS__ blocks holding asm and no #else. GCC compiles
+such a function without that part, so it can come out empty or reading registers it never set.
+
+usage: mwerks-only-asm.py PETARI_DIR GENERATED_DIR [Game JSystem nw4r ...]
+Each file is read as the build reads it: the generated copy where one exists.
+"""
+import re, sys
+from pathlib import Path
+
+petari, generated, *trees = sys.argv[1:]
+petari, generated = Path(petari), Path(generated)
+condition = re.compile(r"#\s*(if|ifdef|ifndef|elif|else|endif)\b(.*)")
+
+
+def blocks(text):
+    """(line, has_else) for each __MWERKS__ block holding asm."""
+    stack, found = [], []
+    for number, line in enumerate(text.splitlines(), 1):
+        match = condition.match(line.strip())
+        if match:
+            keyword, rest = match.groups()
+            if keyword in ("if", "ifdef", "ifndef"):
+                mwerks = "__MWERKS__" in rest and keyword != "ifndef" and "!" not in rest
+                stack.append({"line": number, "mwerks": mwerks, "asm": False, "else": False})
+            elif keyword in ("elif", "else") and stack:
+                stack[-1]["else"] = True
+            elif keyword == "endif" and stack:
+                block = stack.pop()
+                if block["mwerks"] and block["asm"]:
+                    found.append((block["line"], block["else"]))
+        elif stack and stack[-1]["mwerks"] and not stack[-1]["else"] and re.search(r"\basm\b", line):
+            stack[-1]["asm"] = True
+    return found
+
+
+sources = []
+for tree in trees:
+    for source in sorted((petari / "src" / tree).rglob("*.cpp")):
+        relative = source.relative_to(petari / "src")
+        copy = generated / relative
+        sources.append((str(relative), copy if copy.exists() else source))
+headers = [(str(h.relative_to(petari)), h) for h in sorted(petari.glob("include/**/*.h*"))] + \
+          [(str(h.relative_to(petari)), h) for lib in ("JSystem", "nw4r", "RVL_SDK") for h in sorted((petari / "libs" / lib / "include").rglob("*.h*"))]
+for relative, path in headers:
+    copy = generated / "include" / Path(relative).relative_to(Path(relative).parts[0] if relative.startswith("include/") else Path(*Path(relative).parts[:3]))
+    sources.append((relative, copy if copy.exists() else path))
+total = 0
+for relative, path in sources:
+    for line, has_else in blocks(path.read_text(errors="ignore")):
+        if not has_else:
+            total += 1
+            print(f"{relative}:{line}")
+print(f"{total} asm blocks only Metrowerks compiles", file=sys.stderr)

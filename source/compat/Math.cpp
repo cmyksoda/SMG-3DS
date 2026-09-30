@@ -71,6 +71,59 @@ void PSMTXMultVecSR(const Mtx m, const Vec* src, Vec* dst) {
             m[1][0]*v.x + m[1][1]*v.y + m[1][2]*v.z,
             m[2][0]*v.x + m[2][1]*v.y + m[2][2]*v.z};
 }
+void PSMTXMultVecArraySR(const Mtx m, const Vec* src, Vec* dst, u32 count) {
+    for (u32 i = 0; i < count; ++i) PSMTXMultVecSR(m, &src[i], &dst[i]);
+}
+void PSMTXScale(Mtx m, f32 x, f32 y, f32 z) {
+    const f32 rows[3][4]{{x, 0, 0, 0}, {0, y, 0, 0}, {0, 0, z, 0}};
+    std::memcpy(m, rows, sizeof(rows));
+}
+void PSMTXTrans(Mtx m, f32 x, f32 y, f32 z) {
+    const f32 rows[3][4]{{1, 0, 0, x}, {0, 1, 0, y}, {0, 0, 1, z}};
+    std::memcpy(m, rows, sizeof(rows));
+}
+// The Apply forms put the scale or translation after src: each output row is src's row scaled, or moved.
+void PSMTXScaleApply(const Mtx src, Mtx dst, f32 x, f32 y, f32 z) {
+    const f32 scale[3]{x, y, z};
+    for (int row = 0; row < 3; ++row) for (int col = 0; col < 4; ++col) dst[row][col] = src[row][col] * scale[row];
+}
+void PSMTXTransApply(const Mtx src, Mtx dst, f32 x, f32 y, f32 z) {
+    PSMTXCopy(src, dst);
+    dst[0][3] += x;
+    dst[1][3] += y;
+    dst[2][3] += z;
+}
+void PSMTXRotTrig(Mtx m, char axis, f32 sinA, f32 cosA) {
+    f32 rows[3][4]{};
+    switch (axis) {
+    case 'x': case 'X': rows[0][0] = 1; rows[1][1] = cosA; rows[1][2] = -sinA; rows[2][1] = sinA; rows[2][2] = cosA; break;
+    case 'y': case 'Y': rows[0][0] = cosA; rows[0][2] = sinA; rows[1][1] = 1; rows[2][0] = -sinA; rows[2][2] = cosA; break;
+    case 'z': case 'Z': rows[0][0] = cosA; rows[0][1] = -sinA; rows[1][0] = sinA; rows[1][1] = cosA; rows[2][2] = 1; break;
+    default: return;  // the SDK leaves m alone for any other axis
+    }
+    std::memcpy(m, rows, sizeof(rows));
+}
+void PSMTX44Identity(Mtx44 m) {
+    for (int row = 0; row < 4; ++row) for (int col = 0; col < 4; ++col) m[row][col] = row == col ? 1.0f : 0.0f;
+}
+void PSMTX44Copy(const Mtx44 src, Mtx44 dst) { std::memmove(dst, src, sizeof(Mtx44)); }
+// The SDK's C bodies (mtx44.c, mtx.c), as they are.
+void C_MTXOrtho(Mtx44 m, f32 t, f32 b, f32 l, f32 r, f32 n, f32 f) {
+    const f32 x = 1.0f / (r - l), y = 1.0f / (t - b), z = 1.0f / (f - n);
+    const f32 rows[4][4]{{2.0f * x, 0, 0, -(r + l) * x}, {0, 2.0f * y, 0, -(t + b) * y}, {0, 0, -1.0f * z, -f * z}, {0, 0, 0, 1}};
+    std::memcpy(m, rows, sizeof(rows));
+}
+void C_MTXLightPerspective(Mtx m, f32 fovY, f32 aspect, f32 scaleS, f32 scaleT, f32 transS, f32 transT) {
+    const f32 cot = 1.0f / std::tan(MTXDegToRad(fovY * 0.5f));
+    const f32 rows[3][4]{{(cot / aspect) * scaleS, 0, -transS, 0}, {0, cot * scaleT, -transT, 0}, {0, 0, -1.0f, 0}};
+    std::memcpy(m, rows, sizeof(rows));
+}
+void C_MTXLightOrtho(Mtx m, f32 t, f32 b, f32 l, f32 r, f32 scaleS, f32 scaleT, f32 transS, f32 transT) {
+    const f32 x = 1.0f / (r - l), y = 1.0f / (t - b);
+    const f32 rows[3][4]{{2.0f * x * scaleS, 0, 0, -(r + l) * x * scaleS + transS},
+                         {0, 2.0f * y * scaleT, 0, -(t + b) * y * scaleT + transT}, {0, 0, 0, 1}};
+    std::memcpy(m, rows, sizeof(rows));
+}
 u32 PSMTXInverse(const Mtx m, Mtx out) {
     const f32 c00 = m[1][1]*m[2][2] - m[1][2]*m[2][1], c01 = m[1][2]*m[2][0] - m[1][0]*m[2][2];
     const f32 c02 = m[1][0]*m[2][1] - m[1][1]*m[2][0];
@@ -144,30 +197,6 @@ void PSQUATMultiply(const Quaternion* p, const Quaternion* q, Quaternion* out) {
 }
 }
 
-void JMAVECLerp(const Vec* a, const Vec* b, Vec* out, f32 t) {
-    *out = {a->x+t*(b->x-a->x), a->y+t*(b->y-a->y), a->z+t*(b->z-a->z)};
-}
-void JMAVECScaleAdd(const Vec* a, const Vec* b, Vec* out, f32 scale) {
-    *out = {a->x*scale+b->x, a->y*scale+b->y, a->z*scale+b->z};
-}
-void JMAQuatLerp(const Quaternion* a, const Quaternion* b, f32 t, Quaternion* out) {
-    const f32 sign = a->x*b->x+a->y*b->y+a->z*b->z+a->w*b->w < 0 ? -1.0f : 1.0f;
-    *out = {a->x+t*(sign*b->x-a->x), a->y+t*(sign*b->y-a->y),
-            a->z+t*(sign*b->z-a->z), a->w+t*(sign*b->w-a->w)};
-}
-void JMAEulerToQuat(s16 x, s16 y, s16 z, Quaternion* out) {
-    const f32 cx = JMASCos(x/2), cy = JMASCos(y/2), cz = JMASCos(z/2);
-    const f32 sx = JMASSin(x/2), sy = JMASSin(y/2), sz = JMASSin(z/2);
-    *out = {sx*cy*cz-cx*sy*sz, cx*sy*cz+sx*cy*sz, cx*cy*sz-sx*sy*cz, cx*cy*cz+sx*sy*sz};
-}
-void JMAMTXApplyScale(const Mtx src, Mtx dst, f32 x, f32 y, f32 z) {
-    for (int row=0; row<3; ++row) {
-        dst[row][0] = src[row][0]*x;
-        dst[row][1] = src[row][1]*y;
-        dst[row][2] = src[row][2]*z;
-        dst[row][3] = src[row][3];
-    }
-}
 
 // The PowerPC intrinsics. frsqrte is an estimate good to 1/32; callers refine it, and the exact root
 // only makes their result closer.
