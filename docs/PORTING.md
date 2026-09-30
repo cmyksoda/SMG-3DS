@@ -98,6 +98,29 @@ The New Nintendo 3DS and New 2DS family is the target: the controls need ZL, ZR 
 C-Stick, and the faster CPU and larger memory are what full Galaxy needs most. Nothing so
 far establishes that full gameplay fits or runs acceptably even there.
 
+## Bringing up NameObj and the scene (decision needed)
+
+Placed gravity, collision and every actor sit on `NameObj`. Its 13 sources split cleanly:
+
+| Slice | Needs |
+| --- | --- |
+| `NameObj`, `NameObjRegister`, `NameObjHolder`, `NameObjGroup` | `SingletonHolder`, `MR::getHashCode`, movement on/off requests |
+| `NameObjListExecutor` | draw/movement list functors and camera types - the scheduler |
+| `NameObjExecuteHolder`, `NameObjFinder` | `GameSystem`, `GameSystemSceneController`, `SceneObjHolder` |
+
+Three ways forward:
+
+1. **Compile the scene system too.** `GameSystem`, its scene controller and `SceneObjHolder`
+   come from `Game/System` (99 sources) and pull in JKernel heaps, threads, audio and the
+   layout system. Most faithful; weeks of bring-up before anything placed runs.
+2. **Native scene everywhere.** Reimplement the holder and scheduler natively. Fastest,
+   but it grows into a second engine that drifts from the original.
+3. **Original objects, native holder (recommended).** Compile the first slice and the
+   scheduler, and give them a small native `SceneObjHolder` that owns only what the port
+   has brought up - `PlanetGravityManager` first, so `GravityCreator` can build a zone's
+   real gravity from `planetobjinfo`. It is an explicit, removable boundary like
+   `smgGameRandom()`, replaced by the original once `GameSystem` runs.
+
 ## Pointer details to preserve
 
 `StarPieceShooter::tryShoot` consumes both Wii B hold and trigger states, so ZR (and the
