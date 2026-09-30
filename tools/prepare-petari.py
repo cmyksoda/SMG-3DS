@@ -1528,6 +1528,12 @@ adapt("src/JSystem/JKernel/JKRHeap.cpp", "JSystem/JKernel/JKRHeap.cpp", [
      "        OSReport(\"JKRHeap %p could not give %lu bytes aligned %d (%lu free, %lu in one block)\\n\", this, (unsigned long)size, align,\n"
      "                 (unsigned long)getTotalFreeSize(), (unsigned long)getFreeSize());\n    }\n    return memory;\n}", 1),
 ])
+# The message file turns native where MessageData first reads it (compat/smg/NativeResources.hpp).
+adapt("src/Game/System/MessageHolder.cpp", "Game/System/MessageHolder.cpp", [
+    ('#include <JSystem/JKernel/JKRArchive.hpp>\n', '#include <JSystem/JKernel/JKRArchive.hpp>\n#include <smg/NativeResources.hpp>\n', 1),
+    ('    u8* msgData = (u8*)pArchive->getResource("Message.bmg");\n',
+     '    u8* msgData = (u8*)pArchive->getResource("Message.bmg");\n    smgNativeBmg(msgData, pArchive->getResSize(msgData));\n', 1),
+])
 # Reads past an array, which gcc treats as unreachable and may fold the surrounding loop or copy away.
 # Nintendo's loop runs past three horizontal tasks into mInfinityTasks, which createInfinityTask then replaces;
 # stopping at three leaves the same tasks, less four leaked allocations.

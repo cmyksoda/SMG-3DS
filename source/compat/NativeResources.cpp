@@ -1,7 +1,10 @@
 // Big-endian game data turned to native order in place, format by format, where original code first reads it.
 // See compat/smg/NativeResources.hpp.
 #include <JSystem/JKernel/JKRArchive.hpp>
+#include <smg/Bmg.hpp>
 #include <smg/NativeResources.hpp>
+#include <cstdio>
+#include <cstdlib>
 
 namespace {
 void swap(u32& value) { value = __builtin_bswap32(value); }
@@ -35,5 +38,12 @@ void smgNativeRarc(void* archive) {
         swap(files[i].mFileID);
         swap(files[i].mHash);
         swapWords(reinterpret_cast<u8*>(&files[i]) + 4, 3);  // flag and name offset, data offset or directory, size
+    }
+}
+
+void smgNativeBmg(void* bmg, u32 size) {
+    if (const char* why = smg::nativeBmg(static_cast<std::uint8_t*>(bmg), size)) {
+        std::fprintf(stderr, "A BMG message file %s\n", why);
+        std::abort();
     }
 }

@@ -404,18 +404,35 @@ Every original parser meets this, format by format. `source/compat/NativeResourc
 structures native in place where original code first reads them, recognising data it already turned. RARC
 archives are first (at `JKRMemArchive`'s mount); `JKRArchive::SDIFileEntry`'s `mFlag:8 / mNameOffset:24`
 also swaps declaration order, since Metrowerks fills bitfields from the top and GCC on ARM from the bottom.
-Still to come as the boot reaches them: DVD, compressed and ARAM archives' header reads, BCSV through
-`JMapInfo::attach` (the port's `smg::Bcsv` already knows the layout), fonts (BRFNT), messages (BMG), layouts
+BCSV tables turn at `JMapInfo::attach` (in place, or as a repacked copy where ARM can't load a field where it
+sits). Still to come as the boot reaches them: DVD, compressed and ARAM archives' header reads, fonts (BRFNT), layouts
 (BRLYT/BRLAN), J3D models and animations (the port's J3DSkeletonImage and native key tables are a start),
 collision (KCL), particles, audio banks.
 
-**Where the boot stands** (2026-09-30, 09:20): through static initialization, DVD, VI, the root heap and
+**Messages (BMG).** The game reads its text more than one way, so no single byte order serves it. Characters
+and a tag's type are 16-bit units; `MessageEditorMessageTag` reads a tag's length and group as bytes, and so
+does `TalkNodeCtrl`. Parameters are read as bytes, halves, words or text, depending on the kind. `smg::nativeBmg`
+(`source/core/Bmg.cpp`) walks each message from its INF1 offset and plans every unit once: characters and
+types are swapped; a tag's (length, group) unit keeps its bytes; parameters follow the game's reader for their
+kind. Those are: a wait's `getParam16` (group 1 type 0), a sound or font name's `getParamPtr` text (groups 2
+and 10), a player name's or colour's `getParam8` (group 5, group 255 type 0), and a number or string tag's
+slot plus `getParam32(1)` argument (groups 6 and 7). The game writes the slot natively before it reads it, and
+it is empty on the disc. FLW1's message and branch nodes read two halves after the index, event nodes one word.
+FLI1 is never read, and on the disc its declared size runs past the file, so only its block header turns. A
+kind with parameters the port has no layout for is refused whole, by name: the system group's ruby (its text
+sits at an odd byte), group 8's message index and group 11 aren't on the US disc. `resource_audit FILES --bmg`
+turns every BMG on the disc and reads each field the game's way against the original: 3 files, 7,392
+messages, 306,992 characters and tags, 3,948 flow nodes, 50 tag kinds, none refused, none different.
+`MessageData` calls it (`smgNativeBmg`) right after taking the file from its archive.
+
+**Where the boot stands** (2026-09-30, 10:25): through static initialization, DVD, VI, the root heap and
 all of `HeapMemoryWatcher`'s heaps, nw4r's layout init, JKRAram's MEM2 ARAM, the error archive's mount, the
-language setting and WiiConnect24, the SDK's own `GXInit` (every setup command it sends decoded), and the layout
-holders over the error message archive, to `MessageData`'s constructor: the game's BMG text, big-endian and
-UTF-16. That needs its converter and a decision on `wchar_t` (below). Rendering is the other open design: the
-command processor has the state, and turning primitives into citro3d draws is next, with the port's
-TEV-to-PICA combiner and texture conversion.
+language setting and WiiConnect24, the SDK's own `GXInit` (every setup command it sends decoded), the layout
+holders over the error message archive, and `MessageData` over the system messages, to `KPADInit`: the Wii
+Remote's processing library, which the port's pad has to take the place of. The text itself is not drawn yet.
+That needs `wchar_t` settled (below): the game reads its UTF-16 text through `wchar_t*`. Rendering is the other
+open design: the command processor has the state, and turning primitives into citro3d draws is next, with the
+port's TEV-to-PICA combiner and texture conversion.
 
 **Upstream fallbacks that compile to nothing.** Besides the asm blocks, some SDK headers give non-Metrowerks
 compilers empty definitions meant only for an editor's parser: `GXRegs.h`'s `FAST_FLAG_SET` (which packs every
@@ -429,7 +446,9 @@ would give game code MSL's own formatter (its decompiled `printf.c`) or wrap the
 
 **Wide gaps, measured.** 64-bit hosts: 94 of the 1,803 files need fixes (`long` overload ambiguities, pointer
 casts to `u32`), and the game stores pointers in `u32`, so a 32-bit host is the honest target for sanitizer runs.
-`wchar_t` is two bytes on the Wii and four here, which UTF-16 text through `wchar_t` will meet. MSL's
+`wchar_t` is two bytes on the Wii and four here, and the game reads its UTF-16 text through `wchar_t*`
+(`TalkNodeCtrl`, the tag processors, nw4r's `TextWriter`), so text will need `-fshort-wchar` for the game's
+libraries and wide-string functions built for it (MSL's own, from the decomp), not newlib's. MSL's
 `std::sort` orders equal keys differently from libstdc++'s.
 
 ## The native scene boundary
@@ -534,6 +553,10 @@ repacking unaligned fields; regression tests cover packed offsets and odd record
 The four remaining `.arc` files are U8-format Wii HOME Menu resources, currently unsupported.
 `resource_audit` reports them and returns failure rather than counting them as validated.
 
+`resource_audit --bmg` turns all three message files (English, French, Spanish) native under ASan and UBSan:
+7,392 messages, 306,992 characters and tags in 50 kinds, 3,948 flow nodes, each read the game's way against the
+original, none refused and none different.
+
 `resource_audit --gravity` places the gravity of all 136 scenarios in the 48 galaxies through
 the original creators under ASan and UBSan, and asks every placed gravity for its pull at 48
 points around Mario's start (181,392 pulls, none infinite or NaN). The disc has 1,075 global
@@ -569,6 +592,6 @@ across 12 zones; the preview draws 56 rigid models in 172 placements.
 
 The portable math tests check tolerances and conventions, not bit-identical Gekko rounding.
 The native validation app passes 1,069 math, 37 WPad, 190 BCSV, 1,043 J3D model/texture,
-8,810 TEV combiner, 27 original gravity, 27 NameObj, 89 scene and gravity creator, 48 collision, 21 J3D animation, 13 original actor, 6 J3D transform, 6 J3D skeleton, 14 GX command processor, 7 ETC1 and 8 GPU texture checks on emulated ARM
+8,810 TEV combiner, 27 original gravity, 27 NameObj, 89 scene and gravity creator, 48 collision, 21 J3D animation, 13 original actor, 6 J3D transform, 6 J3D skeleton, 14 GX command processor, 19 BMG text, 7 ETC1 and 8 GPU texture checks on emulated ARM
 in Azahar; the GPU checks compare the hardware's ETC1 decoding against ours. Of the disc's
 7,780 materials, 6,987 translate to the combiner exactly. No physical console has been tested.

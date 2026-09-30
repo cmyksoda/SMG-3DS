@@ -9,3 +9,5 @@ const void* smgNativeBcsv(void* table);
 extern void* (*smgBcsvAllocator)(const void* beside, u32 size);
 // Why a table cannot be turned in place, or null when it can (or already is); repacking handles misplaced fields.
 const char* smgNativeBcsvProblem(const void* table);
+// A BMG message file turned in place (smg::nativeBmg); one the port cannot turn stops, naming why.
+void smgNativeBmg(void* bmg, u32 size);
