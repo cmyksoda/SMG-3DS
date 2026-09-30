@@ -83,6 +83,7 @@ adapt("libs/JSystem/include/JSystem/JGeometry/TUtil.hpp", "include/JSystem/JGeom
 
 adapt("libs/JSystem/include/JSystem/JGeometry/TVec.hpp", "include/JSystem/JGeometry/TVec.hpp", [
     ("TVec3< T >(", "TVec3(", 2),
+    ("        TVec3(int x, int y, int Z);\n", "", 1),
     ("TVec2< f32 >::TVec2()", "inline TVec2< f32 >::TVec2()", 1),
     ("void set(const JGeometry::TVec2< A >& rSrc) NO_INLINE", "NO_INLINE void set(const JGeometry::TVec2< A >& rSrc)", 1),
     ("void set(T _x, T _y, T _z) NO_INLINE", "NO_INLINE void set(T _x, T _y, T _z)", 1),
@@ -104,6 +105,121 @@ adapt("libs/JSystem/include/JSystem/JGeometry/TVec.hpp", "include/JSystem/JGeome
     ("__fabsf(JMAATan2", "std::fabs(JMAATan2", 1),
     ("                    f32 estimate = __frsqrte(length);\n                    inverse = (0.5f * estimate) * (3.0f - length * (estimate * estimate));", "                    inverse = 1.0f / std::sqrt(length);", 1),
 ])
+
+adapt("libs/JSystem/include/JSystem/JGeometry/TMatrix.hpp", "include/JSystem/JGeometry/TMatrix.hpp", [
+    ("rSrc.x * get(0, 0) + rSrc.y * get(0, 1) + rSrc.z * get(0, 2)",
+     "rSrc.x * this->get(0, 0) + rSrc.y * this->get(0, 1) + rSrc.z * this->get(0, 2)", 1),
+    ("rSrc.x * get(1, 0) + rSrc.y * get(1, 1) + rSrc.z * get(1, 2)",
+     "rSrc.x * this->get(1, 0) + rSrc.y * this->get(1, 1) + rSrc.z * this->get(1, 2)", 1),
+    ("rSrc.x * get(2, 0) + rSrc.y * get(2, 1) + rSrc.z * get(2, 2)",
+     "rSrc.x * this->get(2, 0) + rSrc.y * this->get(2, 1) + rSrc.z * this->get(2, 2)", 1),
+])
+
+adapt("libs/JSystem/include/JSystem/JKernel/JKRHeap.hpp", "include/JSystem/JKernel/JKRHeap.hpp", [
+    ("""#ifdef __MWERKS__
+void* operator new(u32, int);
+void* operator new(u32, JKRHeap*);
+void* operator new(u32, JKRHeap*, int);
+void* operator new[](u32, int);
+
+void* operator new[](u32, JKRHeap*, int);
+#endif""", """void* operator new(std::size_t, int);
+void* operator new(std::size_t, JKRHeap*);
+void* operator new(std::size_t, JKRHeap*, int);
+void* operator new[](std::size_t, int);
+void* operator new[](std::size_t, JKRHeap*, int);""", 1),
+    ("#include <revolution.h>", "#include <revolution.h>\n#include <cstddef>", 1),
+])
+
+adapt("include/Game/Util/MathUtil.hpp", "include/Game/Util/MathUtil.hpp", [
+    ("        return __fabsf(x);", "        return std::fabs(x);", 1),
+    ("        return __abs(x);", "        return x < 0 ? -x : x;", 1),
+    ("        return __fabs(x);", "        return std::fabs(x);", 1),
+    ("inline void clampMax(f32* pValue, f32 max) NO_INLINE {", "NO_INLINE inline void clampMax(f32* pValue, f32 max) {", 1),
+    # Only GXColor is used; the whole GX header defines the Wii's hardware FIFO in every user.
+    ("#include <revolution/gx.h>", "#include <revolution/gx/GXStruct.h>", 1),
+])
+
+adapt("src/Game/Util/MathUtil.cpp", "Game/Util/MathUtil.cpp", [
+    ("""    __REGISTER f32 inverse;
+    __asm { frsqrte inverse, value }
+    f32 estimate = inverse * value;
+    inverse = -(estimate * inverse - 3.0f);
+    inverse *= estimate;
+    inverse *= 0.5f;
+    return inverse;""", "    return std::sqrt(value);", 1),
+    ('#include "Game/Util/MathUtil.hpp"', '#include "Game/Util/MathUtil.hpp"\n#include <cmath>', 1),
+    ('#include "Game/System/GameSystem.hpp"\n#include "Game/System/GameSystemObjHolder.hpp"\n',
+     '#include <smg/GameRandom.hpp>\n', 1),
+    ('#include "Game/Util/SingletonHolder.hpp"\n', '', 1),
+    ("SingletonHolder< GameSystem >::get()->mObjHolder->mRandom.rand()", "smgGameRandom().rand()", 1),
+    # Paired-single bodies with no other branch; these are what the assembly computes.
+    ("""    }  // clang-format on
+    return dot;
+#endif""", """    }  // clang-format on
+    return dot;
+#else
+    Vec* out = const_cast< Vec* >(pDst);
+    const f32 dot = pSrc->x * pKill->x + pSrc->y * pKill->y + pSrc->z * pKill->z;
+    const Vec src = *pSrc;
+    out->x = src.x - dot * pKill->x;
+    out->y = src.y - dot * pKill->y;
+    out->z = src.z - dot * pKill->z;
+    return dot;
+#endif""", 1),
+    ("""            psq_st f2, 8(pA1), 1, 0
+        }
+
+#endif""", """            psq_st f2, 8(pA1), 1, 0
+        }
+#else
+        TVec3f* out = const_cast< TVec3f* >(pA1);
+        out->x += pA2->x * a3;
+        out->y += pA2->y * a3;
+        out->z += pA2->z * a3;
+#endif""", 1),
+    ("""            psq_st    f3, 8(pA3), 1, 0
+        }
+
+#endif""", """            psq_st    f3, 8(pA3), 1, 0
+        }
+#else
+        const TVec3f a = *pA1, b = *pA2;
+        pA3->x = a.x * a4 + b.x * a5;
+        pA3->y = a.y * a4 + b.y * a5;
+        pA3->z = a.z * a4 + b.z * a5;
+#endif""", 1),
+])
+
+adapt("src/Game/Util/MtxUtil.cpp", "Game/Util/MtxUtil.cpp", [])
+
+adapt("include/Game/Util/Array.hpp", "include/Game/Util/Array.hpp", [
+    ("#include <revolution.h>", "#include <revolution/types.h>", 1),
+])
+
+adapt("libs/JSystem/include/JSystem/JMath/random.hpp", "include/JSystem/JMath/random.hpp", [
+    ("#include <revolution.h>", "#include <revolution/types.h>", 1),
+])
+
+adapt("libs/JSystem/include/JSystem/JGeometry/TBox.hpp", "include/JSystem/JGeometry/TBox.hpp", [
+    ("#include <revolution.h>", "#include <revolution/types.h>", 1),
+])
+
+# Only matrix types are needed; the whole SDK brings display-list globals into every user.
+adapt("include/Game/Util/MtxUtil.hpp", "include/Game/Util/MtxUtil.hpp", [
+    ("#include <revolution.h>", "#include <revolution/types.h>", 1),
+])
+
+# The gravity shapes use only math helpers; the umbrella headers drag in layouts, text and actors.
+for name in ["PlanetGravity", "PointGravity", "ParallelGravity", "CubeGravity", "DiskGravity",
+             "DiskTorusGravity", "ConeGravity", "SegmentGravity", "WireGravity"]:
+    relative = f"src/Game/Gravity/{name}.cpp"
+    text = (root / relative).read_text()
+    adapt(relative, f"Game/Gravity/{name}.cpp", [
+        ('#include "Game/Util.hpp"', '#include "Game/Util/MathUtil.hpp"', text.count('#include "Game/Util.hpp"')),
+        # The umbrella also brings the actor-based gravity objects, and with them most of the game.
+        ('#include "Game/Gravity.hpp"', f'#include "Game/Gravity/{name}.hpp"', text.count('#include "Game/Gravity.hpp"')),
+    ])
 
 adapt("include/Game/System/WPadButton.hpp", "include/Game/System/WPadButton.hpp", [
     ("#include <revolution.h>", "#include <revolution/kpad.h>", 1),

@@ -28,6 +28,10 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${PETARI_MATH_HEA
 add_library(petari_core STATIC
   source/compat/StringUtil.cpp
   source/compat/Math.cpp
+  source/compat/GameRandom.cpp
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/MathUtil.cpp"
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/MtxUtil.cpp"
+  "${PETARI}/src/JSystem/JMath/random.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/JSystem/JMath/JMATrigonometric.cpp"
   "${JMAP_SOURCE}"
   "${PETARI}/src/JSystem/JGadget/hashcode.cpp"
@@ -39,10 +43,25 @@ add_library(petari_core STATIC
   "${PETARI}/src/Game/System/WPadButton.cpp"
   "${PETARI}/src/Game/System/WPadStick.cpp"
   "${PETARI}/src/Game/Util/TriggerChecker.cpp")
-target_include_directories(petari_core PUBLIC compat "${CMAKE_CURRENT_BINARY_DIR}/petari/include" "${PETARI}/include"
+target_include_directories(petari_core PUBLIC compat)
+# Upstream headers are compiled as they are; their warnings are not ours to fail on.
+target_include_directories(petari_core SYSTEM PUBLIC "${CMAKE_CURRENT_BINARY_DIR}/petari/include" "${PETARI}/include"
   "${PETARI}/libs/RVL_SDK/include" "${PETARI}/libs/JSystem/include")
 # Original resource interfaces reinterpret stored numeric fields through several types.
 target_compile_options(petari_core PUBLIC -fno-strict-aliasing)
+
+set(GRAVITY_SHAPES PlanetGravity PointGravity ParallelGravity CubeGravity DiskGravity DiskTorusGravity
+  ConeGravity SegmentGravity WireGravity)
+set(GRAVITY_SOURCES)
+foreach(shape IN LISTS GRAVITY_SHAPES)
+  list(APPEND GRAVITY_SOURCES "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Gravity/${shape}.cpp")
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PETARI}/src/Game/Gravity/${shape}.cpp")
+endforeach()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PETARI}/src/Game/Util/MathUtil.cpp"
+  "${PETARI}/src/Game/Util/MtxUtil.cpp"
+  "${PETARI}/include/Game/Util/MathUtil.hpp" "${PETARI}/libs/JSystem/include/JSystem/JGeometry/TMatrix.hpp")
+add_library(petari_gravity STATIC ${GRAVITY_SOURCES})
+target_link_libraries(petari_gravity PUBLIC petari_core)
 
 add_library(smg_platform STATIC
   source/core/Input.cpp source/core/Motion.cpp source/core/Settings.cpp source/core/Session.cpp
@@ -77,11 +96,11 @@ if(NINTENDO_3DS)
   option(SMG_BUILD_VALIDATION "Build a separate on-device math/input test app" OFF)
   if(SMG_BUILD_VALIDATION)
     add_executable(native_validation tests/NativeTests.cpp tests/MathTests.cpp tests/PadTests.cpp tests/BcsvTests.cpp
-      tests/ModelTests.cpp tests/CombinerTests.cpp)
+      tests/ModelTests.cpp tests/CombinerTests.cpp tests/GravityTests.cpp)
     set_target_properties(native_validation PROPERTIES SUFFIX ".elf")
     target_compile_definitions(native_validation PRIVATE SMG_TEST_RUNNER)
     target_link_directories(native_validation PRIVATE "${DEVKITPRO}/libctru/lib")
-    target_link_libraries(native_validation PRIVATE smg_platform ctru m)
+    target_link_libraries(native_validation PRIVATE smg_platform petari_gravity ctru m)
     target_compile_options(native_validation PRIVATE -Wall -Wextra -Werror)
     add_custom_command(TARGET native_validation POST_BUILD
       COMMAND "${DEVKITPRO}/tools/bin/3dsxtool" "$<TARGET_FILE:native_validation>"
@@ -123,6 +142,10 @@ else()
   target_link_libraries(model_tests PRIVATE smg_platform)
   target_compile_options(model_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME j3d_models COMMAND model_tests)
+  add_executable(gravity_tests tests/GravityTests.cpp)
+  target_link_libraries(gravity_tests PRIVATE petari_gravity)
+  target_compile_options(gravity_tests PRIVATE -Wall -Wextra -Werror)
+  add_test(NAME original_gravity COMMAND gravity_tests)
   add_executable(combiner_tests tests/CombinerTests.cpp)
   target_link_libraries(combiner_tests PRIVATE smg_platform)
   target_compile_options(combiner_tests PRIVATE -Wall -Wextra -Werror)

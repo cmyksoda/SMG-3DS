@@ -1,5 +1,6 @@
 #include <JSystem/JGeometry/TVec.hpp>
 #include <JSystem/JMath/JMath.hpp>
+#include <Game/Util/MathUtil.hpp>
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -16,7 +17,70 @@ bool near(float a, float b, float tolerance = 0.00001f) { return std::fabs(a-b) 
 bool vec(const Vec& v, float x, float y, float z) { return near(v.x,x) && near(v.y,y) && near(v.z,z); }
 }
 
+void sdkMatrices() {
+    Mtx m{{1, 0, 0, 1}, {0, 1, 0, 2}, {0, 0, 1, 3}};
+    Vec v{1, 1, 1};
+    PSMTXMultVec(m, &v, &v);
+    check(vec(v, 2, 3, 4), "matrix times point applies translation, in place");
+    const Vec z{0, 0, 5};
+    PSMTXRotAxisRad(m, &z, 1.5707963f);
+    Vec x{1, 0, 0};
+    PSMTXMultVec(m, &x, &x);
+    check(vec(x, 0, 1, 0) && m[0][3] == 0 && m[2][3] == 0, "right-handed axis rotation about an unnormalized axis");
+    Quaternion i{1, 0, 0, 0}, j{0, 1, 0, 0}, one{0, 0, 0, 1};
+    PSQUATMultiply(&i, &j, &i);
+    check(near(i.x, 0) && near(i.y, 0) && near(i.z, 1) && near(i.w, 0), "quaternion ij = k, in place");
+    PSQUATMultiply(&one, &j, &i);
+    check(near(i.y, 1) && near(i.w, 0), "identity quaternion product");
+
+    const f32 h = std::sqrt(0.5f);
+    const Quaternion quarterZ{0, 0, h, h};
+    Mtx rotation, moved{{1, 0, 0, 5}, {0, 2, 0, 6}, {0, 0, 1, 7}}, both, inverse, identity;
+    PSMTXQuat(rotation, &quarterZ);
+    Vec p{1, 0, 0};
+    PSMTXMultVecSR(rotation, &p, &p);
+    check(vec(p, 0, 1, 0), "quaternion to matrix: a quarter turn about Z");
+    PSMTXConcat(moved, rotation, both);
+    check(PSMTXInverse(both, inverse) == 1, "invertible affine matrix");
+    PSMTXConcat(inverse, both, identity);
+    bool isIdentity = true;
+    for (int row = 0; row < 3; ++row) for (int col = 0; col < 4; ++col)
+        isIdentity &= near(identity[row][col], row == col ? 1.0f : 0.0f);
+    check(isIdentity, "inverse times matrix is identity");
+    const Mtx flat{{1, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 1, 0}};
+    check(PSMTXInverse(flat, inverse) == 0, "singular matrix reports failure");
+    Vec shifted{1, 1, 1};
+    PSMTXMultVecSR(moved, &shifted, &shifted);
+    check(vec(shifted, 1, 2, 1), "rotation-and-scale product ignores translation");
+    Quaternion back;
+    C_QUATMtx(&back, rotation);
+    check(near(std::fabs(PSQUATDotProduct(&back, &quarterZ)), 1), "matrix to quaternion round trip");
+    const Quaternion start{0, 0, 0, 1};
+    Quaternion half;
+    C_QUATSlerp(&start, &quarterZ, &half, 0.5f);
+    check(near(half.z, std::sin(3.14159265f / 8)) && near(half.w, std::cos(3.14159265f / 8)), "slerp halfway is an eighth turn");
+    const Quaternion flipped{0, 0, -h, -h};
+    C_QUATSlerp(&start, &flipped, &half, 0.5f);
+    check(near(std::fabs(half.z), std::sin(3.14159265f / 8)), "slerp takes the shorter way round");
+}
+
+// Original MR helpers whose only bodies were paired-single assembly.
+void pairedSingleHelpers() {
+    TVec3f kept;
+    const f32 removed = MR::vecKillElement(TVec3f(1, 2, 3), TVec3f(0, 1, 0), &kept);
+    check(removed == 2 && kept.x == 1 && kept.y == 0 && kept.z == 3, "vecKillElement removes the killed direction");
+    TVec3f sum(1, 1, 1);
+    const TVec3f step(1, 2, 3);
+    MR::vecScaleAdd(&sum, &step, 2);
+    check(sum.x == 3 && sum.y == 5 && sum.z == 7, "vecScaleAdd accumulates in place");
+    TVec3f blend;
+    MR::vecBlend(TVec3f(0, 0, 0), TVec3f(10, 20, 30), &blend, 0.25f);
+    check(near(blend.x, 2.5f) && near(blend.y, 5) && near(blend.z, 7.5f), "vecBlend weights both ends");
+}
+
 int runMathTests() {
+    sdkMatrices();
+    pairedSingleHelpers();
     check(near(JMAFastSqrt(9),3), "JMA square root");
     check(JMAFastSqrt(-4) == -4 && std::signbit(JMAFastSqrt(-0.0f)), "original nonpositive square root convention");
     check(near(JGeometry::TUtil<float>::sqrt(25),5), "geometry square root");
