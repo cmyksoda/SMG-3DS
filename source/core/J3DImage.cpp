@@ -1,4 +1,5 @@
 #include <smg/J3DImage.hpp>
+#include <Game/Animation/XanimeCore.hpp>
 #include <JSystem/J3DGraphAnimator/J3DJoint.hpp>
 #include <JSystem/J3DGraphAnimator/J3DModel.hpp>
 #include <JSystem/J3DGraphAnimator/J3DModelData.hpp>
@@ -238,5 +239,12 @@ void forgetJ3DSkeleton(J3DModel* model) {
     delete tree.mBasicMtxCalc;
     delete data;
     delete model;
+}
+
+void forgetXanimeCore(XanimeCore* core) {
+    delete[] core->mJointList;
+    delete[] core->mTransformList;
+    delete[] core->mTrackList;
+    delete core;
 }
 } // namespace smg

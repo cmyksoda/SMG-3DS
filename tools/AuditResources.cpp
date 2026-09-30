@@ -1,5 +1,6 @@
 #include <smg/Actors.hpp>
 #include <smg/J3DImage.hpp>
+#include <Game/Animation/XanimeCore.hpp>
 #include <JSystem/J3DGraphAnimator/J3DJoint.hpp>
 #include <JSystem/J3DGraphAnimator/J3DModel.hpp>
 #include <JSystem/J3DGraphAnimator/J3DMtxBuffer.hpp>
@@ -476,7 +477,8 @@ int main(int argc, char** argv) {
     if (ec) { std::fprintf(stderr,"Directory traversal: %s\n",ec.message().c_str()); return 2; }
     std::sort(archives.begin(), archives.end());
     std::size_t tables=0, records=0, resources=0, errors=0, modelCount=0, triangles=0, materials=0, exact=0;
-    std::size_t brks=0, brkErrors=0, brkUnmatched=0, skinChecked=0, skinWrong=0, j3dChecked=0, j3dWrong=0, bcks=0, bckErrors=0;
+    std::vector<float> xanimeGaps;
+    std::size_t brks=0, brkErrors=0, brkUnmatched=0, skinChecked=0, skinWrong=0, j3dChecked=0, j3dWrong=0, xanimeChecked=0, bcks=0, bckErrors=0;
     std::map<std::string, std::size_t> modelErrors, approximations;
     for (const auto& path : archives) {
         std::vector<std::uint8_t> storage;
@@ -497,6 +499,7 @@ int main(int argc, char** argv) {
         if (!models) continue;
         // BRKs, set on the archive's models: every register table should name one of their materials.
         std::vector<smg::Model> archiveModels;
+        std::vector<const smg::ArchiveEntry*> archiveModelEntries;
         for (const auto& entry : entries) {
             if (!extension(entry.path,".bdl") && !extension(entry.path,".bmd")) continue;
             smg::Model model;
@@ -551,6 +554,7 @@ int main(int argc, char** argv) {
                 smg::forgetJ3DSkeleton(j3d);
             }
             archiveModels.push_back(std::move(model));
+            archiveModelEntries.push_back(&entry);
         }
         for (const auto& entry : entries) {
             if (!extension(entry.path,".bck")) continue;
@@ -566,6 +570,42 @@ int main(int argc, char** argv) {
                 for (const auto& t : pose) finite &= std::isfinite(t.scale[0] + t.scale[1] + t.scale[2] + t.translation[0] + t.translation[1] + t.translation[2]);
             }
             if (!finite) { ++bckErrors; std::fprintf(stderr,"BCK %s :: %s poses to infinity\n",path.c_str(),entry.path.c_str()); }
+            // Through the game's own animation core on the original J3DModel, for the first model it fits.
+            for (std::size_t m = 0; m < archiveModels.size(); ++m) {
+                const smg::Model& model = archiveModels[m];
+                if (model.joints.size() != bck.joints()) continue;
+                smg::J3DSkeletonImage image;
+                const smg::ArchiveEntry& modelEntry = *archiveModelEntries[m];
+                if (!image.load({storage.data()+modelEntry.offset,modelEntry.size},error)) break;
+                J3DModelLoader_v26 loader;
+                J3DModelData* data = loader.load(image.data(), 0);
+                J3DModel* j3d = new J3DModel(data, 0, 1);
+                auto* core = new XanimeCore(1, data->getJointNum(), data->getFlag() & 0xf);
+                core->initT(data);
+                core->setBck(0, &bck.key());
+                data->getJointNodePointer(0)->setMtxCalc(core);
+                float off = 0;
+                const int frames = std::max<int>(1, bck.key().mFrameMax);
+                for (int step = 0; step <= 3; ++step) {
+                    const float frame = frames * step / 3.0f;
+                    core->mFrameRatio = frame / frames;
+                    core->updateFrame();
+                    j3d->calcAnmMtx();
+                    bck.pose(frame, pose);
+                    std::vector<std::array<float, 12>> world;
+                    smg::poseSkeleton(model, pose, world);
+                    for (std::size_t j = 0; j < world.size(); ++j) {
+                        const float* original = &j3d->getAnmMtx(static_cast<int>(j))[0][0];
+                        for (int c = 0; c < 12; ++c)
+                            off = std::max(off, std::fabs(original[c] - world[j][c]) / std::max(1.0f, std::fabs(world[j][c])));
+                    }
+                }
+                ++xanimeChecked;
+                xanimeGaps.push_back(off);
+                smg::forgetXanimeCore(core);
+                smg::forgetJ3DSkeleton(j3d);
+                break;
+            }
         }
         for (const auto& entry : entries) {
             if (!extension(entry.path,".brk")) continue;
@@ -608,6 +648,13 @@ int main(int argc, char** argv) {
         std::printf("%zu BRK files, %zu failed to load, %zu name no material of their archive's models\n", brks, brkErrors, brkUnmatched);
         std::printf("%zu models reposed at their bind pose and skinned, %zu differ from what the loader baked\n", skinChecked, skinWrong);
         std::printf("%zu skeletons through JSystem's J3DModelLoader and J3DModel, %zu differ from the port's matrices\n", j3dChecked, j3dWrong);
+        // XanimeCore turns joints through quaternions from half-angle sine lookups, J3D's own calc from full
+        // angles; the rounding compounds down long chains. The gap is measured, not an error: actors use XanimeCore.
+        std::sort(xanimeGaps.begin(), xanimeGaps.end());
+        const auto within = std::count_if(xanimeGaps.begin(), xanimeGaps.end(), [](float v) { return v <= 1e-3f; });
+        std::printf("%zu BCKs posed through the game's XanimeCore on J3DModel; the port's Euler pose is within 1e-3 of it on %zu, "
+                    "median gap %.4f, worst %.3f\n", xanimeChecked, static_cast<std::size_t>(within),
+                    xanimeGaps.empty() ? 0.0f : xanimeGaps[xanimeGaps.size() / 2], xanimeGaps.empty() ? 0.0f : xanimeGaps.back());
         std::printf("%zu BCK files, %zu failed to load or posed to infinity\n", bcks, bckErrors);
         errors += failed + brkErrors + skinWrong + bckErrors;
     }

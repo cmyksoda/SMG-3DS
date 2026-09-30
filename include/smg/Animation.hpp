@@ -36,6 +36,7 @@ public:
 
     bool load(Bytes source, std::string& error);
     const J3DAnmTransformKey& key() const { return key_; }
+    J3DAnmTransformKey& key() { return key_; } // for an animation core, which sets its frame
     std::size_t joints() const { return key_.field_0x1e; }
     // J3DAnmTransformKey::calcTransform for each animated joint; the others keep what `pose` holds.
     void pose(float frame, std::vector<JointTransform>& pose) const;

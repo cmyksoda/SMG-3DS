@@ -5,6 +5,7 @@
 #include <vector>
 
 class J3DModel;
+class XanimeCore;
 
 namespace smg {
 // A BMD or BDL's skeleton as JSystem's own J3DModelLoader reads it in place: INF1 (its hierarchy keeping
@@ -25,4 +26,6 @@ private:
 // frees a J3DModel made from a skeleton image with one draw matrix buffer, and its model data, as the heap
 // going would.
 void forgetJ3DSkeleton(J3DModel* model);
+// The same for a XanimeCore of its own (not sharing another core's joints).
+void forgetXanimeCore(XanimeCore* core);
 } // namespace smg
