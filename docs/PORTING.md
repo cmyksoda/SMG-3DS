@@ -185,7 +185,9 @@ borrows its owner's sample storage rather than allocating the Wii's 120-sample I
    approximated TEV programs by reason: more than two distinct constants (314) and an unclamped
    output or value outside 0..1 (228 and 156, which the combiner saturates where GX would wrap or
    carry it) lead.
-   A loader thread decodes models while the main thread uploads one per frame. CMPR
+   A loader thread decodes models while the main thread uploads one per frame. Textures go in upside
+   down: GX reads v down from an image's first row, the PICA reads t up from the last row in memory.
+   Tiling stage textures hid the flip until Mario's cap emblem read "W". CMPR
    textures become ETC1/ETC1A4 (a GPU readback test confirms the block layout), leaving
    19.4 MB of linear memory after Good Egg in Azahar; other formats stay uncompressed.
 4. **Original scene and actor execution.** Placed gravity runs through the original creators

@@ -112,13 +112,15 @@ TiledTexture tile(const ModelTexture& source) {
     out.wrapT = source.wrapT;
     out.minFilter = source.minFilter;
     out.magFilter = source.magFilter;
+    // GX reads v down from the first row; the PICA reads t up from the last row in memory, so rows go in upside down.
+    const auto sourceRow = [&](unsigned y) { return std::size_t((out.height - 1 - y) * image.height / out.height) * image.width; };
     if (out.format == GPU_ETC1 || out.format == GPU_ETC1A4) {
         Image resized;
         resized.width = out.width;
         resized.height = out.height;
         for (unsigned y = 0; y < out.height; ++y)
             for (unsigned x = 0; x < out.width; ++x)
-                resized.pixels.push_back(image.pixels[std::size_t(y * image.height / out.height) * image.width + x * image.width / out.width]);
+                resized.pixels.push_back(image.pixels[sourceRow(y) + x * image.width / out.width]);
         out.bytes = encodeEtc1(resized, out.format == GPU_ETC1A4);
         return out;
     }
@@ -128,7 +130,7 @@ TiledTexture tile(const ModelTexture& source) {
     for (unsigned y = 0; y < out.height; ++y) {
         for (unsigned x = 0; x < out.width; ++x) {
             // Nearest-neighbour stretch for the few textures that are not a power of two.
-            const std::uint32_t c = image.pixels[std::size_t(y * image.height / out.height) * image.width + x * image.width / out.width];
+            const std::uint32_t c = image.pixels[sourceRow(y) + x * image.width / out.width];
             const unsigned r = c >> 24, g = c >> 16 & 255, b = c >> 8 & 255, a = c & 255;
             const unsigned texel = ((y / 8) * (out.width / 8) + x / 8) * 64 + morton(x, y);
             std::uint16_t half = 0;
