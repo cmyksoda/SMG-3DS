@@ -83,6 +83,7 @@ struct ModelSkin {
     std::vector<std::uint16_t> matrix;   // per model vertex
     struct Draw {
         bool weighted = false;
+        std::uint16_t index = 0; // DRW1's: the joint, or the EVP1 envelope when weighted
         std::vector<std::pair<std::uint16_t, float>> joints;
     };
     std::vector<Draw> draws;

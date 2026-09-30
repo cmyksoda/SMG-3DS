@@ -8,7 +8,9 @@ namespace {
 void* allocate(std::size_t size, int align, JKRHeap* heap, bool array) {
     // A negative alignment asks JKRHeap for the heap's tail; the free store has none, so only the size matters.
     const unsigned magnitude = align < 0 ? 0u - static_cast<unsigned>(align) : static_cast<unsigned>(align);
-    if (heap || magnitude > __STDCPP_DEFAULT_NEW_ALIGNMENT__) {
+    // 32 is the Wii GPU's DMA granularity, which J3D asks for its display lists and matrices; only the CPU
+    // reads them here, so the free store's own alignment serves.
+    if (heap || magnitude > 32) {
         std::fprintf(stderr, "operator new: %s is not brought up\n", heap ? "allocating from a JKRHeap" : "an over-aligned allocation");
         std::abort();
     }

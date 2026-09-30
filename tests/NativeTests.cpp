@@ -15,6 +15,7 @@ int runCollisionTests();
 int runAnimationTests();
 int runActorTests();
 int runJ3DTransformTests();
+int runJ3DSkeletonTests();
 
 int main() {
     gfxInitDefault();
@@ -32,6 +33,7 @@ int main() {
     runAnimationTests();
     runActorTests();
     runJ3DTransformTests();
+    runJ3DSkeletonTests();
     runEtc1Tests();
     runGpuTests();
     std::puts("\nPASS: math, WPad, BCSV, J3D, TEV, gravity, NameObj, scene, collision, animation, actors, J3D transforms, ETC1\n\nSTART: exit");

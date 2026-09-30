@@ -34,6 +34,9 @@ void PSVECNormalize(const Vec* a, Vec* out) { PSVECScale(a, out, 1.0f/PSVECMag(a
 void PSVECCrossProduct(const Vec* a, const Vec* b, Vec* out) {
     *out = {a->y*b->z-a->z*b->y, a->z*b->x-a->x*b->z, a->x*b->y-a->y*b->x};
 }
+void PSMTXIdentity(Mtx m) {
+    for (int row = 0; row < 3; ++row) for (int col = 0; col < 4; ++col) m[row][col] = row == col ? 1.0f : 0.0f;
+}
 void PSMTXCopy(const Mtx src, Mtx dst) {
     if (src == dst) return;
     for (int row = 0; row < 3; ++row) for (int col = 0; col < 4; ++col) dst[row][col] = src[row][col];

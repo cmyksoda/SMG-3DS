@@ -152,7 +152,7 @@ void jointAnimation() {
     model.joints.resize(2);
     model.joints[1].parent = 0;
     model.joints[1].translation[0] = 100;
-    model.skin.draws = {{false, {{1, 1.0f}}}, {true, {{0, 0.5f}, {1, 0.5f}}}};
+    model.skin.draws = {{false, 1, {{1, 1.0f}}}, {true, 0, {{0, 0.5f}, {1, 0.5f}}}};
     model.skin.inverseBind = {{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0}, {1, 0, 0, -100, 0, 1, 0, 0, 0, 0, 1, 0}};
     model.skin.rest.resize(2);
     model.skin.rest[0].position[0] = 10;   // 10 past the child, in its own space

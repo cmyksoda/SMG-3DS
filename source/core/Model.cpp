@@ -423,10 +423,16 @@ bool drawMatrices(const Sections& s, Model& model, std::vector<Mtx34>& result, b
         if (!weighted) {
             if (index >= model.joints.size()) return fail(error, "Invalid J3D draw matrix joint");
             result[i] = jointWorld(index);
-            if (keepSkin) model.skin.draws[i].joints = {{static_cast<std::uint16_t>(index), 1.0f}};
+            if (keepSkin) {
+                model.skin.draws[i].joints = {{static_cast<std::uint16_t>(index), 1.0f}};
+                model.skin.draws[i].index = static_cast<std::uint16_t>(index);
+            }
             continue;
         }
-        if (keepSkin) model.skin.draws[i].weighted = true;
+        if (keepSkin) {
+            model.skin.draws[i].weighted = true;
+            model.skin.draws[i].index = static_cast<std::uint16_t>(index);
+        }
         if (index >= envelopes) return fail(error, "Invalid J3D envelope index");
         skinned = true;
         Mtx34 sum{};

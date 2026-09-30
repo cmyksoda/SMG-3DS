@@ -30,6 +30,7 @@ add_library(petari_core STATIC
   source/compat/Math.cpp
   source/compat/GameRandom.cpp
   source/compat/Heap.cpp
+  source/compat/Os.cpp
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/MathUtil.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/MtxUtil.cpp"
   "${PETARI}/src/JSystem/JMath/random.cpp"
@@ -82,10 +83,18 @@ add_library(petari_j3d STATIC
   "${J3D}/J3DGraphBase/J3DVertex.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/JSystem/J3DGraphLoader/J3DAnmLoader.cpp" "${J3D}/J3DGraphLoader/J3DJointFactory.cpp" "${J3D}/J3DGraphLoader/J3DMaterialFactory.cpp"
   "${J3D}/J3DGraphLoader/J3DMaterialFactory_v21.cpp" "${J3D}/J3DGraphLoader/J3DModelLoaderCalcSize.cpp"
-  "${J3D}/J3DGraphLoader/J3DModelLoader.cpp" "${J3D}/J3DGraphLoader/J3DShapeFactory.cpp")
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/JSystem/J3DGraphLoader/J3DModelLoader.cpp" "${J3D}/J3DGraphLoader/J3DShapeFactory.cpp"
+  source/compat/Gx.cpp)
 target_link_libraries(petari_j3d PUBLIC petari_core)
+if(NOT NINTENDO_3DS)
+  # UBSan's vptr check needs the type info of the deform and vertex color classes J3DModel calls through;
+  # their key functions are not in the game, so neither is their type info. The 3DS build has no RTTI.
+  set_source_files_properties("${J3D}/J3DGraphAnimator/J3DModel.cpp" "${J3D}/J3DGraphAnimator/J3DSkinDeform.cpp"
+    PROPERTIES COMPILE_OPTIONS "-fno-sanitize=vptr")
+endif()
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${J3D}/J3DGraphBase/J3DTransform.cpp"
-  "${J3D}/J3DGraphAnimator/J3DMtxBuffer.cpp" "${J3D}/J3DGraphBase/J3DShape.cpp" "${J3D}/J3DGraphLoader/J3DAnmLoader.cpp")
+  "${J3D}/J3DGraphAnimator/J3DMtxBuffer.cpp" "${J3D}/J3DGraphBase/J3DShape.cpp" "${J3D}/J3DGraphLoader/J3DAnmLoader.cpp"
+  "${J3D}/J3DGraphLoader/J3DModelLoader.cpp")
 
 add_library(petari_scene STATIC
   source/compat/Scene.cpp
@@ -170,7 +179,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
   "${PETARI}/src/Game/Util/GravityUtil.cpp" "${PETARI}/src/Game/Util/JMapUtil.cpp"
   "${PETARI}/include/Game/Util/JMapUtil.hpp" "${PETARI}/src/Game/Util/StringUtil.cpp"
   "${PETARI}/src/Game/Util/ObjUtil.cpp" "${PETARI}/src/Game/LiveActor/LiveActor.cpp"
-  "${PETARI}/libs/RVL_SDK/include/revolution/gx/GXVert.h" "${PETARI}/src/Game/Util/SystemUtil.cpp"
+  "${PETARI}/libs/RVL_SDK/include/revolution/gx/GXVert.h" "${PETARI}/libs/JSystem/include/JSystem/J3DGraphBase/J3DFifo.hpp" "${PETARI}/src/Game/Util/SystemUtil.cpp"
   "${PETARI}/include/Game/NameObj/NameObjHolder.hpp" "${PETARI}/include/Game/Util/ObjUtil.hpp"
   "${PETARI}/libs/JSystem/include/JSystem/JSupport/JSUList.hpp"
   "${PETARI}/libs/JSystem/include/JSystem/JKernel/JKRHeap.hpp"
@@ -197,10 +206,10 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
 add_library(smg_platform STATIC
   source/core/Input.cpp source/core/Motion.cpp source/core/Settings.cpp source/core/Session.cpp
   source/core/Archive.cpp source/core/Bcsv.cpp source/core/Model.cpp source/core/Texture.cpp source/core/Combiner.cpp
-  source/core/Stage.cpp source/core/StageGravity.cpp source/core/Mesh.cpp source/core/Etc1.cpp source/core/Kcl.cpp source/core/StageCollision.cpp source/core/StageLight.cpp source/core/Animation.cpp source/core/Actors.cpp
+  source/core/Stage.cpp source/core/StageGravity.cpp source/core/Mesh.cpp source/core/Etc1.cpp source/core/Kcl.cpp source/core/StageCollision.cpp source/core/StageLight.cpp source/core/Animation.cpp source/core/Actors.cpp source/core/J3DImage.cpp
   source/compat/NativePad.cpp)
 target_include_directories(smg_platform PUBLIC include)
-target_link_libraries(smg_platform PUBLIC petari_scene)
+target_link_libraries(smg_platform PUBLIC petari_scene petari_j3d)
 target_compile_options(smg_platform PRIVATE -Wall -Wextra -Werror)
 
 if(NINTENDO_3DS)
@@ -230,7 +239,7 @@ if(NINTENDO_3DS)
   if(SMG_BUILD_VALIDATION)
     add_executable(native_validation tests/NativeTests.cpp tests/MathTests.cpp tests/PadTests.cpp tests/BcsvTests.cpp
       tests/ModelTests.cpp tests/CombinerTests.cpp tests/GravityTests.cpp tests/Etc1Tests.cpp tests/GpuTests.cpp
-      tests/NameObjTests.cpp tests/SceneTests.cpp tests/CollisionTests.cpp tests/AnimationTests.cpp tests/ActorTests.cpp tests/J3DTransformTests.cpp)
+      tests/NameObjTests.cpp tests/SceneTests.cpp tests/CollisionTests.cpp tests/AnimationTests.cpp tests/ActorTests.cpp tests/J3DTransformTests.cpp tests/J3DSkeletonTests.cpp)
     set_target_properties(native_validation PROPERTIES SUFFIX ".elf")
     target_compile_definitions(native_validation PRIVATE SMG_TEST_RUNNER)
     target_link_directories(native_validation PRIVATE "${DEVKITPRO}/libctru/lib")
@@ -307,8 +316,8 @@ else()
   target_link_libraries(actor_tests PRIVATE smg_platform)
   target_compile_options(actor_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME original_actor COMMAND actor_tests)
-  add_executable(j3d_transform_tests tests/J3DTransformTests.cpp)
-  target_link_libraries(j3d_transform_tests PRIVATE petari_j3d)
+  add_executable(j3d_transform_tests tests/J3DTransformTests.cpp tests/J3DSkeletonTests.cpp)
+  target_link_libraries(j3d_transform_tests PRIVATE smg_platform)
   target_compile_options(j3d_transform_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME j3d_transforms COMMAND j3d_transform_tests)
   add_executable(combiner_tests tests/CombinerTests.cpp)

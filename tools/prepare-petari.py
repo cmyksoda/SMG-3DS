@@ -534,7 +534,8 @@ extract("src/JSystem/J3DGraphAnimator/J3DAnimation.cpp", "JSystem/J3DGraphAnimat
          "void J3DAnmTextureSRTKey::calcTransform(f32 frame, u16 jointNo, J3DTextureSRTInfo* pTexSRTInfo) const {",
          "J3DAnmTevRegKey::J3DAnmTevRegKey() {",
          "void J3DAnmTevRegKey::getTevColorReg(u16 index, GXColorS10* pColor) const {",
-         "void J3DAnmTevRegKey::getTevKonstReg(u16 index, GXColor* pColor) const {"],
+         "void J3DAnmTevRegKey::getTevKonstReg(u16 index, GXColor* pColor) const {",
+         "void J3DAnmTexPattern::getTexNo(u16 index, u16* pTexNo) const {"],
         fixes=[("    return value;\n#endif\n}",
                 "    return value;\n#else\n    return JMAHermiteInterpolation(pp1, *pp2, *pp3, *pp4, *pp5, *pp6, *pp7);\n#endif\n}"),
                ("f32 J3DGetKeyFrameInterpolation(f32 frame", "template < typename T >\nf32 J3DGetKeyFrameInterpolation(f32 frame"),
@@ -629,19 +630,33 @@ adapt("libs/JSystem/include/JSystem/JAudio2/JASSeqReader.hpp", "include/JSystem/
     ("return (u32)mSeqCursor - (u32)mSeqBuff;", "return static_cast< u32 >(mSeqCursor - mSeqBuff);", 1),
 ])
 
-# GX display list writing, whose inline writers every J3D-facing header reaches; the Wii's cache flush stays out.
+# GX display list writing, whose inline writers every J3D-facing header reaches.
 adapt("src/RVL_SDK/gd/GDBase.c", "RVL_SDK/gd/GDBase.cpp", [
-    ('#include "revolution/gd/GDBase.h"', '#include "revolution/gd/GDBase.h"\n#include <cstddef>\n#include <cstdint>', 1),
+    ('#include "revolution/gd/GDBase.h"', '#include "revolution/gd/GDBase.h"\n#include <revolution/os/OSCache.h>\n#include <cstddef>\n#include <cstdint>', 1),
     ("u32 n = ((u32)__GDCurrentDL->ptr & 31);", "u32 n = ((uintptr_t)__GDCurrentDL->ptr & 31);", 1),
     # C converts void* implicitly; C++ spells it.
     ("pDL->start = pStart;", "pDL->start = static_cast< u8* >(pStart);", 1),
-], drop=["void GDFlushCurrToMem() {"], reason="the Wii's data cache flush has no counterpart before the renderer draws display lists")
+])
 
 # The Wii's write-gather pipe to its GPU: nothing in the port may write it, so nothing defines it.
 adapt("libs/RVL_SDK/include/revolution/gx/GXVert.h", "include/revolution/gx/GXVert.h", [
-    ("#else\nvolatile PPCWGPipe GXWGFifo;\n#endif", "#else\nextern volatile PPCWGPipe GXWGFifo;\n#endif", 1),
+    ("#ifdef __MWERKS__\nvolatile PPCWGPipe GXWGFifo : 0xCC008000;\n#else\nvolatile PPCWGPipe GXWGFifo;\n#endif",
+     "#ifdef __MWERKS__\nvolatile PPCWGPipe GXWGFifo : 0xCC008000;\n#define GXWGFIFO_PUT(td, v) (GXWGFifo.td = (td)(v))\n#else\n"
+     "extern volatile PPCWGPipe GXWGFifo;\n"
+     "// The port has no pipe to the Wii's GPU: a write stops the program by name (source/compat/Gx.cpp).\n"
+     "void GXWGFifoWrite(void) __attribute__((noreturn));\n#define GXWGFIFO_PUT(td, v) (GXWGFifoWrite(), (void)(v))\n#endif", 1),
+    ("GXWGFifo.td = (td)x;", "GXWGFIFO_PUT(td, x);", 4),
+    ("GXWGFifo.td = (td)y;", "GXWGFIFO_PUT(td, y);", 3),
+    ("GXWGFifo.td = (td)z;", "GXWGFIFO_PUT(td, z);", 2),
+    ("GXWGFifo.td = (td)w;", "GXWGFIFO_PUT(td, w);", 1),
     # Inline, so a file that includes the writers without calling them emits none.
     ("    static void func(", "    static inline void func(", 4),
+])
+
+# J3D's own index loads write the GPU pipe too, through the same single point.
+adapt("libs/JSystem/include/JSystem/J3DGraphBase/J3DFifo.hpp", "include/JSystem/J3DGraphBase/J3DFifo.hpp", [
+    ("    GXWGFifo.u8 = cmd;\n    GXWGFifo.u16 = indx;\n    GXWGFifo.u16 = addr;",
+     "    GXWGFIFO_PUT(u8, cmd);\n    GXWGFIFO_PUT(u16, indx);\n    GXWGFIFO_PUT(u16, addr);", 1),
 ])
 
 # LiveActor without its sound setup, which needs the audio system: a caller fails to link rather than run.
@@ -839,6 +854,11 @@ adapt("src/JSystem/J3DGraphLoader/J3DAnmLoader.cpp", "JSystem/J3DGraphLoader/J3D
      "(void*)((intptr_t)indexPtr0 + (intptr_t)dst->mAnmVtxColorIndexData[0][i].mpData * 2)", 2),
     ("(void*)((s32)indexPtr1 + (s32)dst->mAnmVtxColorIndexData[1][i].mpData * 2)",
      "(void*)((intptr_t)indexPtr1 + (intptr_t)dst->mAnmVtxColorIndexData[1][i].mpData * 2)", 2),
+])
+# The loader's first line reads the current JKRHeap's free size and drops it; the port allocates from the free store.
+adapt("src/JSystem/J3DGraphLoader/J3DModelLoader.cpp", "JSystem/J3DGraphLoader/J3DModelLoader.cpp", [
+    ("J3DModelData* J3DModelLoader::load(void const* i_data, u32 i_flags) {\n    JKRGetCurrentHeap()->getTotalFreeSize();\n",
+     "J3DModelData* J3DModelLoader::load(void const* i_data, u32 i_flags) {\n", 1),
 ])
 # GDSetArrayRaw takes the array's raw address as a u32; Metrowerks converted the null to it.
 adapt("src/JSystem/J3DGraphBase/J3DShape.cpp", "JSystem/J3DGraphBase/J3DShape.cpp", [

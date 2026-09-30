@@ -1,4 +1,9 @@
 #include <smg/Actors.hpp>
+#include <smg/J3DImage.hpp>
+#include <JSystem/J3DGraphAnimator/J3DJoint.hpp>
+#include <JSystem/J3DGraphAnimator/J3DModel.hpp>
+#include <JSystem/J3DGraphAnimator/J3DMtxBuffer.hpp>
+#include <JSystem/J3DGraphLoader/J3DModelLoader.hpp>
 #include <smg/Archive.hpp>
 #include <smg/Bcsv.hpp>
 #include <smg/Animation.hpp>
@@ -471,7 +476,7 @@ int main(int argc, char** argv) {
     if (ec) { std::fprintf(stderr,"Directory traversal: %s\n",ec.message().c_str()); return 2; }
     std::sort(archives.begin(), archives.end());
     std::size_t tables=0, records=0, resources=0, errors=0, modelCount=0, triangles=0, materials=0, exact=0;
-    std::size_t brks=0, brkErrors=0, brkUnmatched=0, skinChecked=0, skinWrong=0, bcks=0, bckErrors=0;
+    std::size_t brks=0, brkErrors=0, brkUnmatched=0, skinChecked=0, skinWrong=0, j3dChecked=0, j3dWrong=0, bcks=0, bckErrors=0;
     std::map<std::string, std::size_t> modelErrors, approximations;
     for (const auto& path : archives) {
         std::vector<std::uint8_t> storage;
@@ -514,6 +519,36 @@ int main(int argc, char** argv) {
             if (worst > 0.01f) {
                 ++skinWrong;
                 std::fprintf(stderr,"SKIN %s :: %s: bind pose off by %g\n",path.c_str(),entry.path.c_str(),worst);
+            }
+            // The same skeleton through JSystem's own loader and J3DModel: every joint and envelope matrix.
+            smg::J3DSkeletonImage image;
+            if (!image.load({storage.data()+entry.offset,entry.size},error)) {
+                ++j3dWrong;
+                std::fprintf(stderr,"J3D %s :: %s: %s\n",path.c_str(),entry.path.c_str(),error.c_str());
+            } else {
+                J3DModelLoader_v26 loader;
+                J3DModel* j3d = new J3DModel(loader.load(image.data(), 0), 0, 1);
+                j3d->calcAnmMtx();
+                j3d->mMtxBuffer->calcWeightEnvelopeMtx();
+                std::vector<std::array<float, 12>> draws;
+                smg::skinMatrices(model, world, draws);
+                float off = 0;
+                const auto compare = [&](const float* a, const std::array<float, 12>& b) {
+                    for (int c = 0; c < 12; ++c) off = std::max(off, std::fabs(a[c] - b[c]) / std::max(1.0f, std::fabs(b[c])));
+                };
+                for (std::size_t j = 0; j < world.size(); ++j) compare(&j3d->getAnmMtx(static_cast<int>(j))[0][0], world[j]);
+                for (std::size_t d = 0; d < draws.size(); ++d)
+                    if (model.skin.draws[d].weighted) compare(&j3d->getWeightAnmMtx(model.skin.draws[d].index)[0][0], draws[d]);
+                ++j3dChecked;
+                if (off > 1e-4f) {
+                    ++j3dWrong;
+                    unsigned compensated = 0;
+                    for (u16 j = 0; j < j3d->getModelData()->getJointNum(); ++j)
+                        compensated += j3d->getModelData()->getJointNodePointer(j)->getScaleCompensate() != 0;
+                    std::fprintf(stderr,"J3D %s :: %s: matrices differ by %g (mode %u, %u of %zu joints scale-compensate)\n",
+                                 path.c_str(),entry.path.c_str(),off,j3d->getModelData()->getFlag() & 0xf,compensated,world.size());
+                }
+                smg::forgetJ3DSkeleton(j3d);
             }
             archiveModels.push_back(std::move(model));
         }
@@ -572,6 +607,7 @@ int main(int argc, char** argv) {
         for (const auto& [reason, count] : approximations) std::printf("%6zu  approximated: %s\n", count, reason.c_str());
         std::printf("%zu BRK files, %zu failed to load, %zu name no material of their archive's models\n", brks, brkErrors, brkUnmatched);
         std::printf("%zu models reposed at their bind pose and skinned, %zu differ from what the loader baked\n", skinChecked, skinWrong);
+        std::printf("%zu skeletons through JSystem's J3DModelLoader and J3DModel, %zu differ from the port's matrices\n", j3dChecked, j3dWrong);
         std::printf("%zu BCK files, %zu failed to load or posed to infinity\n", bcks, bckErrors);
         errors += failed + brkErrors + skinWrong + bckErrors;
     }
