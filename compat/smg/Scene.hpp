@@ -8,6 +8,7 @@
 
 struct AreaLightInfo;
 class AreaObj;
+class AreaObjMgr;
 class CollisionCode;
 class LightAreaHolder;
 namespace MR {
@@ -86,6 +87,7 @@ public:
     // AreaObjContainer's light area manager, as MR::getAreaObjManager finds it; the holder registers itself.
     LightAreaHolder* lightAreas(bool create);
     void registerLightAreas(LightAreaHolder* holder) { mLightAreas = holder; }
+    AreaObjMgr* viewCubes();
     // SwitchWatcherHolder's watch on a switch-appear switch, and SleepControllerHolder's control of an area.
     void watchSwitchAppear(const StageSwitchCtrl* switches, const MR::FunctorBase& on, const MR::FunctorBase& off);
     void addAreaSleep(AreaObj* area, const JMapInfoIter& row);
@@ -165,6 +167,7 @@ private:
     std::vector<AreaObj*> mAreas;
     std::vector<std::string> mSkippedAreas;
     LightAreaHolder* mLightAreas = nullptr;
+    AreaObjMgr* mViewCubes = nullptr;
     std::vector<AppearWatch*> mAppearWatches;
     std::vector<AreaSleep*> mAreaSleeps;
     LightDataHolder* mLightData = nullptr;

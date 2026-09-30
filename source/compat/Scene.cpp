@@ -46,6 +46,9 @@ NativeScene::NativeScene()
     MR::createSceneObj(SceneObj_SensorHitChecker);
     MR::createSceneObj(SceneObj_CollisionDirector);
     MR::createSceneObj(SceneObj_StageSwitchContainer);
+    // Clipping judges by CameraDirector's view and view groups by the player's position; until the player
+    // runs it stays out of the movement, and every actor stays unclipped, as each starts.
+    MR::disconnectToSceneTemporarily(MR::getSceneObj<NameObj>(SceneObj_ClippingDirector));
 }
 
 NativeScene::~NativeScene() {

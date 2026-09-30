@@ -22,12 +22,14 @@
 #include <cstring>
 
 namespace {
-// NameObjFactory's light areas; no other area is brought up yet.
+// NameObjFactory's light areas and view group cubes; no other area is brought up yet.
 struct AreaKind {
     const char* name;
     int form;
+    bool light; // a LightArea, else a plain AreaObj
 };
-const AreaKind areaKinds[]{{"LightCtrlCube", AreaForm::Type_Cube2}, {"LightCtrlCylinder", AreaForm::Type_Cylinder}};
+const AreaKind areaKinds[]{{"LightCtrlCube", AreaForm::Type_Cube2, true}, {"LightCtrlCylinder", AreaForm::Type_Cylinder, true},
+                           {"ViewGroupCtrlCube", AreaForm::Type_Cube2, false}};
 
 [[noreturn]] void stop(const char* what, const char* name) {
     std::fprintf(stderr, "NativeScene: %s%s is not brought up\n", what, name);
@@ -62,13 +64,19 @@ bool NativeScene::placeAreaObj(const JMapInfoIter& row) {
             mSkippedAreas.push_back(std::string(name) + " linked to a map part");
             return false;
         }
-        AreaObj* area = new LightArea(kind.form, name);
+        AreaObj* area = kind.light ? new LightArea(kind.form, name) : new AreaObj(kind.form, name);
         area->init(row);
         mAreas.push_back(area);
         return true;
     }
     mSkippedAreas.emplace_back(name);
     return false;
+}
+
+// AreaObjContainer's manager for them, of 0x40 areas.
+AreaObjMgr* NativeScene::viewCubes() {
+    if (!mViewCubes) mViewCubes = new AreaObjMgr(0x40, "ViewGroupCtrlCube");
+    return mViewCubes;
 }
 
 LightAreaHolder* NativeScene::lightAreas(bool create) {
@@ -132,8 +140,10 @@ void NativeScene::forgetAreas() {
         delete sleep;
     }
     delete mLightAreas;
+    delete mViewCubes;
     mAreas.clear(), mAppearWatches.clear(), mAreaSleeps.clear();
     mLightAreas = nullptr;
+    mViewCubes = nullptr;
 }
 } // namespace smg
 
@@ -147,11 +157,7 @@ bool addBaseMatrixFollowerAreaObj(AreaObj*, const JMapInfoIter& rIter) {
 AreaObjMgr* getAreaObjManager(const char* pName) {
     smg::NativeScene& scene = smg::NativeScene::current();
     if (!std::strcmp(pName, "LightArea")) return scene.lightAreas(true);
-    // ViewGroupCtrl reads no manager as it reads an empty one; a stage that places view cubes needs the real one.
-    if (!std::strcmp(pName, "ViewGroupCtrlCube")) {
-        const auto& skipped = scene.skippedAreas();
-        if (std::find(skipped.begin(), skipped.end(), pName) == skipped.end()) return nullptr;
-    }
+    if (!std::strcmp(pName, "ViewGroupCtrlCube")) return scene.viewCubes();
     stop("the area manager ", pName);
 }
 
