@@ -2,6 +2,7 @@
 // first use and kept for the program's life, big-endian as the game's code attaches them.
 #include <smg/Dol.hpp>
 #include <smg/DolTables.hpp>
+#include <smg/FreeStore.hpp>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -35,7 +36,9 @@ const DolTables& tables() {
 } // namespace
 
 const void* dolTable(const char* name) {
-    // Kept for the program's life, as the DOL's own data was; the game turns each native as it attaches it.
+    // Kept for the program's life, as the DOL's own data was; the game turns each native as it attaches it. Reading
+    // them takes the whole DOL for a moment, never from the game's heaps.
+    const PortMemory memory;
     auto& all = const_cast<DolTables&>(tables());
     if (!std::strcmp(name, "GalaxyIDBCSV")) return all.galaxyId.data();
     if (!std::strcmp(name, "StoryEventBCSV")) return all.storyEvent.data();
