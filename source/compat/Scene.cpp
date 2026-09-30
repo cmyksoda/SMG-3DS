@@ -7,6 +7,7 @@
 #include <Game/Scene/SceneNameObjMovementController.hpp>
 #include <Game/Scene/SceneObjHolder.hpp>
 #include <Game/Util/JMapInfo.hpp>
+#include <Game/Util/JMapUtil.hpp>
 #include <Game/Util/SceneUtil.hpp>
 #include <Game/Util/SingletonHolder.hpp>
 #include <Game/Util/SystemUtil.hpp>
@@ -66,6 +67,16 @@ int NativeScene::addZone(const TPos3f& placement) {
 
 void NativeScene::addZoneTable(int zone, const JMapInfo& table) {
     mZoneTables.emplace_back(table.mData, zone);
+}
+
+void NativeScene::addZonePaths(int zone, const JMapInfo& paths, std::vector<const JMapInfo*> points) {
+    mZonePaths.push_back({zone, &paths, std::move(points)});
+}
+
+const NativeScene::ZonePaths* NativeScene::zonePaths(int zone) const {
+    for (const ZonePaths& paths : mZonePaths)
+        if (paths.zone == zone) return &paths;
+    return nullptr;
 }
 
 int NativeScene::zoneOf(const JMapInfoIter& row) const {
@@ -138,6 +149,23 @@ bool isPlacementLocalStage() {
 const TPos3f* getZonePlacementMtx(const JMapInfoIter& rIter) {
     const smg::NativeScene& scene = smg::NativeScene::current();
     return &scene.zonePlacement(scene.zoneOf(rIter));
+}
+
+// StageDataHolder::getCommonPathPointInfo, in the zone that placed the row: the rail whose l_id is the
+// row's CommonPath_ID, and the point table named for that rail's row.
+void getRailInfo(JMapInfoIter* pRailIter, const JMapInfo** ppPointInfo, const JMapInfoIter& rIter) {
+    const smg::NativeScene& scene = smg::NativeScene::current();
+    s32 railId = -1;
+    getRailId(rIter, &railId);
+    const smg::NativeScene::ZonePaths* paths = scene.zonePaths(scene.zoneOf(rIter));
+    const JMapInfoIter rail = paths ? paths->paths->findElement<s32>("l_id", railId, 0) : JMapInfoIter();
+    if (!paths || rail == paths->paths->end() || rail.mIndex >= static_cast<int>(paths->points.size()) ||
+        !paths->points[rail.mIndex]) {
+        std::fprintf(stderr, "NativeScene: rail %d is not in its zone's paths\n", railId);
+        std::abort();
+    }
+    *pRailIter = JMapInfoIter(paths->paths, rail.mIndex);
+    *ppPointInfo = paths->points[rail.mIndex];
 }
 
 // CameraDirector collects the camera codes of each part's collision; the native scene keeps them for it.

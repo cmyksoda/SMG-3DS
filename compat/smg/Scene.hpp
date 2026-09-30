@@ -35,10 +35,18 @@ public:
     // StageDataHolder's zone placements. Zone 0 is the galaxy; rows are matched to zones by their table.
     int addZone(const TPos3f& placement);
     void addZoneTable(int zone, const JMapInfo& table);
-    void forgetZoneTables() { mZoneTables.clear(); }
+    // A zone's CommonPathInfo and its CommonPathPointInfo.<row> tables, which StageDataHolder keeps for rails.
+    void addZonePaths(int zone, const JMapInfo& paths, std::vector<const JMapInfo*> points);
+    void forgetZoneTables() { mZoneTables.clear(); mZonePaths.clear(); }
     bool hasPlacedZones() const { return mZones.size() > 1; }
     int zoneOf(const JMapInfoIter& row) const;
     const TPos3f& zonePlacement(int zone) const { return mZones[zone]; }
+    struct ZonePaths {
+        int zone;
+        const JMapInfo* paths;
+        std::vector<const JMapInfo*> points;
+    };
+    const ZonePaths* zonePaths(int zone) const;
 
     struct PlacedGravity {
         GravityCreator* creator;
@@ -74,6 +82,7 @@ private:
     bool mSyncRequested = false;
     std::vector<TPos3f> mZones;
     std::vector<std::pair<const JMapData*, int>> mZoneTables;
+    std::vector<ZonePaths> mZonePaths;
     std::vector<PlacedGravity> mGravities;
     std::vector<std::string> mSkippedGravities, mStartStateGravities;
     CollisionCode* mCollisionCode;

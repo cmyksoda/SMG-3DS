@@ -94,7 +94,7 @@ void segmentGravity() {
     segment.setEdgeValid(1, false);
     check(!segment.calcGravity(&pull, TVec3f(3000.0f, 0.0f, 0.0f)), "a disabled end has no pull");
 }
-// Wire gravity pulls toward the nearest point of a polyline; its creator samples a rail, which waits for RailRider.
+// Wire gravity pulls toward the nearest point of a polyline; SceneTests samples one from a rail through its creator.
 void wireGravity() {
     WireGravity wire;
     wire.setPointListSize(3);

@@ -87,7 +87,7 @@ struct Row {
     const char* name;
     float pos[3]{}, dir[3]{}, scale[3]{1, 1, 1};
     s32 args[3]{-1, -1, -1};
-    s32 priority = 0, switchA = -1;
+    s32 priority = 0, switchA = -1, rail = -1;
     float range = -1, distant = 0;
     const char* type = "Normal";
     const char* power = "Normal";
@@ -100,7 +100,7 @@ std::vector<std::uint8_t> planetTable(const std::vector<Row>& rows) {
     const Field fields[]{{"name", 6}, {"pos_x", 2}, {"pos_y", 2}, {"pos_z", 2}, {"dir_x", 2}, {"dir_y", 2}, {"dir_z", 2},
                          {"scale_x", 2}, {"scale_y", 2}, {"scale_z", 2}, {"Obj_arg0", 0}, {"Obj_arg1", 0}, {"Obj_arg2", 0},
                          {"Priority", 0}, {"SW_A", 0}, {"Range", 2}, {"Distant", 2}, {"Gravity_type", 6}, {"Power", 6},
-                         {"Inverse", 0}};
+                         {"Inverse", 0}, {"CommonPath_ID", 0}};
     constexpr unsigned count = sizeof(fields) / sizeof(fields[0]), stride = count * 4, data = 16 + count * 12;
     std::vector<std::uint8_t> bytes(data + rows.size() * stride);
     std::string strings;
@@ -126,11 +126,50 @@ std::vector<std::uint8_t> planetTable(const std::vector<Row>& rows) {
                                      static_cast<std::uint32_t>(row.args[1]), static_cast<std::uint32_t>(row.args[2]),
                                      static_cast<std::uint32_t>(row.priority), static_cast<std::uint32_t>(row.switchA),
                                      real(row.range), real(row.distant), text(row.type), text(row.power),
-                                     static_cast<std::uint32_t>(row.inverse)};
+                                     static_cast<std::uint32_t>(row.inverse), static_cast<std::uint32_t>(row.rail)};
         for (unsigned f = 0; f < count; ++f) put(data + r * stride + f * 4, values[f]);
     }
     bytes.insert(bytes.end(), strings.begin(), strings.end());
     return bytes;
+}
+
+// A zone's CommonPathInfo with one open rail, and its point table: straight spans (0,0,0), (1000,0,0), (1000,0,1000).
+std::vector<std::uint8_t> bigEndianTable(const std::vector<std::pair<const char*, unsigned>>& fields,
+                                         const std::vector<std::vector<std::uint32_t>>& rows, const std::string& strings) {
+    const unsigned count = fields.size(), stride = count * 4, data = 16 + count * 12;
+    std::vector<std::uint8_t> bytes(data + rows.size() * stride);
+    const auto put = [&](std::size_t at, std::uint32_t value) {
+        for (int i = 0; i < 4; ++i) bytes[at + i] = value >> (24 - 8 * i);
+    };
+    put(0, rows.size()), put(4, count), put(8, data), put(12, stride);
+    for (unsigned f = 0; f < count; ++f) {
+        put(16 + f * 12, JGadget::getHashCode(fields[f].first)), put(20 + f * 12, 0xffffffff);
+        bytes[24 + f * 12] = (f * 4) >> 8, bytes[25 + f * 12] = f * 4, bytes[27 + f * 12] = fields[f].second;
+    }
+    for (std::size_t r = 0; r < rows.size(); ++r)
+        for (unsigned f = 0; f < count; ++f) put(data + r * stride + f * 4, rows[r][f]);
+    bytes.insert(bytes.end(), strings.begin(), strings.end());
+    return bytes;
+}
+
+std::uint32_t bits(float value) { std::uint32_t out; std::memcpy(&out, &value, 4); return out; }
+
+std::vector<std::uint8_t> railTable() {
+    // Strings: "rail" at 0, "Linear" at 5, "OPEN" at 12.
+    return bigEndianTable({{"name", 6}, {"type", 6}, {"closed", 6}, {"num_pnt", 0}, {"l_id", 0}}, {{0, 5, 12, 3, 4}},
+                          std::string("rail\0Linear\0OPEN\0", 17));
+}
+
+std::vector<std::uint8_t> railPoints() {
+    const float corners[3][3]{{0, 0, 0}, {1000, 0, 0}, {1000, 0, 1000}};
+    std::vector<std::vector<std::uint32_t>> rows;
+    for (const float* p : corners) {
+        std::vector<std::uint32_t> row;
+        for (int handle = 0; handle < 3; ++handle) for (int axis = 0; axis < 3; ++axis) row.push_back(bits(p[axis]));
+        rows.push_back(row);
+    }
+    return bigEndianTable({{"pnt0_x", 2}, {"pnt0_y", 2}, {"pnt0_z", 2}, {"pnt1_x", 2}, {"pnt1_y", 2}, {"pnt1_z", 2},
+                           {"pnt2_x", 2}, {"pnt2_y", 2}, {"pnt2_z", 2}}, rows, "");
 }
 
 TVec3f pullAt(const PlanetGravity* gravity, float x, float y, float z) {
@@ -163,6 +202,7 @@ void creators(smg::NativeScene& scene) {
     shapes[5] = shapes[4];
     shapes[5].args[1] = 1;
     shapes[6].name = "GlobalWireGravity";
+    shapes[6].rail = 4, shapes[6].args[0] = 3;
     shapes[7].name = "GlobalPlaneGravityInBox";
     shapes[7].type = "Shadow", shapes[7].power = "Light", shapes[7].inverse = 1, shapes[7].priority = 3, shapes[7].range = 800;
     zoned[0].name = "GlobalPointGravity";
@@ -178,15 +218,20 @@ void creators(smg::NativeScene& scene) {
           zonedTable.load({zonedBytes.data(), zonedBytes.size()}, error), "the planetobjinfo tables load");
     scene.addZoneTable(galaxy, shapeTable.info());
     scene.addZoneTable(zone, zonedTable.info());
+    const auto railBytes = railTable(), pointBytes = railPoints();
+    smg::Bcsv rails, points;
+    check(rails.load({railBytes.data(), railBytes.size()}, error) && points.load({pointBytes.data(), pointBytes.size()}, error),
+          "the galaxy's path tables load");
+    scene.addZoneTable(galaxy, rails.info());
+    scene.addZoneTable(galaxy, points.info());
+    scene.addZonePaths(galaxy, rails.info(), {&points.info()});
     for (int row = 0; row < shapeTable.info().getNumEntries(); ++row) scene.placeGlobalGravity(JMapInfoIter(&shapeTable.info(), row));
     for (int row = 0; row < zonedTable.info().getNumEntries(); ++row) scene.placeGlobalGravity(JMapInfoIter(&zonedTable.info(), row));
     scene.forgetZoneTables();
 
     const auto& placed = scene.placedGravities();
-    check(placed.size() == 10, "every brought-up kind is placed");
-    check(scene.skippedGravities().size() == 1 && scene.skippedGravities()[0] == "GlobalWireGravity",
-          "wire gravity waits for RailRider, and says so");
-    check(placed[0].zone == galaxy && placed[7].zone == zone, "each gravity knows its zone");
+    check(placed.size() == 11 && scene.skippedGravities().empty(), "every kind is placed, wire gravity too");
+    check(placed[0].zone == galaxy && placed[8].zone == zone, "each gravity knows its zone");
     for (const auto& gravity : placed) check(gravity.gravity->mIsRegistered, "each gravity is registered with the manager");
 
     // A cube stands on its placement point, 500 units out from its center per unit of scale.
@@ -217,14 +262,21 @@ void creators(smg::NativeScene& scene) {
     check(vec(pullAt(ring, 3000, 0, 0), -1, 0, 0), "outside, in to the outer edge");
     check(vec(pullAt(placed[5].gravity, 3000, 0, 0), 0, 0, 0), "an outer edge turned off has no pull outside");
 
-    const PlanetGravity* box = placed[6].gravity;
+    // Rail 4 is 2000 long; Obj_arg0 3 asks for five samples 500 apart, and the creator's loop takes four.
+    // Each check stands 400 from the wire, where this row's power gives a pull of 25.
+    const PlanetGravity* wire = placed[6].gravity;
+    check(vec(pullAt(wire, 500, 400, 0), 0, -25, 0), "a wire gravity pulls onto its rail's first span");
+    check(vec(pullAt(wire, 1400, 0, 250), -25, 0, 0), "and its second");
+    check(vec(pullAt(wire, 1000, 0, 900), 0, 0, -25), "its last sample is 1500 along; the rail's end is not in the wire");
+
+    const PlanetGravity* box = placed[7].gravity;
     check(box->mGravityType == GRAVITY_TYPE_SHADOW && box->mGravityPower == GRAVITY_POWER_LIGHT && box->mIsInverse &&
           box->mPriority == 3 && box->mRange == 800, "the row's own gravity parameters");
 
     // The second zone is moved 10000 along X and turned 90 degrees about Z.
-    check(vec(pullAt(placed[7].gravity, 9000, 0, 2000), 0, 0, -1), "a point gravity moves with its zone");
-    check(vec(pullAt(placed[8].gravity, 50000, 7, -3), 1, 0, 0), "a plane gravity turns with its zone");
-    check(placed[9].gravity->mDistant == 1500, "a negative Distant keeps the size from the scale");
+    check(vec(pullAt(placed[8].gravity, 9000, 0, 2000), 0, 0, -1), "a point gravity moves with its zone");
+    check(vec(pullAt(placed[9].gravity, 50000, 7, -3), 1, 0, 0), "a plane gravity turns with its zone");
+    check(placed[10].gravity->mDistant == 1500, "a negative Distant keeps the size from the scale");
 }
 
 void sceneObjects() {

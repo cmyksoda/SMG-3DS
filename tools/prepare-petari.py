@@ -364,19 +364,16 @@ adapt("src/Game/Util/GravityUtil.cpp", "Game/Util/GravityUtil.cpp", [
     "bool isZeroGravity(const LiveActor* pActor) {",
 ], reason="LiveActor is not brought up")
 
-# Wire gravity follows a rail; RailRider and the stage's path data are not brought up.
-adapt("include/Game/Gravity/GravityCreator.hpp", "include/Game/Gravity/GravityCreator.hpp", [
-    ('#include "Game/LiveActor/RailRider.hpp"', "class RailRider;", 1),
-])
 adapt("src/Game/Gravity/GravityCreator.cpp", "Game/Gravity/GravityCreator.cpp", [
     ('#include "Game/Gravity.hpp"\n#include "Game/Util.hpp"',
      '#include "Game/Gravity/GravityCreator.hpp"\n#include "Game/Util/GravityUtil.hpp"\n#include "Game/Util/JMapUtil.hpp"\n'
      '#include "Game/Util/MathUtil.hpp"\n#include "Game/Util/MtxUtil.hpp"', 1),
-], drop=[
-    "PlanetGravity* WireGravityCreator::createInstance() {",
-    "void WireGravityCreator::settingFromJMapOtherParam(const JMapInfoIter& rIter) {",
-    "PlanetGravity* WireGravityCreator::getGravity() {",
-], reason="RailRider is not brought up")
+])
+
+# Rails: the wire gravity creator samples one through RailRider. Camera rails come with the camera.
+adapt("src/Game/LiveActor/RailRider.cpp", "Game/LiveActor/RailRider.cpp", [], drop=[
+    "RailRider::RailRider(s32 a1, s32 a2)",
+], reason="camera rails come with the camera")
 
 # Collision: the original KCollisionServer and attribute codes. CollisionParts, which owns a server per
 # placed part, takes a HitSensor whose host is a LiveActor, so it waits for actors.

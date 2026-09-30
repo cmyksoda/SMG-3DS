@@ -1,5 +1,7 @@
 #include <smg/Scene.hpp>
 #include <Game/Gravity/GravityCreator.hpp>
+#include <Game/Gravity/WireGravity.hpp>
+#include <Game/LiveActor/RailRider.hpp>
 #include <Game/Util/JMapInfo.hpp>
 #include <Game/Util/JMapUtil.hpp>
 #include <cstring>
@@ -27,7 +29,24 @@ struct Kind {
     void (*destroy)(GravityCreator*);
 };
 
-// NameObjFactory's global gravities. GlobalWireGravity follows a rail, and RailRider is not brought up.
+// The wire creator keeps the RailRider it sampled, which the game leaves to the scene heap.
+void destroyWire(GravityCreator* base) {
+    if (RailRider* rider = static_cast<WireGravityCreator*>(base)->mRailRider) {
+        BezierRail* rail = rider->mBezierRail;
+        for (int i = 0; i < rail->mNumRailParts; ++i) {
+            delete rail->mRailParts[i].mRailPartLinear;
+            delete rail->mRailParts[i].mRailPartBezier;
+        }
+        delete[] rail->mRailParts;
+        delete[] rail->mPointCoords;
+        delete rail->mIter;
+        delete rail;
+        delete rider;
+    }
+    destroy<WireGravityCreator>(base);
+}
+
+// NameObjFactory's global gravities.
 const Kind kinds[]{
     {"GlobalCubeGravity", create<CubeGravityCreator>, destroy<CubeGravityCreator>},
     {"GlobalConeGravity", create<ConeGravityCreator>, destroy<ConeGravityCreator>},
@@ -38,6 +57,7 @@ const Kind kinds[]{
     {"GlobalPlaneGravityInCylinder", create<PlaneInCylinderGravityCreator>, destroy<PlaneInCylinderGravityCreator>},
     {"GlobalPointGravity", create<PointGravityCreator>, destroy<PointGravityCreator>},
     {"GlobalSegmentGravity", create<SegmentGravityCreator>, destroy<SegmentGravityCreator>},
+    {"GlobalWireGravity", create<WireGravityCreator>, destroyWire},
 };
 
 bool used(const JMapInfoIter& row, const char* field) {
