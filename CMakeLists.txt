@@ -88,7 +88,7 @@ add_library(petari_scene STATIC
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/StringUtilCompare.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Map/KCollision.cpp"
   "${PETARI}/src/Game/Map/KCollisionPlus.cpp"
-  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Map/CollisionCode.cpp"
+  "${PETARI}/src/Game/Map/CollisionCode.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/LiveActor/RailRider.cpp"
   "${PETARI}/src/Game/Map/BezierRail.cpp"
   "${PETARI}/src/Game/Map/RailPart.cpp"

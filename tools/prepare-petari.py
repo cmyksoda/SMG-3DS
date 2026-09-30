@@ -404,14 +404,7 @@ adapt("src/Game/Map/KCollision.cpp", "Game/Map/KCollision.cpp", [
      "    // is no smaller than the image's own address, which no offset reaches.\n"
      "    return reinterpret_cast< uintptr_t >(static_cast< const KCLFile* >(pData)->mPos) >= reinterpret_cast< uintptr_t >(pData);", 1),
 ])
-adapt("src/Game/Map/CollisionCode.cpp", "Game/Map/CollisionCode.cpp", [
-    ('#include "Game/Map/HitInfo.hpp"', '#include "Game/Util/JMapInfo.hpp"', 1),
-], drop=[
-    "const char* CollisionCode::getFloorCodeString(const Triangle& rTriangle) {",
-    "const char* CollisionCode::getWallCodeString(const Triangle& rTriangle) {",
-    "const char* CollisionCode::getSoundCodeString(const Triangle& rTriangle) {",
-    "u32 CollisionCode::getCameraID(const Triangle& rTriangle) {",
-], reason="Triangle comes with CollisionParts, which waits for LiveActor")
+# CollisionCode compiles as it is now that Triangle has come with CollisionParts.
 
 # Stage switches: the container, zone switches, switch controls and sleep controllers are the originals.
 # The game leaves the zone switches to the scene heap; the native scene frees them, so it needs to see them.
