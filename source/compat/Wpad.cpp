@@ -1,7 +1,6 @@
 // The Wii Remote library's side of the port. The game reads its pads through KPAD, which the port fills from the
 // 3DS (source/compat/Kpad.cpp); the Bluetooth stack behind WPAD has no counterpart. Channel 0 is the 3DS itself, a
 // Remote with a Nunchuk that is always there; the other channels never connect.
-#include <3ds.h>
 #include <revolution/wpad.h>
 #include <cstdio>
 
@@ -13,16 +12,6 @@ WPADExtensionCallback sExtension[WPAD_MAX_CONTROLLERS] = {};
 bool sConnected = false, sExtensionReported = false;
 WPADCallback sInfoCallback = nullptr;  // an info request answered at the next read
 
-// The 3DS's own battery (PTMU's level 0 to 5) as a Remote's (WPAD_BATTERY_LEVEL_CRITICAL 0 to MAX 4); plugged in, it
-// needs no warning.
-u8 batteryLevel() {
-    static const bool ready = R_SUCCEEDED(ptmuInit());
-    u8 level = 5, charging = 0;
-    if (ready) PTMU_GetBatteryLevel(&level), PTMU_GetBatteryChargeState(&charging);
-    if (charging) return WPAD_BATTERY_LEVEL_MAX;
-    return level >= 5 ? WPAD_BATTERY_LEVEL_MAX : level == 4 ? WPAD_BATTERY_LEVEL_HIGH : level == 3 ? WPAD_BATTERY_LEVEL_MEDIUM
-         : level == 2 ? WPAD_BATTERY_LEVEL_LOW : WPAD_BATTERY_LEVEL_CRITICAL;
-}
 bool validChannel(s32 channel) { return channel >= 0 && channel < WPAD_MAX_CONTROLLERS; }
 } // namespace
 
@@ -65,7 +54,7 @@ s32 WPADProbe(s32 channel, u32* type) {
 }
 
 // The 3DS is the Remote: it has no speaker of its own to switch on, and no motor. The game handles a speaker that
-// won't come on (SpkSpeakerCtrl leaves it idle), and rumble simply isn't felt; each says so once in the log.
+// won't come on (SpkSpeakerCtrl leaves it idle); Jaxi's call (2026-09-30) is that those sounds stay silent.
 s32 WPADControlSpeaker(s32, u32, WPADCallback) {
     static bool noted = false;
     if (!noted) std::fputs("The Wii Remote's speaker sounds are not played: the 3DS has no Remote speaker\n", stderr);
@@ -84,14 +73,13 @@ void WPADControlMotor(s32, u32 command) {
 void WPADSetAutoSleepTime(u8) {}
 void WPADDisconnect(s32) {}
 
-// Channel 0's state as its Bluetooth report would give it: the Nunchuk attached, the first LED, the 3DS's battery.
+// Channel 0's state as its Bluetooth report would give it: the Nunchuk attached, the first LED, a full battery.
+// Jaxi's call (2026-09-30): no low-battery popup; the 3DS shows its own battery.
 s32 WPADGetInfoAsync(s32 channel, WPADInfo* info, WPADCallback callback) {
     if (channel != 0 || !sConnected) return WPAD_ERR_NO_CONTROLLER;
     *info = {};
     info->attach = TRUE;
-    info->battery = batteryLevel();
-    info->lowBat = info->battery <= WPAD_BATTERY_LEVEL_LOW;
-    info->nearempty = info->battery == WPAD_BATTERY_LEVEL_CRITICAL;
+    info->battery = WPAD_BATTERY_LEVEL_MAX;
     info->led = 1;
     sInfoCallback = callback;
     return WPAD_ERR_NONE;
