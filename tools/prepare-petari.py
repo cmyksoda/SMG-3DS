@@ -1709,6 +1709,12 @@ adapt("src/JSystem/JKernel/JKRUnitHeap.cpp", "JSystem/JKernel/JKRUnitHeap.cpp", 
     ("            word = *words;\n", "            word = batWord(words);\n", 2),
     ("        u32 word = words != end ? *words : 0xFFFFFFFF;\n", "        u32 word = words != end ? batWord(words) : 0xFFFFFFFF;\n", 2),
 ])
+# The layout's name points into a buffer declared inside the if and is used after it ends; Metrowerks kept that
+# buffer's stack slot, GCC reuses it for archiveName, so the buffers live for the whole constructor.
+adapt("src/Game/Screen/LayoutManager.cpp", "Game/Screen/LayoutManager.cpp", [
+    ("    if (useArchiveNamePrefix) {\n        char fileNameWithoutExtension[0x60];\n        char fileNameFromPrefix[0x80];\n",
+     "    char fileNameWithoutExtension[0x60];\n    char fileNameFromPrefix[0x80];\n    if (useArchiveNamePrefix) {\n", 1),
+])
 # MSL's own wide-string functions, built as C over newlib's headers (compat/smg/MslWide.h stands in for MSL's).
 adapt("src/MSL_C/wstring.c", "MSL_C/wstring.c", [('#include "size_t.h"\n#include "wchar_t.h"\n', "#include <smg/MslWide.h>\n", 1)])
 adapt("src/MSL_C/wmem.c", "MSL_C/wmem.c", [('#include "wchar_io.h"\n#include "cstring"\n', "#include <smg/MslWide.h>\n", 1)])
