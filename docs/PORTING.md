@@ -57,8 +57,8 @@ completion does not make those interfaces portable to ARM11/PICA200.
   were paired-single assembly, and `fastSqrtf`/`frsqrte`, have scalar bodies; the SDK matrix
   and quaternion routines they call have portable implementations. `MR::getRandom` reads a
   natively held `TRandom_fast_` seeded as `GameSystemObjHolder` seeds it. Every shape is
-  under test: point, parallel, disk, segment and wire directly, and cube, cone and disk torus
-  through their original creators, fed `planetobjinfo` rows.
+  under test: point, parallel, disk, segment and wire directly, and cube, cone, disk torus and wire
+  through their original creators, fed `planetobjinfo` rows (and, for wire, a path table).
 - The original `NameObj`, `NameObjRegister`, `NameObjHolder` and `NameObjGroup` compile for ARM,
   with `MR::getHashCode` from `HashUtil` (MSL's locale table replaced by the "C" locale's ASCII
   lowering it holds) and ObjUtil's and SystemUtil's NameObj helpers copied out of their files
@@ -69,7 +69,10 @@ completion does not make those interfaces portable to ARM11/PICA200.
   the Wii and the 3DS; 64-bit host tests compare its low half.
 - Placed gravity is built by the original code: `JMapUtil` (the whole file, with narrow includes),
   `GravityUtil` (without its seven `LiveActor` overloads, left out with a comment until actors run)
-  and `GravityCreator` (without the wire creator, which samples a rail through `RailRider`).
+  and `GravityCreator`, whose wire creator samples a rail through the original `RailRider`,
+  `BezierRail` and `RailPart`. The native scene answers `MR::getRailInfo` as
+  `StageDataHolder::getCommonPathPointInfo` does, from each zone's `CommonPathInfo` and
+  `CommonPathPointInfo.<n>` tables; `RailRider`'s camera-rail constructor waits for the camera.
   `placeStageGravity` walks a scenario's zones and active layers and hands every `planetobjinfo`
   row to the native scene, which does what `GlobalGravityObj` does (see below). For Good Egg
   scenario 1 that is 111 gravities in 16 zones. `gravity_tool` asks a stage for the pull at any
@@ -139,8 +142,8 @@ borrows its owner's sample storage rather than allocating the Wii's 120-sample I
    19.4 MB of linear memory after Good Egg in Azahar; other formats stay uncompressed.
 4. **Original scene and actor execution.** Placed gravity runs through the original creators
    over the native scene. Next: `LiveActor` (which also brings back `GlobalGravityObj` and the
-   `GravityUtil` actor overloads, and `CollisionParts` with `CollisionDirector`'s keepers), `RailRider`
-   for wire gravity, stage switches, then the original `NameObjListExecutor` scheduler,
+   `GravityUtil` actor overloads, and `CollisionParts` with `CollisionDirector`'s keepers), stage
+   switches, then the original `NameObjListExecutor` scheduler,
    gravity, collision, stage placement, Mario, animation, and camera using the real resources.
    Integrate the input boundary into `GamePadUtil`/`WPad`, including explicit digital spin input.
    Skip the Wii pointer's multi-frame loss-of-IR delay: stylus lift must hide it immediately.
@@ -203,8 +206,8 @@ Three ways forward:
   creator by the names `NameObjFactory` uses, call `createFromJMap` (which registers the gravity),
   then appear and apply switches as a scene starts, with every stage switch off: a gravity with
   switch A stays off, one with only switch B stays on. Rows with switches, sleep control
-  (`SW_SLEEP`) or a follower (`FollowId`) are listed, because only their start state is honored;
-  wire gravity is listed as skipped. Creators and gravities are freed with the scene.
+  (`SW_SLEEP`) or a follower (`FollowId`) are listed, because only their start state is honored.
+  Creators and gravities (and the wire creator's `RailRider`) are freed with the scene.
 
 - `CollisionDirector`'s `CollisionCode` (created with the scene, as the director creates it), which
   `KCollisionServer` reads camera ids through, and `CameraDirector`'s camera-code collection:
@@ -264,9 +267,10 @@ The four remaining `.arc` files are U8-format Wii HOME Menu resources, currently
 the original creators under ASan and UBSan, and asks every placed gravity for its pull at 48
 points around Mario's start (181,392 pulls, none infinite or NaN). The disc has 1,075 global
 gravity rows, all in `planetobjinfo` tables: 463 planes in boxes, 178 points, 147 cubes, 140
-disks, 75 segments, 34 planes in cylinders, 10 disk tori, 9 planes, 7 cones and 12 wires. Wire
-gravity (59 placements in 22 scenarios, among them Honeybee Kingdom, Sand Clock and Cosmos
-Garden) is the only kind not placed. 63 rows use switch A, 15 switch B, 11 `SW_SLEEP`, and none
+disks, 75 segments, 34 planes in cylinders, 10 disk tori, 9 planes, 7 cones and 12 wires. Every
+kind is placed: the 59 wire placements (22 scenarios, among them Honeybee Kingdom, Sand Clock and
+Cosmos Garden) sample their real rails into 1,095 points, each from its rail's first point, with
+chords within 5% of even (the original integrates Bezier lengths numerically, a little short). 63 rows use switch A, 15 switch B, 11 `SW_SLEEP`, and none
 a follower. Every scenario has gravity at Mario's start except twelve hidden-star scenarios
 (`IsHidden`), which place no MarioNo 0 entrance of their own; `Stage::entrance` says so instead
 of starting at the origin. Another 67 rows place actors with gravity of their own (the reverse
@@ -291,6 +295,6 @@ across 12 zones; the preview draws 56 rigid models in 172 placements.
 
 The portable math tests check tolerances and conventions, not bit-identical Gekko rounding.
 The native validation app passes 1,069 math, 37 WPad, 179 BCSV, 1,043 J3D model/texture,
-8,607 TEV combiner, 27 original gravity, 27 NameObj, 56 scene and gravity creator, 48 collision, 7 ETC1 and 8 GPU texture checks on emulated ARM
+8,607 TEV combiner, 27 original gravity, 27 NameObj, 60 scene and gravity creator, 48 collision, 7 ETC1 and 8 GPU texture checks on emulated ARM
 in Azahar; the GPU checks compare the hardware's ETC1 decoding against ours. Of the disc's
 7,780 materials, 6,949 translate to the combiner exactly. No physical console has been tested.

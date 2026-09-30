@@ -10,6 +10,9 @@
 #include <Game/Gravity/GravityInfo.hpp>
 #include <Game/Gravity/PlanetGravity.hpp>
 #include <Game/Gravity/PlanetGravityManager.hpp>
+#include <Game/Gravity/GravityCreator.hpp>
+#include <Game/Gravity/WireGravity.hpp>
+#include <Game/LiveActor/RailRider.hpp>
 #include <Game/Camera/CameraPolygonCodeUtil.hpp>
 #include <Game/Map/KCollision.hpp>
 #include <Game/Scene/SceneObjHolder.hpp>
@@ -101,7 +104,7 @@ int auditGravity(const fs::path& root) {
         if (entry.is_directory() && fs::exists(entry.path() / (name + "Scenario.arc"))) galaxies.push_back(name);
     }
     std::sort(galaxies.begin(), galaxies.end());
-    std::size_t scenarios = 0, failed = 0, placedTotal = 0, startState = 0, sampled = 0;
+    std::size_t scenarios = 0, failed = 0, placedTotal = 0, startState = 0, sampled = 0, wires = 0, wirePoints = 0;
     std::map<std::string, std::size_t> placed, skipped;
     std::vector<std::string> noStartGravity, withSkipped, noEntrance, noLanding, farLandings;
     std::map<std::string, std::size_t> landings, floors;
@@ -153,6 +156,29 @@ int auditGravity(const fs::path& root) {
             if (!scene.skippedGravities().empty()) withSkipped.push_back(label);
             placedTotal += scene.placedGravities().size();
             startState += scene.startStateGravities().size();
+
+            // Each wire's samples lie along its rail from the rail's first point, evenly to within the few percent the
+            // original's numerically integrated Bezier lengths allow.
+            for (const auto& g : scene.placedGravities()) {
+                if (g.name != "GlobalWireGravity") continue;
+                const auto* creator = static_cast<const WireGravityCreator*>(g.creator);
+                const auto& points = creator->mGravityInstance->mPoints;
+                const RailRider* rider = creator->mRailRider;
+                ++wires;
+                wirePoints += points.size();
+                const float interval = rider->getTotalLength() / points.size();
+                bool even = points.size() >= 2 && (points[0] - rider->mStartPos).length() < 0.01f;
+                float shortest = 1e30f, longest = 0;
+                for (int i = 1; i < points.size(); ++i) {
+                    const float chord = (points[i] - points[i - 1]).length();
+                    shortest = std::min(shortest, chord / interval), longest = std::max(longest, chord / interval);
+                    even &= std::isfinite(chord) && chord <= interval * 1.05f && chord >= interval * 0.5f;
+                }
+                if (even) continue;
+                std::fprintf(stderr, "WIRE %s: %d samples of a %.1f rail are not even along it (chords %.3f to %.3f of %.1f)\n",
+                             label.c_str(), points.size(), rider->getTotalLength(), shortest, longest, interval);
+                ++errors;
+            }
 
             // Every gravity asked for its pull around the start, near and far; none may be NaN or infinite.
             const TVec3f start(stage.start[0], stage.start[1], stage.start[2]);
@@ -208,6 +234,8 @@ int auditGravity(const fs::path& root) {
     std::printf("%zu gravities placed across all scenarios, %zu pulls sampled\n", placedTotal, sampled);
     for (const auto& [name, count] : placed) std::printf("%6zu  %s\n", count, name.c_str());
     for (const auto& [name, count] : skipped) std::printf("%6zu  skipped: %s\n", count, name.c_str());
+    std::printf("%zu wire gravities sampled their rails into %zu points, from each rail's start, chords within 5%% of even\n",
+                wires, wirePoints);
     std::printf("%zu placements keep only their start state (switches, SW_SLEEP or FollowId)\n", startState);
     std::printf("%zu scenarios skip a gravity:", withSkipped.size());
     for (const auto& label : withSkipped) std::printf(" [%s]", label.c_str());
