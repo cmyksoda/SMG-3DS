@@ -27,6 +27,7 @@ void PPCSync() { __sync_synchronize(); }
 namespace {
 BOOL sInterruptsEnabled = TRUE;
 s32 sSchedulerDisabled = 0;
+void deliverPendingInterrupts();
 } // namespace
 
 // The previous state comes back, as the SDK returns it, so nested sections restore what they found.
@@ -36,15 +37,18 @@ BOOL OSDisableInterrupts() {
     return previous;
 }
 
+// Turning interrupts back on delivers what was raised while they were off, as the Wii's CPU takes them.
 BOOL OSEnableInterrupts() {
     const BOOL previous = sInterruptsEnabled;
     sInterruptsEnabled = TRUE;
+    deliverPendingInterrupts();
     return previous;
 }
 
 BOOL OSRestoreInterrupts(BOOL level) {
     const BOOL previous = sInterruptsEnabled;
     sInterruptsEnabled = level;
+    if (level) deliverPendingInterrupts();
     return previous;
 }
 
@@ -121,8 +125,31 @@ OSInterruptMask __OSMaskInterrupts(OSInterruptMask mask) {
     sUnmasked &= ~mask;
     return previous;
 }
-__OSInterruptHandler smgInterruptHandler(__OSInterrupt interrupt) {
-    return sUnmasked & (0x80000000u >> (interrupt & 31)) ? sInterruptHandlers[interrupt & 31] : nullptr;
+namespace {
+u32 sPendingInterrupts = 0;
+
+// The lowest-numbered source first, as the Wii's dispatcher takes them; a handler runs with interrupts off.
+void deliverPendingInterrupts() {
+    while (sInterruptsEnabled) {
+        const u32 ready = sPendingInterrupts & sUnmasked;
+        if (!ready) return;
+        const int source = __builtin_clz(ready);
+        sPendingInterrupts &= ~(0x80000000u >> source);
+        const __OSInterruptHandler handler = sInterruptHandlers[source];
+        if (!handler) continue;
+        OSContext context;
+        std::memset(&context, 0, sizeof context);
+        sInterruptsEnabled = FALSE;
+        handler(static_cast<__OSInterrupt>(source), &context);
+        sInterruptsEnabled = TRUE;
+    }
+}
+} // namespace
+
+// A device of the port's raises one of the Wii's interrupts (the GPU's command processor, for its pixel engine).
+extern "C" void smgRaiseInterrupt(__OSInterrupt interrupt) {
+    sPendingInterrupts |= 0x80000000u >> (interrupt & 31);
+    deliverPendingInterrupts();
 }
 
 // Interrupt handlers switch the floating-point context the PowerPC saves lazily; the 3DS kernel saves a thread's

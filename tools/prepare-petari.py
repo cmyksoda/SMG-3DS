@@ -768,13 +768,14 @@ adapt("src/RVL_SDK/gd/GDBase.c", "RVL_SDK/gd/GDBase.cpp", [
     ("pDL->start = pStart;", "pDL->start = static_cast< u8* >(pStart);", 1),
 ])
 
-# The Wii's write-gather pipe to its GPU: nothing in the port may write it, so nothing defines it.
+# The Wii's write-gather pipe to its GPU: the port's FIFO takes its writes (source/compat/GxFifo.cpp).
 adapt("libs/RVL_SDK/include/revolution/gx/GXVert.h", "include/revolution/gx/GXVert.h", [
     ("#ifdef __MWERKS__\nvolatile PPCWGPipe GXWGFifo : 0xCC008000;\n#else\nvolatile PPCWGPipe GXWGFifo;\n#endif",
      "#ifdef __MWERKS__\nvolatile PPCWGPipe GXWGFifo : 0xCC008000;\n#define GXWGFIFO_PUT(td, v) (GXWGFifo.td = (td)(v))\n#else\n"
      "extern volatile PPCWGPipe GXWGFifo;\n"
-     "// The port has no pipe to the Wii's GPU: a write stops the program by name (source/compat/Gx.cpp).\n"
-     "#ifdef __cplusplus\nextern \"C\"\n#endif\nvoid GXWGFifoWrite(void) __attribute__((noreturn));\n#define GXWGFIFO_PUT(td, v) (GXWGFifoWrite(), (void)(v))\n#endif", 1),
+     "// The pipe to the GPU is the port's FIFO, which takes each value big-endian as the Wii's pipe does\n"
+     "// (source/compat/GxFifo.cpp; programs without the whole game stop at their first write).\n"
+     "#ifdef __cplusplus\nextern \"C\" {\n#endif\nvoid smgGXFifo_u8(u8);\nvoid smgGXFifo_s8(s8);\nvoid smgGXFifo_u16(u16);\nvoid smgGXFifo_s16(s16);\nvoid smgGXFifo_u32(u32);\nvoid smgGXFifo_s32(s32);\nvoid smgGXFifo_f32(f32);\n#ifdef __cplusplus\n}\n#endif\n#define GXWGFIFO_PUT(td, v) smgGXFifo_##td((td)(v))\n#endif", 1),
     ("GXWGFifo.td = (td)x;", "GXWGFIFO_PUT(td, x);", 4),
     ("GXWGFifo.td = (td)y;", "GXWGFIFO_PUT(td, y);", 3),
     ("GXWGFifo.td = (td)z;", "GXWGFIFO_PUT(td, z);", 2),
@@ -1468,12 +1469,12 @@ adapt("src/JSystem/JMath/JMath.cpp", "JSystem/JMath/JMath.cpp", [
      "    dst->x = (b->x - a->x) * t + a->x;\n    dst->y = (b->y - a->y) * t + a->y;\n    dst->z = (b->z - a->z) * t + a->z;\n#endif", 1),
 ])
 
-# The GPU FIFO's register writes go through the one loud write point, as GXVert.h's do.
+# The GPU FIFO's register writes go to the port's FIFO, as GXVert.h's do.
 adapt("libs/RVL_SDK/include/revolution/gx/GXRegs.h", "include/revolution/gx/GXRegs.h", [
-    (f"#define GX_WRITE_{kind}({arg}) gxfifo.{field} = ({cast})({arg})", f"#define GX_WRITE_{kind}({arg}) (GXWGFifoWrite(), (void)({arg}))", 1)
+    (f"#define GX_WRITE_{kind}({arg}) gxfifo.{field} = ({cast})({arg})", f"#define GX_WRITE_{kind}({arg}) smgGXFifo_{cast}(({cast})({arg}))", 1)
     for kind, arg, field, cast in [("U8", "ub", "u8", "u8"), ("U16", "us", "u16", "u16"), ("S16", "us", "s16", "u16"),
                                    ("U32", "ui", "u32", "u32"), ("F32", "f", "f32", "f32")]
-] + [("#define MEM_PE_REQCOUNTH_IDX", "#ifdef __cplusplus\nextern \"C\"\n#endif\nvoid GXWGFifoWrite(void) __attribute__((noreturn));\n\n#define MEM_PE_REQCOUNTH_IDX", 1),
+] + [("#define MEM_PE_REQCOUNTH_IDX", "#ifdef __cplusplus\nextern \"C\" {\n#endif\nvoid smgGXFifo_u8(u8);\nvoid smgGXFifo_s8(s8);\nvoid smgGXFifo_u16(u16);\nvoid smgGXFifo_s16(s16);\nvoid smgGXFifo_u32(u32);\nvoid smgGXFifo_s32(s32);\nvoid smgGXFifo_f32(f32);\n#ifdef __cplusplus\n}\n#endif\n\n#define MEM_PE_REQCOUNTH_IDX", 1),
       # Upstream's fallbacks for other compilers are empty, fit only for an editor's parser: the counters read
       # nothing and FAST_FLAG_SET, which packs every register's fields, does nothing. GCC gets real ones:
       # Metrowerks' counter reader, and rlwimi's insert under its mask in C.
