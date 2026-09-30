@@ -393,8 +393,9 @@ so only programs without the game (the preview, tests, tools) ever take one.
 
 **Paired singles only Metrowerks compiles.** Some JSystem functions keep their whole body in
 `#ifdef __MWERKS__` asm with no `#else`; GCC compiles them empty or reading registers never set.
-`tools/mwerks-only-asm.py` lists them in everything the port builds: it found 13, eight of them real bugs in
-waiting (`J3DCalcZValue`, `JMAVECLerp`, `JMAVECScaleAdd`, `JMAQuatLerp`, `J3DTextureSRTInfo::operator=`,
+`tools/mwerks-only-asm.py PETARI BUILD/petari Game JSystem nw4r RVL_SDK/gx RVL_SDK/gd RVL_SDK/aralt` lists them,
+and empty macro fallbacks, in everything the port builds, as the build resolves each header: it found 13 asm
+blocks, eight of them real bugs in waiting (`J3DCalcZValue`, `JMAVECLerp`, `JMAVECScaleAdd`, `JMAQuatLerp`, `J3DTextureSRTInfo::operator=`,
 `J3DMtxBuffer::setNrmMtx`, `J3DTexMtxInfo::setEffectMtx`, two 3x3 copies). All have C++ bodies now; the scan
 reads 0. Run it after any new file joins the build.
 

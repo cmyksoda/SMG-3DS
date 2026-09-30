@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Lists code that only Metrowerks gets: #if/#ifdef __MWERKS__ blocks holding asm and no #else. GCC compiles
-such a function without that part, so it can come out empty or reading registers it never set.
+"""Lists code that only Metrowerks gets: #if/#ifdef __MWERKS__ blocks holding asm and no #else, and #else
+branches that define a function-like macro as nothing (upstream's fallbacks for an editor's parser). GCC
+compiles either without the Metrowerks part, so a function can come out empty or reading registers never set.
 
-usage: mwerks-only-asm.py PETARI_DIR GENERATED_DIR [Game JSystem nw4r ...]
-Each file is read as the build reads it: the generated copy where one exists.
+usage: mwerks-only-asm.py PETARI_DIR GENERATED_DIR [Game JSystem nw4r RVL_SDK/gx RVL_SDK/gd RVL_SDK/aralt ...]
+Each file is read as the build reads it: the port's compat header or the generated copy where one exists.
 """
 import re, sys
 from pathlib import Path
@@ -13,8 +14,11 @@ petari, generated = Path(petari), Path(generated)
 condition = re.compile(r"#\s*(if|ifdef|ifndef|elif|else|endif)\b(.*)")
 
 
+empty_macro = re.compile(r"\s*#\s*define\s+\w+\([^)]*\)\s*$")
+
+
 def blocks(text):
-    """(line, has_else) for each __MWERKS__ block holding asm."""
+    """(line, has_else) for each __MWERKS__ block holding asm; an empty macro fallback counts as one with no #else."""
     stack, found = [], []
     for number, line in enumerate(text.splitlines(), 1):
         match = condition.match(line.strip())
@@ -31,19 +35,25 @@ def blocks(text):
                     found.append((block["line"], block["else"]))
         elif stack and stack[-1]["mwerks"] and not stack[-1]["else"] and re.search(r"\basm\b", line):
             stack[-1]["asm"] = True
+        elif stack and stack[-1]["mwerks"] and stack[-1]["else"] and empty_macro.match(line):
+            found.append((number, False))
     return found
 
 
 sources = []
 for tree in trees:
-    for source in sorted((petari / "src" / tree).rglob("*.cpp")):
+    for source in sorted(list((petari / "src" / tree).rglob("*.cpp")) + list((petari / "src" / tree).rglob("*.c"))):
         relative = source.relative_to(petari / "src")
         copy = generated / relative
         sources.append((str(relative), copy if copy.exists() else source))
 headers = [(str(h.relative_to(petari)), h) for h in sorted(petari.glob("include/**/*.h*"))] + \
           [(str(h.relative_to(petari)), h) for lib in ("JSystem", "nw4r", "RVL_SDK") for h in sorted((petari / "libs" / lib / "include").rglob("*.h*"))]
+compat = Path(__file__).resolve().parent.parent / "compat"
 for relative, path in headers:
-    copy = generated / "include" / Path(relative).relative_to(Path(relative).parts[0] if relative.startswith("include/") else Path(*Path(relative).parts[:3]))
+    inner = Path(relative).relative_to(Path(relative).parts[0] if relative.startswith("include/") else Path(*Path(relative).parts[:3]))
+    if (compat / inner).exists():
+        continue  # the port's compat header is found first and replaces this one
+    copy = generated / "include" / inner
     sources.append((relative, copy if copy.exists() else path))
 total = 0
 for relative, path in sources:
@@ -51,4 +61,4 @@ for relative, path in sources:
         if not has_else:
             total += 1
             print(f"{relative}:{line}")
-print(f"{total} asm blocks only Metrowerks compiles", file=sys.stderr)
+print(f"{total} places only Metrowerks compiles", file=sys.stderr)
