@@ -123,11 +123,12 @@ sdmc:/3ds/SMG-3DS/game/
   ...
 ```
 
-The game's own boot (`mario_probe.3dsx`) also reads the disc's file table, from the `sys` directory
-`wit` extracts beside `files`:
+The game's own boot (`mario_probe.3dsx`) also reads the disc's file table and two tables linked into the game's
+program, from the `sys` directory `wit` extracts beside `files`:
 
 ```text
 sdmc:/3ds/SMG-3DS/sys/fst.bin
+sdmc:/3ds/SMG-3DS/sys/main.dol
 ```
 
 On boot, it validates `LayoutData/StarPieceCounter.arc` using the native Yaz0/RARC

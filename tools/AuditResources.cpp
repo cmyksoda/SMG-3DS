@@ -7,6 +7,7 @@
 #include <JSystem/J3DGraphLoader/J3DModelLoader.hpp>
 #include <smg/Archive.hpp>
 #include <smg/Bcsv.hpp>
+#include <smg/Dol.hpp>
 #include <smg/NativeResources.hpp>
 #include <smg/Animation.hpp>
 #include <smg/Combiner.hpp>
@@ -464,8 +465,34 @@ int main(int argc, char** argv) {
     if (argc == 3 && !std::strcmp(argv[2], "--gravity")) return auditGravity(argv[1], false);
     if (argc == 3 && !std::strcmp(argv[2], "--actors")) return auditGravity(argv[1], true);
     if (argc == 3 && !std::strcmp(argv[2], "--collision")) return auditCollision(argv[1]);
+    // main.dol's own tables, which the game attaches in place of an archive's.
+    if (argc == 3 && !std::strcmp(argv[2], "--dol")) {
+        std::vector<std::uint8_t> dol;
+        std::FILE* file = std::fopen(argv[1], "rb");
+        if (!file) { std::fprintf(stderr,"Cannot open %s\n",argv[1]); return 2; }
+        for (int c; (c = std::fgetc(file)) != EOF;) dol.push_back(static_cast<std::uint8_t>(c));
+        std::fclose(file);
+        smg::DolTables tables; std::string error;
+        if (!smg::findDolTables({dol.data(),dol.size()},tables,error)) { std::fprintf(stderr,"%s\n",error.c_str()); return 1; }
+        for (auto* table : {&tables.galaxyId, &tables.storyEvent}) {
+            JMapInfo info;
+            info.attach(table->data());
+            const char* first = nullptr;
+            info.getValue(0,"name",&first);
+            std::printf("%s: %zu bytes, %d rows, first \"%s\"%s\n", table == &tables.galaxyId ? "GalaxyIDBCSV" : "StoryEventBCSV",
+                        table->size(), info.getNumEntries(), first ? first : "?",
+                        info.mData != reinterpret_cast<const JMapData*>(table->data()) ? " (attached as a repacked copy)" : "");
+            if (info.mData != reinterpret_cast<const JMapData*>(table->data())) std::free(const_cast<JMapData*>(info.mData));
+        }
+        u32 stars = 0;
+        JMapInfo galaxies; galaxies.attach(tables.galaxyId.data());
+        galaxies.findElement("name","EggStarGalaxy",0).getValue<u32>("PowerStarNum",&stars);
+        std::printf("EggStarGalaxy opens at %u power stars\n", stars);
+        if (galaxies.mData != reinterpret_cast<const JMapData*>(tables.galaxyId.data())) std::free(const_cast<JMapData*>(galaxies.mData));
+        return 0;
+    }
     const bool models = argc == 3 && !std::strcmp(argv[2], "--models");
-    if (argc != 2 && !models) { std::fprintf(stderr,"Usage: resource_audit EXTRACTED_FILES_DIRECTORY [--models|--gravity|--actors|--collision]\n"); return 2; }
+    if (argc != 2 && !models) { std::fprintf(stderr,"Usage: resource_audit EXTRACTED_FILES_DIRECTORY [--models|--gravity|--actors|--collision] | MAIN_DOL --dol\n"); return 2; }
     std::error_code ec;
     const fs::path root(argv[1]);
     if (!fs::is_directory(root, ec)) { std::fprintf(stderr,"Not a readable directory\n"); return 2; }
