@@ -28,6 +28,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${PETARI_MATH_HEA
 add_library(petari_core STATIC
   source/compat/StringUtil.cpp
   source/compat/Math.cpp
+  source/compat/NativeBcsv.cpp
   source/compat/GameRandom.cpp
   source/compat/Os.cpp
   "${CMAKE_CURRENT_BINARY_DIR}/petari/RVL_SDK/gd/GDBase.cpp"

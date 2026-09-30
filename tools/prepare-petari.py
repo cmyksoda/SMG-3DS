@@ -9,6 +9,9 @@ destination = output / "Game/Util/JMapInfo.cpp"
 text = source.read_text()
 fixes = [
     ("case JMAP_VALUE_TYPE_STRING_PTR:\n", "case JMAP_VALUE_TYPE_STRING_PTR: {\n"),
+    # Tables come big-endian from the disc; attaching turns one native in place (compat/smg/NativeResources.hpp).
+    ('#include <JSystem/JGadget/hashcode.hpp>\n', '#include <JSystem/JGadget/hashcode.hpp>\n#include <smg/NativeResources.hpp>\n'),
+    ("    mData = static_cast< const JMapData* >(pData);", "    smgNativeBcsv(const_cast< void* >(pData));\n    mData = static_cast< const JMapData* >(pData);"),
     ("*pValueOut = pStringTable + *reinterpret_cast< const u32* >(valuePtr);\n        break;",
      "*pValueOut = pStringTable + *reinterpret_cast< const u32* >(valuePtr);\n        break;\n    }"),
     ("if (item->mShift != 0) {\n        goto FAIL;\n    }",
@@ -19,7 +22,7 @@ for before, after in fixes:
         raise SystemExit(f"Upstream syntax changed; review GCC adaptation: {before!r}")
     text = text.replace(before, after)
 destination.parent.mkdir(parents=True, exist_ok=True)
-text = "// Adapted from Petari: switch/goto scope fixes for GCC; no logic changes.\n" + text
+text = "// Adapted from Petari: switch/goto scope fixes for GCC, and tables turned native as they attach.\n" + text
 if not destination.exists() or destination.read_text() != text:
     destination.write_text(text)
 

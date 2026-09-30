@@ -3,3 +3,6 @@
 // format's structures, these turn them to native order in place first (source/compat/NativeResources.cpp). Each
 // recognises data it already turned, so a second call changes nothing.
 void smgNativeRarc(void* archive);
+void smgNativeBcsv(void* table);
+// Why a table cannot be turned in place, or null when it can (or already is).
+const char* smgNativeBcsvProblem(const void* table);

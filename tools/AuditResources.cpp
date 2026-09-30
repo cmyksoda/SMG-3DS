@@ -7,6 +7,7 @@
 #include <JSystem/J3DGraphLoader/J3DModelLoader.hpp>
 #include <smg/Archive.hpp>
 #include <smg/Bcsv.hpp>
+#include <smg/NativeResources.hpp>
 #include <smg/Animation.hpp>
 #include <smg/Combiner.hpp>
 #include <smg/Kcl.hpp>
@@ -477,6 +478,7 @@ int main(int argc, char** argv) {
     if (ec) { std::fprintf(stderr,"Directory traversal: %s\n",ec.message().c_str()); return 2; }
     std::sort(archives.begin(), archives.end());
     std::size_t tables=0, records=0, resources=0, errors=0, modelCount=0, triangles=0, materials=0, exact=0;
+    std::size_t bcsvInPlace=0, bcsvRepack=0, bcsvDiffer=0;
     std::vector<float> xanimeGaps;
     std::size_t brks=0, brkErrors=0, brkUnmatched=0, skinChecked=0, skinWrong=0, j3dChecked=0, j3dWrong=0, xanimeChecked=0, bcks=0, bckErrors=0;
     std::map<std::string, std::size_t> modelErrors, approximations;
@@ -494,7 +496,34 @@ int main(int argc, char** argv) {
             smg::Bcsv table;
             if (!table.load({storage.data()+entry.offset,entry.size},error)) {
                 std::fprintf(stderr,"BCSV %s :: %s: %s\n",path.c_str(),entry.path.c_str(),error.c_str()); ++errors;
-            } else records += table.info().getNumEntries();
+                continue;
+            }
+            records += table.info().getNumEntries();
+            // The game's own loading attaches the disc's bytes: turned native in place, every value must match.
+            std::vector<std::uint32_t> disc((entry.size+3)/4);
+            std::memcpy(disc.data(),storage.data()+entry.offset,entry.size);
+            if (const char* problem = smgNativeBcsvProblem(disc.data())) {
+                ++bcsvRepack;
+                if (bcsvRepack <= 5) std::fprintf(stderr,"BCSV in place %s :: %s: %s\n",path.c_str(),entry.path.c_str(),problem);
+                continue;
+            }
+            JMapInfo attached;
+            attached.attach(disc.data());
+            bool same = attached.getNumEntries()==table.info().getNumEntries() && attached.getNumFields()==table.info().getNumFields();
+            for (int row=0; same && row<attached.getNumEntries(); ++row) {
+                for (int item=0; same && item<attached.getNumFields(); ++item) {
+                    const u8 type = attached.mData->mItems[item].mType;
+                    if (type==1 || type==6) {
+                        const char *a=nullptr, *b=nullptr;
+                        same = attached.getValueFast(row,item,&a)==table.info().getValueFast(row,item,&b) && (!a || !b || !std::strcmp(a,b));
+                    } else {
+                        u32 a=0, b=0;
+                        same = attached.getValueFast(row,item,&a)==table.info().getValueFast(row,item,&b) && a==b;
+                    }
+                }
+            }
+            if (same) ++bcsvInPlace;
+            else { ++bcsvDiffer; std::fprintf(stderr,"BCSV in place %s :: %s: values differ\n",path.c_str(),entry.path.c_str()); }
         }
         if (!models) continue;
         // BRKs, set on the archive's models: every register table should name one of their materials.
@@ -639,6 +668,8 @@ int main(int argc, char** argv) {
     }
     std::printf("%zu archives, %zu resources, %zu BCSV tables, %zu records, %zu errors\n",
         archives.size(),resources,tables,records,errors);
+    std::printf("%zu BCSV tables turn native in place as the game attaches them, every value as the port's loader reads it;"
+                " %zu need repacking for ARM; %zu differ\n", bcsvInPlace, bcsvRepack, bcsvDiffer);
     if (models) {
         std::size_t failed = 0;
         for (const auto& [reason, count] : modelErrors) { std::printf("%6zu  %s\n", count, reason.c_str()); failed += count; }

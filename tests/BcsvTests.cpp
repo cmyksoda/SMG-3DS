@@ -72,6 +72,21 @@ int runBcsvTests() {
     check(info.getValue(1,"name",&string) && std::strcmp(string,"BCD")==0,"repacked second row string");
     check(info.getValue(0,"speed",&real) && real==1.5f,"unaligned float decoded");
     check(info.getValue(1,"speed",&real) && real==-2.5f,"odd-stride second row float decoded");
+    // The game's own loading hands JMapInfo the disc's big-endian table; attaching turns it native in place.
+    std::vector<std::uint32_t> disc((bytes.size()+3)/4);
+    std::memcpy(disc.data(),bytes.data(),bytes.size());
+    JMapInfo attached;
+    check(attached.attach(disc.data()) && attached.getNumEntries()==1 && attached.getNumFields()==7,"big-endian table attaches natively");
+    s32 value=0; f32 speed=0; const char* text=nullptr;
+    check(attached.getValue(0,"id",&value) && value==-16,"attached signed integer");
+    u32 bits=0;
+    check(attached.getValue(0,"bits",&bits) && bits==15,"attached word shared by two fields turned once");
+    check(attached.getValue(0,"pos_x",&speed) && std::fabs(speed-1.5f)<0.0001f,"attached float");
+    check(attached.getValue(0,"short",&value) && value==-2 && attached.getValue(0,"byte",&value) && value==-3,"attached short and byte");
+    check(attached.getValue(0,"name",&text) && std::strcmp(text,"Luigi")==0,"attached string table");
+    check(attached.getValue(0,"inline",&text) && std::strcmp(text,"Mario")==0,"attached inline string");
+    JMapInfo again;
+    check(again.attach(disc.data()) && again.getValue(0,"id",&value) && value==-16,"attaching a turned table again changes nothing");
     std::printf("%u original JMap/BCSV checks passed\n",checks);
     return 0;
 }
