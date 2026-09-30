@@ -228,7 +228,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
 add_library(smg_platform STATIC
   source/core/Input.cpp source/core/Motion.cpp source/core/Settings.cpp source/core/Session.cpp
   source/core/Archive.cpp source/core/Bcsv.cpp source/core/Model.cpp source/core/Texture.cpp source/core/Combiner.cpp
-  source/core/Stage.cpp source/core/StageGravity.cpp source/core/Mesh.cpp source/core/Etc1.cpp source/core/Kcl.cpp source/core/StageCollision.cpp source/core/StageLight.cpp source/core/Animation.cpp source/core/Actors.cpp source/core/J3DImage.cpp source/core/Dol.cpp source/core/GxCommands.cpp source/core/Bmg.cpp source/core/Kpad.cpp)
+  source/core/Stage.cpp source/core/StageGravity.cpp source/core/Mesh.cpp source/core/Etc1.cpp source/core/Kcl.cpp source/core/StageCollision.cpp source/core/StageLight.cpp source/core/Animation.cpp source/core/Actors.cpp source/core/J3DImage.cpp source/core/Dol.cpp source/core/GxCommands.cpp source/core/Bmg.cpp source/core/Kpad.cpp source/core/Layout.cpp)
 target_include_directories(smg_platform PUBLIC include)
 target_link_libraries(smg_platform PUBLIC petari_scene petari_anim)
 target_compile_options(smg_platform PRIVATE -Wall -Wextra -Werror)
@@ -331,7 +331,7 @@ if(NINTENDO_3DS)
     add_executable(native_validation tests/NativeTests.cpp tests/MathTests.cpp tests/PadTests.cpp tests/BcsvTests.cpp
       tests/ModelTests.cpp tests/CombinerTests.cpp tests/GravityTests.cpp tests/Etc1Tests.cpp tests/GpuTests.cpp
       tests/NameObjTests.cpp tests/SceneTests.cpp tests/CollisionTests.cpp tests/AnimationTests.cpp tests/ActorTests.cpp tests/J3DTransformTests.cpp tests/J3DSkeletonTests.cpp
-      tests/GxCommandTests.cpp tests/BmgTests.cpp tests/ColorTests.cpp)
+      tests/GxCommandTests.cpp tests/BmgTests.cpp tests/ColorTests.cpp tests/LayoutTests.cpp)
     set_target_properties(native_validation PROPERTIES SUFFIX ".elf")
     target_compile_definitions(native_validation PRIVATE SMG_TEST_RUNNER)
     target_link_directories(native_validation PRIVATE "${DEVKITPRO}/libctru/lib")
@@ -362,7 +362,7 @@ else()
   add_executable(gravity_tool tools/GravityTool.cpp)
   target_link_libraries(gravity_tool PRIVATE smg_platform)
   target_compile_options(gravity_tool PRIVATE -Wall -Wextra -Werror)
-  add_executable(resource_audit tools/AuditResources.cpp)
+  add_executable(resource_audit tools/AuditResources.cpp tools/AuditLayouts.cpp)
   target_link_libraries(resource_audit PRIVATE smg_platform)
   target_compile_options(resource_audit PRIVATE -Wall -Wextra -Werror)
   add_executable(bcsv_tests tests/BcsvTests.cpp)
@@ -420,6 +420,10 @@ else()
   target_link_libraries(bmg_tests PRIVATE smg_platform)
   target_compile_options(bmg_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME bmg_text COMMAND bmg_tests)
+  add_executable(layout_tests tests/LayoutTests.cpp)
+  target_link_libraries(layout_tests PRIVATE smg_platform)
+  target_compile_options(layout_tests PRIVATE -Wall -Wextra -Werror)
+  add_test(NAME layout_family COMMAND layout_tests)
   add_executable(color_tests tests/ColorTests.cpp)
   target_link_libraries(color_tests PRIVATE smg_platform)
   target_compile_options(color_tests PRIVATE -Wall -Wextra -Werror)
