@@ -143,14 +143,14 @@ void TouchUi::drawTop(const InputFrame& input, const NativePad& pad, SceneRender
     if (scene.ready()) {
         C2D_DrawRectSolid(0, 0, 0, 400, 32, color(4, 9, 26, 0.7f));
         label(scene.title().c_str(), 200, 3, 0.4f, color(229, 239, 255), true);
+        // The system font's glyphs are about 30 px; below 0.4 the linear filter drops thin strokes.
         if (!scene.gravityHere().empty())
-            label(("gravity here: " + scene.gravityHere()).c_str(), 200, 19, 0.3f, color(150, 214, 192), true);
-        C2D_DrawRectSolid(0, 194, 0, 400, 46, color(4, 9, 26, 0.7f));
+            label(("gravity here: " + scene.gravityHere()).c_str(), 200, 17, 0.4f, color(150, 214, 192), true);
+        C2D_DrawRectSolid(0, 193, 0, 400, 47, color(4, 9, 26, 0.7f));
         if (!scene.startGravity().empty())
-            label(("Mario's start: " + scene.startGravity()).c_str(), 200, 196, 0.3f, color(150, 214, 192), true);
-        label(scene.status().c_str(), 200, 208, 0.32f, color(173, 198, 223), true);
-        label("Circle Pad fly   C-Stick look   A up   ZL down   X faster   L start view", 200, 223, 0.32f,
-              color(194, 210, 230), true);
+            label(("Mario's start: " + scene.startGravity()).c_str(), 200, 195, 0.4f, color(150, 214, 192), true);
+        label(scene.status().c_str(), 200, 209, 0.4f, color(173, 198, 223), true);
+        label("Pad fly   C-Stick look   A up   ZL down   X fast   L reset", 200, 223, 0.4f, color(194, 210, 230), true);
     } else {
         background(400, frame_);
         label("SMG-3DS", 200, 18, 0.9f, color(236, 243, 255), true);
