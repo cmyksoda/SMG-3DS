@@ -1,6 +1,7 @@
 #include <smg/Etc1.hpp>
 #include <algorithm>
 #include <climits>
+#include <cstdlib>
 #include <cstring>
 
 namespace smg {
@@ -23,25 +24,34 @@ struct Choice {
     std::uint64_t word = 0;
 };
 
-// Best table and per-pixel modifiers for one half-block around a fixed base color.
+// Best table and per-pixel modifiers for one half-block around a fixed base color. A modifier
+// moves all three channels equally, so each pixel's pick is the one nearest its mean offset.
 long fitHalf(const Rgb block[16], bool flip, bool first, Rgb base, unsigned& table, std::uint32_t& indices) {
+    int offsets[8];
+    unsigned positions[8], count = 0;
+    for (unsigned x = 0; x < 4; ++x) for (unsigned y = 0; y < 4; ++y) {
+        if (inFirst(x, y, flip) != first) continue;
+        const Rgb& p = block[x * 4 + y];
+        offsets[count] = (p.r - base.r + p.g - base.g + p.b - base.b) / 3;
+        positions[count++] = x * 4 + y;
+    }
     long best = LONG_MAX;
     for (unsigned t = 0; t < 8; ++t) {
         long total = 0;
         std::uint32_t chosen = 0;
-        for (unsigned x = 0; x < 4; ++x) for (unsigned y = 0; y < 4; ++y) {
-            if (inFirst(x, y, flip) != first) continue;
-            const Rgb& p = block[x * 4 + y];
-            long pixelBest = LONG_MAX;
+        for (unsigned i = 0; i < count; ++i) {
             unsigned pick = 0;
+            int nearest = INT_MAX;
             for (unsigned m = 0; m < 4; ++m) {
-                const int d = Modifiers[t][m];
-                const long dr = clamp255(base.r + d) - p.r, dg = clamp255(base.g + d) - p.g, db = clamp255(base.b + d) - p.b;
-                const long e = dr * dr + dg * dg + db * db;
-                if (e < pixelBest) { pixelBest = e; pick = m; }
+                const int distance = std::abs(offsets[i] - Modifiers[t][m]);
+                if (distance < nearest) { nearest = distance; pick = m; }
             }
-            total += pixelBest;
-            chosen |= pick << (2 * (x * 4 + y));
+            const Rgb& p = block[positions[i]];
+            const int d = Modifiers[t][pick];
+            const long dr = clamp255(base.r + d) - p.r, dg = clamp255(base.g + d) - p.g, db = clamp255(base.b + d) - p.b;
+            total += dr * dr + dg * dg + db * db;
+            chosen |= pick << (2 * positions[i]);
+            if (total >= best) break;
         }
         if (total < best) { best = total; table = t; indices = chosen; }
     }

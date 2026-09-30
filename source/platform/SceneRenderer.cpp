@@ -1,6 +1,7 @@
 #include <smg/SceneRenderer.hpp>
 #include <ModelShader.hpp>
 #include <smg/Archive.hpp>
+#include <smg/Etc1.hpp>
 #include <Game/Util/StringUtil.hpp>
 #include <algorithm>
 #include <cmath>
@@ -71,6 +72,8 @@ GPU_TEXCOLOR chooseFormat(const ModelTexture& texture) {
         binary &= a == 0 || a == 255;
     }
     const bool fourBit = texture.format == GxFormat::I4 || texture.format == GxFormat::IA4;
+    // CMPR is already four-bit block compression; ETC1 keeps it that size instead of 16 bits.
+    if (texture.format == GxFormat::CMPR) return opaque ? GPU_ETC1 : GPU_ETC1A4;
     if (texture.image.grayscale) return opaque ? GPU_L8 : fourBit ? GPU_LA4 : GPU_LA8;
     if (opaque) return GPU_RGB565;
     if (binary) return GPU_RGBA5551;
@@ -95,6 +98,16 @@ TiledTexture tile(const ModelTexture& source) {
     out.wrapT = source.wrapT;
     out.minFilter = source.minFilter;
     out.magFilter = source.magFilter;
+    if (out.format == GPU_ETC1 || out.format == GPU_ETC1A4) {
+        Image resized;
+        resized.width = out.width;
+        resized.height = out.height;
+        for (unsigned y = 0; y < out.height; ++y)
+            for (unsigned x = 0; x < out.width; ++x)
+                resized.pixels.push_back(image.pixels[std::size_t(y * image.height / out.height) * image.width + x * image.width / out.width]);
+        out.bytes = encodeEtc1(resized, out.format == GPU_ETC1A4);
+        return out;
+    }
     const unsigned bytesPerTexel = out.format == GPU_RGBA8 ? 4 : out.format == GPU_LA4 || out.format == GPU_L8 ? 1 : 2;
     out.bytes.assign(std::size_t(out.width) * out.height * bytesPerTexel, 0);
     auto* bytes = out.bytes.data();
