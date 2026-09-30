@@ -12,13 +12,6 @@ namespace {
 } // namespace
 
 extern "C" {
-// AI
-void AIInit() { unported("AIInit"); }
-void AIInitDMA() { unported("AIInitDMA"); }
-void AIRegisterDMACallback() { unported("AIRegisterDMACallback"); }
-void AISetDSPSampleRate() { unported("AISetDSPSampleRate"); }
-void AIStartDMA() { unported("AIStartDMA"); }
-void AIStopDMA() { unported("AIStopDMA"); }
 // ARC
 void ARCChangeDir() { unported("ARCChangeDir"); }
 void ARCClose() { unported("ARCClose"); }
@@ -30,13 +23,6 @@ void ARCGetStartAddrInMem() { unported("ARCGetStartAddrInMem"); }
 void ARCInitHandle() { unported("ARCInitHandle"); }
 void ARCOpenDir() { unported("ARCOpenDir"); }
 void ARCReadDir() { unported("ARCReadDir"); }
-// DSP
-void DSPAssertInt() { unported("DSPAssertInt"); }
-void DSPCheckMailFromDSP() { unported("DSPCheckMailFromDSP"); }
-void DSPCheckMailToDSP() { unported("DSPCheckMailToDSP"); }
-void DSPInit() { unported("DSPInit"); }
-void DSPReadMailFromDSP() { unported("DSPReadMailFromDSP"); }
-void DSPSendMailToDSP() { unported("DSPSendMailToDSP"); }
 // LC
 void LCDisable() { unported("LCDisable"); }
 void LCEnable() { unported("LCEnable"); }
@@ -103,5 +89,4 @@ void WENCGetEncodeData() { unported("WENCGetEncodeData"); }
 void WPADCanSendStreamData() { unported("WPADCanSendStreamData"); }
 void WPADSendStreamData() { unported("WPADSendStreamData"); }
 // __DSP_boot_task
-void __DSP_boot_task() { unported("__DSP_boot_task"); }
 }

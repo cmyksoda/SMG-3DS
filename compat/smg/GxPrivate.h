@@ -9,6 +9,8 @@ void GXResetWriteGatherPipe(void);
 u32 GXGetFifoCount(const GXFifoObj* fifo);
 // The port's memory for the GPU's register blocks (0 PI, 1 CP, 2 PE, 3 MEM), where GXInit points GX.
 volatile void* smgGXRegisters(int unit);
+// The DSP block, whose mailboxes and AI DMA are functions (source/compat/WiiAudio.cpp); JAudio2's handler writes it.
+volatile void* smgAudioRegisters(void);
 // Any other Wii hardware block: touching it stops the program by name.
 volatile void* smgUnportedRegisters(const char* block);
 #ifdef __cplusplus

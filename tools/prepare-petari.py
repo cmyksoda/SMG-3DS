@@ -1540,10 +1540,12 @@ adapt("libs/RVL_SDK/include/revolution/gx/GXFDLShortcut.h", "include/revolution/
 adapt("libs/JSystem/include/JSystem/JKernel/JKRAram.hpp", "include/JSystem/JKernel/JKRAram.hpp", [
     ("u32 JKRDecompExpandSize(u8*);", '#include "JSystem/JKernel/JKRDecomp.hpp"', 1),
 ])
-# DspBoot hands the Wii's audio DSP its microcode at cached-mirror addresses (0x80000000 up), which no 3DS
-# image can hold; the port's stop for it is in source/compat/WiiAudio.cpp.
-adapt("src/JSystem/JAudio2/dsptask.cpp", "JSystem/JAudio2/dsptask.cpp", [], drop=["void DspBoot(void (*pCallback)(void*)) {"],
-      reason="the Wii's audio DSP (source/compat/WiiAudio.cpp)")
+# DspBoot hands the DSP its microcode at cached-mirror addresses (0x80000000 up), which no 3DS image can hold; on
+# the 3DS every view of memory is the address itself (source/compat/WiiAudio.cpp runs the DSP).
+adapt("src/JSystem/JAudio2/dsptask.cpp", "JSystem/JAudio2/dsptask.cpp", [
+    ("    audiotask.iram_mmem_addr = (u16*)((u8*)jdsp + 0x80000000);", "    audiotask.iram_mmem_addr = jdsp;", 1),
+    ("    audiotask.dram_mem_addr = (u16*)((u8*)AUDIO_YIELD_BUFFER + 0x80000000);", "    audiotask.dram_mem_addr = AUDIO_YIELD_BUFFER;", 1),
+])
 # Metrowerks' size_t is u32's unsigned long; the toolchains' own size_t is what operator new takes. The Wii's
 # boot info sits at the start of MEM1; the port's is in source/compat/OsMemory.cpp.
 adapt("src/JSystem/JKernel/JKRHeap.cpp", "JSystem/JKernel/JKRHeap.cpp", [
@@ -1630,6 +1632,13 @@ adapt("src/RVL_SDK/mem/mem_allocator.c", "RVL_SDK/mem/mem_allocator.c", [], drop
 # The Yaz0 header's decoded size is a big-endian word, as this file's other path already reads it.
 adapt("src/Game/System/FileRipper.cpp", "Game/System/FileRipper.cpp", [
     ("    u32 data_len = *(u32*)(src + 4);", "    u32 data_len = (src[4] << 24) | (src[5] << 16) | (src[6] << 8) | src[7];", 1),
+])
+# On the Wii the audio thread, above its creator on one core, spun through its whole start-up before the creator ran
+# again; on the 3DS its start-up blocks (NDSP), so the creator waits for it, as the game's reverb setup needs its buffers.
+adapt("src/JSystem/JAudio2/JASAudioThread.cpp", "JSystem/JAudio2/JASAudioThread.cpp", [
+    ("    pAudioThread->resume();\n}", "    pAudioThread->resume();\n    while (!sStarted) {\n        OSSleepTicks(OSMillisecondsToTicks(1));\n    }\n}", 1),
+    ("    JASDriver::startDMA();\n", "    JASDriver::startDMA();\n    sStarted = true;\n", 1),
+    ("void JASAudioThread::create(s32 threadPriority) {", "static volatile bool sStarted = false;\n\nvoid JASAudioThread::create(s32 threadPriority) {", 1),
 ])
 # MSL's own wide-string functions, built as C over newlib's headers (compat/smg/MslWide.h stands in for MSL's).
 adapt("src/MSL_C/wstring.c", "MSL_C/wstring.c", [('#include "size_t.h"\n#include "wchar_t.h"\n', "#include <smg/MslWide.h>\n", 1)])
@@ -1823,8 +1832,9 @@ adapt("libs/RVL_SDK/include/private/flipper.h", "include/private/flipper.h", [
     ("#else\nvu16 __VIRegs[0x3B];\nvu32 __PIRegs[0xC];\nvu16 __DSPRegs[0x20];\nvu32 __AIRegs[0x8];\nvu32 __EXIRegs[0x10];\n"
      "vu16 __MEMRegs[0x40];\nvu32 __DIRegs[16];\nvu32 __SIRegs[64];\nvu32 __ACRRegs[89];\nvu32 __IPCRegs[4];\n#endif",
      "#else\n#include <smg/GxPrivate.h>\n#define __PIRegs ((vu32*)smgGXRegisters(0))\n#define __MEMRegs ((vu16*)smgGXRegisters(3))\n"
+     "#define __DSPRegs ((vu16*)smgAudioRegisters())\n"
      + "".join(f'#define {name} (({kind}*)smgUnportedRegisters("{name}"))\n'
-               for name, kind in [("__VIRegs", "vu16"), ("__DSPRegs", "vu16"), ("__AIRegs", "vu32"), ("__EXIRegs", "vu32"),
+               for name, kind in [("__VIRegs", "vu16"), ("__AIRegs", "vu32"), ("__EXIRegs", "vu32"),
                                   ("__DIRegs", "vu32"), ("__SIRegs", "vu32"), ("__ACRRegs", "vu32"), ("__IPCRegs", "vu32")])
      + "#endif", 1),
 ])
