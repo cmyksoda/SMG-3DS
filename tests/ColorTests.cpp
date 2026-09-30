@@ -53,12 +53,20 @@ void vertexCounts() {
     J3DShapeDraw draw(list, sizeof list);
     check(draw.countVertex(2) == 4, "a display list's vertex counts read as the GPU reads them");
 }
+
+// The premise of the Mario adapts: gcc on ARM packs bitfields from bit 0, where Metrowerks began at bit 31.
+void bitfieldOrder() {
+    union { struct { unsigned first : 1, second : 1, rest : 30; } bits; u32 word; } flags = {};
+    flags.bits.second = 1;
+    check(flags.word == 2, "gcc on ARM packs a word's bitfields from its lowest bit");
+}
 } // namespace
 
 int runColorTests() {
     packing();
     tevStage();
     vertexCounts();
+    bitfieldOrder();
     std::printf("%u colour, TEV and display list word checks passed\n", checks);
     return 0;
 }

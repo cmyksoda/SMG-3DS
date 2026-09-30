@@ -458,7 +458,15 @@ which on ARM would have named a setting as the register; they are packed by valu
 pins both, the TEV stage through GD into the port's command processor. `J3DShapeDraw` read each primitive's
 vertex count out of a display list as a native `u16`; it is the GPU's big-endian half, so a strip of 3 would
 have counted 768 and the walk (`countVertex`, `addTexMtxIndexInDL`, which `ModelUtil` calls) run past the list.
-It reads and writes those halves big-endian now. Plain copies between same-typed structs
+It reads and writes those halves big-endian now.
+
+**Bitfields read as words.** Metrowerks packs bitfields from each word's top bit; GCC on ARM from the bottom.
+That only matters where code reaches a bitfield struct through the word it shares a union with. Of the 17 files
+that declare bitfields, Mario's state unions are the ones used that way: `MarioJump` set two draw-state bits
+with word constants (`0x00100000`, `0x2000`: fields `_B` and `mIsUnderwater`), and `MarioActor` tested bit 8 of
+the high movement word (field `_37`). They name the fields now. Petari names these fields by their index in
+hex, which makes the mapping checkable. Whole-word clears and copies are safe either way. Not yet run: the boot
+doesn't reach Mario. Plain copies between same-typed structs
 through `u32` keep their bytes on either CPU and are left alone.
 Resource colours the game reads as `u32` (BRLYT's `vtxCols` and `textCols`) must therefore be word-swapped
 when their format is turned native, like any other word.
@@ -635,6 +643,6 @@ across 12 zones; the preview draws 56 rigid models in 172 placements.
 
 The portable math tests check tolerances and conventions, not bit-identical Gekko rounding.
 The native validation app passes 1,069 math, 37 WPad, 190 BCSV, 1,043 J3D model/texture,
-8,810 TEV combiner, 27 original gravity, 27 NameObj, 89 scene and gravity creator, 48 collision, 21 J3D animation, 13 original actor, 6 J3D transform, 6 J3D skeleton, 14 GX command processor, 19 BMG text, 8 colour, TEV and display list word, 7 ETC1 and 8 GPU texture checks on emulated ARM
+8,810 TEV combiner, 27 original gravity, 27 NameObj, 89 scene and gravity creator, 48 collision, 21 J3D animation, 13 original actor, 6 J3D transform, 6 J3D skeleton, 14 GX command processor, 19 BMG text, 9 colour, TEV and display list word, 7 ETC1 and 8 GPU texture checks on emulated ARM
 in Azahar; the GPU checks compare the hardware's ETC1 decoding against ours. Of the disc's
 7,780 materials, 6,987 translate to the combiner exactly. No physical console has been tested.

@@ -826,6 +826,8 @@ adapt("src/Game/Player/MarioEnforce.cpp", "Game/Player/MarioEnforce.cpp", [
 # Cases that declare at case level, which later labels jump past; each gets its own braces.
 adapt("src/Game/Player/MarioActor.cpp", "Game/Player/MarioActor.cpp", [
     ("    case 1:\n        bool didSpinPunch = true;", "    case 1: {\n        bool didSpinPunch = true;", 1),
+    # Metrowerks packs bitfields from each word's top bit, GCC on ARM from its bottom: this bit is field 0x37.
+    ("        if (mMario->mMovementStates_HIGH_WORD >> 8 & 1) {", "        if (mMario->mMovementStates._37) {", 1),
     ("            _946 = mConst->getTable()->mSpinIntervalTime + 0x22;\n        }\n\n        break;\n    case 2:",
      "            _946 = mConst->getTable()->mSpinIntervalTime + 0x22;\n        }\n\n        break;\n    }\n    case 2:", 1),
     ("        const MarioConstTable* pConstants = mConst->getTable();\n        _946 = pConstants->mTeresaWallThroughTime + pConstants->mSpinIntervalTime;\n        break;\n    case 5:",
@@ -1551,6 +1553,11 @@ adapt("libs/nw4r/include/nw4r/ut/Color.h", "include/nw4r/ut/Color.h", [
      "                *static_cast< GXColor* >(this) = color;\n                return *this;", 1),
     ("            operator u32() const {\n                return ToU32ref();\n            }",
      "            operator u32() const {\n                return u32(r) << 24 | u32(g) << 16 | u32(b) << 8 | a;\n            }", 1),
+])
+# The draw-state bits these constants set as Metrowerks packs bitfields (from the top): fields 0xB and 0x12.
+adapt("src/Game/Player/MarioJump.cpp", "Game/Player/MarioJump.cpp", [
+    ("        _1C_WORD |= 0x00100000;", "        _1C._B = true;", 1),
+    ("    _1C_WORD |= 0x2000;", "    _1C.mIsUnderwater = true;", 1),
 ])
 # A primitive's vertex count in a display list is the GPU's big-endian half, as the model file holds it.
 adapt("src/JSystem/J3DGraphBase/J3DShapeDraw.cpp", "JSystem/J3DGraphBase/J3DShapeDraw.cpp", [
