@@ -42,7 +42,8 @@ typedef volatile f64 vf64;
 #define FALSE 0
 #endif
 
-// Upstream's utility macros; pointers go through uintptr_t, which is 64 bits on hosts.
+// Upstream's utility macros (types.h's and macros.h's angles); pointers go through uintptr_t, which is 64
+// bits on hosts.
 #define ROUND_UP(x, align) (((x) + (align) - 1) & (-(align)))
 #define ROUND_UP_PTR(x, align) ((void*)((((uintptr_t)(x)) + (align) - 1) & (~((align) - 1))))
 #define ALIGN_PREV(X, N) ((X) & ~((N) - 1))
@@ -58,6 +59,13 @@ typedef volatile f64 vf64;
 #define FOURCC(c0, c1, c2, c3) (u32)((c0 & 0xFF) << 24 | (c1 & 0xFF) << 16 | (c2 & 0xFF) << 8 | (c3 & 0xFF))
 #define IS_ALIGNED(x, align) (((uintptr_t)(x) & ((align) - 1)) == 0)
 #define IS_NOT_ALIGNED(X, N) (((X) & ((N) - 1)) != 0)
+#ifndef M_PI_F
+#define M_PI_F 3.1415926f
+#endif
+#define DEG_TO_RAD_MULT_CONSTANT (M_PI_F / 180.0f)
+#define RAD_TO_DEG_MULT_CONSTANT (180.0f / M_PI_F)
+#define DEG_TO_RAD(x) ((x) * DEG_TO_RAD_MULT_CONSTANT)
+#define RAD_TO_DEG(x) ((x) * RAD_TO_DEG_MULT_CONSTANT)
 #define IS_REF_NULL(r) (0)
 #define IS_REF_NONNULL(r) (1)
 

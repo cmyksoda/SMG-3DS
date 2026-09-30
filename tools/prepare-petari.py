@@ -659,6 +659,50 @@ adapt("libs/JSystem/include/JSystem/J3DGraphBase/J3DFifo.hpp", "include/JSystem/
      "    GXWGFIFO_PUT(u8, cmd);\n    GXWGFIFO_PUT(u16, indx);\n    GXWGFIFO_PUT(u16, addr);", 1),
 ])
 
+# Petari's own Inline.hpp brings NO_INLINE back as an attribute; for GCC it is empty, as types.h has it.
+adapt("include/Inline.hpp", "include/Inline.hpp", [
+    ("#define NO_INLINE __attribute__((noinline))", "#define NO_INLINE", 1),
+])
+# Metrowerks on Windows opened headers whatever the case of the name in the include.
+alias = output / "include/Game/Enemy/KariKariDirector.hpp"
+alias.parent.mkdir(parents=True, exist_ok=True)
+alias_text = '// Generated Petari adaptation: Metrowerks found KarikariDirector.hpp under this case.\n#include "Game/Enemy/KarikariDirector.hpp"\n'
+if not alias.exists() or alias.read_text() != alias_text:
+    alias.write_text(alias_text)
+# Comparisons of a bool or a pointer-holding u32 with nullptr, which Metrowerks took as with 0.
+adapt("src/Game/Player/Mario.cpp", "Game/Player/Mario.cpp", [
+    ("if (MR::normalizeOrZero(&front) == nullptr) {", "if (!MR::normalizeOrZero(&front)) {", 1),
+    ("if (MR::normalizeOrZero(&headVec) != nullptr) {", "if (MR::normalizeOrZero(&headVec)) {", 1),
+])
+adapt("src/Game/Player/MarioActorParts.cpp", "Game/Player/MarioActorParts.cpp", [
+    ("if (_468 == nullptr) {", "if (_468 == 0) {", 1),
+])
+adapt("src/Game/Player/MarioActorRushMsg.cpp", "Game/Player/MarioActorRushMsg.cpp", [
+    ("        if (out != nullptr) {", "        if (out) {", 1),
+])
+# The union's struct names went with Mario.hpp's adaptation; the array is the same storage.
+adapt("src/Game/Player/MarioInit.cpp", "Game/Player/MarioInit.cpp", [
+    ("    _8B0.zero();\n    _8BC.zero();", "    mRelativeWallPos[0].zero();\n    mRelativeWallPos[1].zero();", 1),
+])
+adapt("src/Game/Player/MarioEnforce.cpp", "Game/Player/MarioEnforce.cpp", [
+    ("pPosition, &_8B0);", "pPosition, &mRelativeWallPos[0]);", 1),
+    ("pPosition, &_8BC);", "pPosition, &mRelativeWallPos[1]);", 1),
+])
+# Cases that declare at case level, which later labels jump past; each gets its own braces.
+adapt("src/Game/Player/MarioActor.cpp", "Game/Player/MarioActor.cpp", [
+    ("    case 1:\n        bool didSpinPunch = true;", "    case 1: {\n        bool didSpinPunch = true;", 1),
+    ("            _946 = mConst->getTable()->mSpinIntervalTime + 0x22;\n        }\n\n        break;\n    case 2:",
+     "            _946 = mConst->getTable()->mSpinIntervalTime + 0x22;\n        }\n\n        break;\n    }\n    case 2:", 1),
+    ("        const MarioConstTable* pConstants = mConst->getTable();\n        _946 = pConstants->mTeresaWallThroughTime + pConstants->mSpinIntervalTime;\n        break;\n    case 5:",
+     "        {\n            const MarioConstTable* pConstants = mConst->getTable();\n            _946 = pConstants->mTeresaWallThroughTime + pConstants->mSpinIntervalTime;\n        }\n        break;\n    case 5:", 1),
+])
+# An out-of-class member declaration kept only for matching, and a case that jumps past a declaration.
+adapt("src/Game/Player/MarioWarp.cpp", "Game/Player/MarioWarp.cpp", [
+    ("namespace JGeometry {\n    TVec3< f32 > TVec3< f32 >::operator*(f32) const NO_INLINE;\n}\n", "", 1),
+    ("        Mario* player = getPlayer();\n        player->_42A = 0;\n        player->_430 = 0;\n        break;\n    case 1:",
+     "        {\n            Mario* player = getPlayer();\n            player->_42A = 0;\n            player->_430 = 0;\n        }\n        break;\n    case 1:", 1),
+])
+
 # LiveActor without its sound setup, which needs the audio system: a caller fails to link rather than run.
 adapt("src/Game/LiveActor/LiveActor.cpp", "Game/LiveActor/LiveActor.cpp", [
     ('#include "Game/AudioLib/AudAnmSoundObject.hpp"\n', "", 1),
