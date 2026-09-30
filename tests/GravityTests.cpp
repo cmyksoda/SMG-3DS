@@ -1,3 +1,4 @@
+#include <Game/Gravity/DiskGravity.hpp>
 #include <Game/Gravity/ParallelGravity.hpp>
 #include <Game/Gravity/PointGravity.hpp>
 #include <cmath>
@@ -63,11 +64,27 @@ void parallelGravity() {
     plane.updateMtx(quarterTurn);
     check(plane.calcGravity(&pull, TVec3f(0.0f, 0.0f, 0.0f)) && vec(pull, 1, 0, 0), "zone rotation turns the plane");
 }
+// Over the disk the pull is straight at its plane; past the rim it is toward the nearest rim point.
+void diskGravity() {
+    DiskGravity disk;
+    disk.setLocalPosition(TVec3f(0.0f, 0.0f, 0.0f));
+    disk.setRadius(2500.0f);
+    disk.updateIdentityMtx();
+    TVec3f pull;
+    check(disk.calcGravity(&pull, TVec3f(100.0f, 1000.0f, 0.0f)) && vec(pull, 0, -4, 0), "above the disk, falling onto it");
+    check(disk.calcGravity(&pull, TVec3f(0.0f, -1000.0f, 0.0f)) && vec(pull, 0, 4, 0), "underside pulls up by default");
+    check(disk.calcGravity(&pull, TVec3f(4500.0f, 0.0f, 0.0f)) && vec(pull, -1, 0, 0), "past the rim, toward the rim");
+    disk.setBothSide(false);
+    check(!disk.calcGravity(&pull, TVec3f(0.0f, -1000.0f, 0.0f)), "one-sided disk ignores its underside");
+    disk.setEnableEdgeGravity(false);
+    check(!disk.calcGravity(&pull, TVec3f(4500.0f, 0.0f, 0.0f)), "no rim pull when edge gravity is off");
+}
 } // namespace
 
 int runGravityTests() {
     pointGravity();
     parallelGravity();
+    diskGravity();
     std::printf("%u original gravity checks passed\n", checks);
     return 0;
 }
