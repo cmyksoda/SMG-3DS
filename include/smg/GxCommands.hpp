@@ -21,6 +21,8 @@ public:
         void (*unsupported)(const char* what, std::uint32_t detail);
         // A whole primitive: its kind (the opcode's top bits: 0x80 quads ... 0xB8 points), vertex format and vertices.
         void (*primitive)(std::uint8_t kind, std::uint8_t format, std::uint16_t count, const std::uint8_t* vertices);
+        // BP 0x52: the pixel engine copies the EFB out (to the display, or to a texture), its settings in bp[0x49...0x52].
+        void (*copy)(std::uint32_t command);
     };
     explicit GxCommandProcessor(const Host& host) : host_(host) {}
 
@@ -34,6 +36,8 @@ public:
     std::uint32_t cp[0x100] = {};
     std::uint32_t xf[0x1100] = {};
     std::uint32_t bp[0x100] = {};
+    // BP 0xE0-0xE7 hold a TEV colour register or a konst colour by their type bit: the last write of each kind.
+    std::uint32_t tevColor[8] = {}, tevKonst[8] = {};
 
 private:
     // One command from `at` if all of it is there: its length, or 0 to wait for more bytes.
@@ -42,6 +46,7 @@ private:
     void loadBp(std::uint32_t value);
 
     Host host_;
+    std::uint32_t bpMask_ = 0xFFFFFF;  // BP 0xFE: the bits the next BP load changes
     std::uint8_t pending_[0x10000];
     std::uint32_t pendingSize_ = 0;
 };

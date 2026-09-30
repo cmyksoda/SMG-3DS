@@ -19,6 +19,7 @@ std::string unsupported;
 std::vector<std::uint8_t> displayList;
 struct Primitive { unsigned kind, format, count; const std::uint8_t* vertices; };
 std::vector<Primitive> primitives;
+std::vector<std::uint32_t> copies;
 
 smg::GxCommandProcessor::Host host() {
     return {[](std::uint32_t physical) -> const std::uint8_t* { return displayList.data() + physical; },
@@ -27,7 +28,8 @@ smg::GxCommandProcessor::Host host() {
             [](const char* what, std::uint32_t) { unsupported = what; },
             [](std::uint8_t kind, std::uint8_t format, std::uint16_t count, const std::uint8_t* vertices) {
                 primitives.push_back({kind, format, count, vertices});
-            }};
+            },
+            [](std::uint32_t command) { copies.push_back(command); }};
 }
 
 void put32(std::vector<std::uint8_t>& out, std::uint32_t value) {
@@ -117,8 +119,29 @@ void vertices() {
 }
 } // namespace
 
+// BP 0xFE masks the next load only; colour and konst registers share 0xE0-0xE7 by their type bit; copies report.
+void bpMasksAndCopies() {
+    auto* gpu = new smg::GxCommandProcessor(host());
+    std::vector<std::uint8_t> stream;
+    for (std::uint32_t value : {0xC0123456u, 0xFE00FF00u, 0xC0ABCDEFu, 0xC0000001u}) { stream.push_back(0x61); put32(stream, value); }
+    gpu->put(stream.data(), static_cast<std::uint32_t>(stream.size()));
+    check(gpu->bp[0xC0] == 0x000001, "a masked load changes only the mask's bits, and the mask lasts one load");
+    stream.clear();
+    for (std::uint32_t value : {0xFE00FF00u, 0xC012CD56u}) { stream.push_back(0x61); put32(stream, value); }
+    gpu->put(stream.data(), static_cast<std::uint32_t>(stream.size()));
+    check(gpu->bp[0xC0] == 0x00CD01, "a mask keeps the register's other bits");
+    stream.clear();
+    for (std::uint32_t value : {0xE20FF0FFu, 0xE2800080u, 0xE3000040u, 0x52004000u}) { stream.push_back(0x61); put32(stream, value); }
+    gpu->put(stream.data(), static_cast<std::uint32_t>(stream.size()));
+    check(gpu->tevColor[2] == 0x0FF0FF && gpu->tevKonst[2] == 0x800080 && gpu->tevColor[3] == 0x000040,
+          "a TEV register and a konst colour at the same address are kept apart");
+    check(copies.size() == 1 && copies[0] == 0x004000, "an EFB copy reports its command");
+    delete gpu;
+}
+
 int runGxCommandTests() {
     registerLoads();
+    bpMasksAndCopies();
     pixelEngine();
     displayLists();
     vertices();

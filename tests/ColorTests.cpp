@@ -41,7 +41,7 @@ void tevStage() {
     stage.load(0);
     auto* gpu = new smg::GxCommandProcessor({[](std::uint32_t) -> const std::uint8_t* { return nullptr; }, [] {},
                                              [](std::uint16_t, bool) {}, [](const char*, std::uint32_t) { std::exit(1); },
-                                             [](std::uint8_t, std::uint8_t, std::uint16_t, const std::uint8_t*) {}});
+                                             [](std::uint8_t, std::uint8_t, std::uint16_t, const std::uint8_t*) {}, [](std::uint32_t) {}});
     gpu->put(list, static_cast<std::uint32_t>(object.ptr - list));
     check(gpu->bp[0xC2] == 0x345678 && gpu->bp[0xC3] == 0x9ABCDE, "a TEV stage's BP commands name its registers, as on the Wii");
     delete gpu;

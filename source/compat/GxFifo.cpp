@@ -30,6 +30,10 @@ smg::GxCommandProcessor& processor() {
                          kind, count, static_cast<unsigned long>(processor().vertexSize(format)), format);
             std::abort();
         },
+        [](std::uint32_t command) {
+            std::fprintf(stderr, "The Wii GPU's pixel engine: copying the EFB out is not the port's yet (0x%lx)\n", static_cast<unsigned long>(command));
+            std::abort();
+        },
     });
     return instance;
 }

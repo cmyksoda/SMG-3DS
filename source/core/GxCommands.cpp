@@ -119,10 +119,18 @@ GxVertex GxCommandProcessor::readVertex(const std::uint8_t* at, std::uint8_t for
 }
 
 void GxCommandProcessor::loadBp(std::uint32_t value) {
-    const std::uint32_t address = value >> 24, data = value & 0xFFFFFF;
+    const std::uint32_t address = value >> 24;
+    if (address == 0xFE) {  // the mask for the next load only
+        bpMask_ = value & 0xFFFFFF;
+        return;
+    }
+    const std::uint32_t data = (bp[address] & ~bpMask_) | (value & bpMask_);
+    bpMask_ = 0xFFFFFF;
     bp[address] = data;
+    if (address >= 0xE0 && address <= 0xE7) (data >> 23 & 1 ? tevKonst : tevColor)[address - 0xE0] = data;
     if (address == 0x45) host_.drawDone();                                    // PE_DONE
     else if (address == 0x47 || address == 0x48) host_.token(static_cast<std::uint16_t>(data), address == 0x48);  // PE_TOKEN(_INT)
+    else if (address == 0x52 && host_.copy) host_.copy(data);
 }
 
 void GxCommandProcessor::run(const std::uint8_t* at, std::uint32_t size) {
