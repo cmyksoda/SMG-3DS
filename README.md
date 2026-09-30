@@ -91,6 +91,11 @@ Configure the 3DS build with `-DSMG_BUILD_VALIDATION=ON` to also build
 `native_validation.3dsx`. This separate app runs the math, original controller, BCSV, and model
 tests on ARM and displays their result; it exits with Start.
 
+The 3DS build also makes `mario_probe.3dsx`, a bring-up app that runs the game's own boot on the port's
+Wii OS, disc, video and memory layers until it reaches something not brought up yet, and names that in
+the log (Azahar: log filter `Debug.Emulated:Debug`, instant debug log on). It shows nothing of the game
+yet; `docs/PORTING.md` ("Running the game's own boot") says where it stands.
+
 ## Game assets
 
 Petari contains no game assets. Keep your extracted disc data outside this checkout.
@@ -116,6 +121,13 @@ sdmc:/3ds/SMG-3DS/game/
   ObjectData/
   StageData/
   ...
+```
+
+The game's own boot (`mario_probe.3dsx`) also reads the disc's file table, from the `sys` directory
+`wit` extracts beside `files`:
+
+```text
+sdmc:/3ds/SMG-3DS/sys/fst.bin
 ```
 
 On boot, it validates `LayoutData/StarPieceCounter.arc` using the native Yaz0/RARC
