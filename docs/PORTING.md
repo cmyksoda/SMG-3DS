@@ -231,6 +231,54 @@ Three ways forward:
    real gravity from `planetobjinfo`. It is an explicit, removable boundary like
    `smgGameRandom()`, replaced by the original once `GameSystem` runs.
 
+## Road to Mario
+
+Measured 2026-09-30. The decompilation is complete: every function the Korean build's symbol map places
+in `Game/Player` has source, and so does nearly everything else. The work left is porting, not waiting.
+
+**What GCC already accepts.** A syntax-only pass of all 1,605 `src/Game` files with devkitARM's
+`arm-none-eabi-g++` and the port's include order compiles 830 unchanged (52%): Camera 120 of 127,
+Boss 134 of 169, Enemy 74 of 110, but Player only 19 of 107 and Screen 24 of 136. On the 3DS `u32` is
+`unsigned long` as on the Wii, so the host's 64-bit mismatches (`JKRDvdRipper`, pointer casts) are
+not target problems. The failures cluster on a few shared headers:
+
+| Blocker | Files | Fix |
+| --- | --- | --- |
+| nw4r `math/arithmetic.h` inline PowerPC `__asm` (`FAbs`, ...) via the layout headers | 364 | generated copy with portable bodies, as `os.h` |
+| `Mario.hpp`: an anonymous struct of `TVec3f` inside a union (`_8B0`/`_8BC` over `mRelativeWallPos`) | 86 | generated header; two sources use the names |
+| `operator new(u32)` where GCC wants `size_t` (`unsigned int` on ARM) | 46 | `size_t` in the generated headers |
+| names declared later or elsewhere under Metrowerks' lookup | ~100 | per-file adaptations |
+| `NO_INLINE` after a definition's declarator | 359 on the first pass | done: empty, as upstream's own `types.h` has it for non-Metrowerks compilers |
+
+**Why LiveActor is the gateway.** `LiveActor::movement` updates the model manager and animation,
+calculates gravity, runs sensors, the nerve, `control()`, then `updateBinder`, which moves the actor
+along its velocity against collision through `Binder` → `Collision::checkStrikeBallToMap` →
+`CollisionDirector` → `CollisionCategorizedKeeper` → `CollisionParts` → `KCollisionServer` (the last
+already runs natively). `CollisionParts` reads its `HitSensor`'s host actor, so the original collision
+stack, the one Mario's movement uses, needs `LiveActor` and `HitSensor` first. `smg::StageCollision`
+stands in until then.
+
+**Milestones**, each on screen in the preview before the next:
+
+1. **An original LiveActor falls and lands.** Compile `LiveActor`, `LiveActorFlag`, `HitSensor`,
+   `HitSensorKeeper`, `Binder`, `HitInfo`, `CollisionDirector`, `CollisionCategorizedKeeper` and
+   `CollisionParts`, with the `MR::` helpers they call extracted as for the lights. Each placed map
+   part's collision becomes a `CollisionParts` owned by a modelless `LiveActor` of that name; the
+   probe becomes an original `LiveActor` with a `Binder`, moved by `LiveActor::movement` under
+   `MR::calcGravity`. Clipping, effects, sound and shadows are explicit native boundaries (nothing
+   is clipped, nothing plays) until their directors come up.
+2. **ModelManager and XanimePlayer.** J3D's CPU side (`J3DModel::calc`, joints, envelope matrices)
+   is portable; `J3DModelData` gets a native loader from the port's parsers instead of J3D's in-place
+   big-endian loader. `XanimePlayer`/`XanimeCore` blend Mario's animations; the renderer draws what
+   the original matrices say.
+3. **MarioActor headless.** `MarioActor`, `Mario` and its state modules on the actor core, input
+   through the original `WPad` path from `InputFrame`, camera direction through an explicit
+   boundary. Mario idles, walks and jumps on Good Egg's first planet.
+4. **The game camera.** `CameraDirector` and the camera classes (120 of 127 files already compile).
+5. **Map objects.** `MapObjActor` and the factory for the common objects, so moving parts and
+   switches act as in the game.
+6. **Effects and sound**, deferred until the frame fits.
+
 ## The native scene boundary
 
 `smg::NativeScene` (`compat/smg/Scene.hpp`, `source/compat/Scene.cpp`) holds what
