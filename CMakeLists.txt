@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(SMG_3DS LANGUAGES CXX)
+project(SMG_3DS LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -93,7 +93,8 @@ add_library(petari_j3d STATIC
 target_link_libraries(petari_j3d PUBLIC petari_core petari_game_boundaries)
 # Loud stops for game classes the whole-game library builds for real. As a library linked after the scene and
 # J3D libraries, a program takes a stop only when nothing earlier defines the entry point.
-add_library(petari_game_boundaries STATIC source/compat/GameBoundaries.cpp source/compat/Heap.cpp)
+add_library(petari_game_boundaries STATIC source/compat/GameBoundaries.cpp source/compat/GxBoundaries.cpp
+  source/compat/GdBoundaries.cpp source/compat/GxFifoBoundary.cpp source/compat/Heap.cpp)
 # The stops construct members the scene library defines; the two static libraries link each other.
 target_link_libraries(petari_game_boundaries PUBLIC petari_scene)
 if(NOT NINTENDO_3DS)
@@ -235,7 +236,7 @@ target_compile_options(smg_platform PRIVATE -Wall -Wextra -Werror)
 
 if(NINTENDO_3DS)
   target_include_directories(petari_core PUBLIC "${DEVKITPRO}/libctru/include")
-  target_compile_options(petari_core PUBLIC -include "${CMAKE_CURRENT_SOURCE_DIR}/compat/smg/NewlibCtype.hpp")
+  target_compile_options(petari_core PUBLIC "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/compat/smg/NewlibCtype.hpp>")
   set(MODEL_SHADER "${CMAKE_CURRENT_BINARY_DIR}/ModelShader.hpp")
   add_custom_command(OUTPUT "${MODEL_SHADER}"
     COMMAND "${DEVKITPRO}/tools/bin/picasso" -o "${CMAKE_CURRENT_BINARY_DIR}/model.shbin"
@@ -271,7 +272,7 @@ if(NINTENDO_3DS)
       list(APPEND PETARI_BUILT_ELSEWHERE "${source}")
     endforeach()
   endforeach()
-  set(PETARI_GAME_SOURCES source/compat/Sdk.cpp source/compat/OsThreads.cpp source/compat/OsMemory.cpp source/compat/GameHeap.cpp source/compat/Dvd.cpp source/compat/Video.cpp source/compat/SystemConfig.cpp source/compat/Wpad.cpp source/compat/NativeResources.cpp source/compat/Nwc24.cpp source/compat/WiiAudio.cpp source/compat/Nw4rDb.cpp source/compat/DolTables.cpp
+  set(PETARI_GAME_SOURCES source/compat/Sdk.cpp source/compat/OsThreads.cpp source/compat/OsMemory.cpp source/compat/GameHeap.cpp source/compat/Dvd.cpp source/compat/Video.cpp source/compat/SystemConfig.cpp source/compat/Wpad.cpp source/compat/NativeResources.cpp source/compat/GxFifo.cpp source/compat/Nwc24.cpp source/compat/WiiAudio.cpp source/compat/Nw4rDb.cpp source/compat/DolTables.cpp
     "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/LiveActor/RailRiderCamera.cpp"
     "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/LiveActor/LiveActorSound.cpp")
   foreach(source ${PETARI_GAME_CANDIDATES})
@@ -288,6 +289,23 @@ if(NINTENDO_3DS)
   set(PETARI_SDK_SOURCES "${PETARI}/src/RVL_SDK/aralt/aralt.c")
   list(APPEND PETARI_GAME_SOURCES ${PETARI_SDK_SOURCES})
   set_source_files_properties(${PETARI_SDK_SOURCES} PROPERTIES LANGUAGE CXX)
+  # The SDK's own GX (C sources that include C++ headers, so built as C++): every GX call the game makes writes the
+  # Wii's registers and FIFO as on the Wii, for the port to read (docs/PORTING.md, "Running the game's own boot").
+  foreach(gx gx/GXAttr gx/GXBump gx/GXDisplayList gx/GXFifo gx/GXFrameBuf gx/GXGeometry gx/GXInit gx/GXLight gx/GXMisc gx/GXPerf
+      gx/GXPixel gx/GXTev gx/GXTexture gx/GXTransform gd/GDGeometry gd/GDIndirect gd/GDLight gd/GDPixel gd/GDTev gd/GDTexture gd/GDTransform)
+    if(EXISTS "${CMAKE_CURRENT_BINARY_DIR}/petari/RVL_SDK/${gx}.c")
+      list(APPEND PETARI_GAME_SOURCES "${CMAKE_CURRENT_BINARY_DIR}/petari/RVL_SDK/${gx}.c")
+    else()
+      list(APPEND PETARI_GAME_SOURCES "${PETARI}/src/RVL_SDK/${gx}.c")
+    endif()
+  endforeach()
+  set_source_files_properties(${PETARI_GAME_SOURCES} PROPERTIES LANGUAGE CXX)
+  # The SDK's sources are C: built as C++, they keep C's implicit conversions (void* to a typed pointer, int to enum).
+  foreach(source ${PETARI_GAME_SOURCES})
+    if(source MATCHES "\\.c$")
+      set_property(SOURCE "${source}" APPEND PROPERTY COMPILE_OPTIONS -fpermissive)
+    endif()
+  endforeach()
   add_library(petari_game STATIC ${PETARI_GAME_SOURCES})
   target_link_libraries(petari_game PUBLIC petari_scene petari_anim)
   target_include_directories(petari_game PRIVATE include)

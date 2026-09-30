@@ -774,7 +774,7 @@ adapt("libs/RVL_SDK/include/revolution/gx/GXVert.h", "include/revolution/gx/GXVe
      "#ifdef __MWERKS__\nvolatile PPCWGPipe GXWGFifo : 0xCC008000;\n#define GXWGFIFO_PUT(td, v) (GXWGFifo.td = (td)(v))\n#else\n"
      "extern volatile PPCWGPipe GXWGFifo;\n"
      "// The port has no pipe to the Wii's GPU: a write stops the program by name (source/compat/Gx.cpp).\n"
-     "void GXWGFifoWrite(void) __attribute__((noreturn));\n#define GXWGFIFO_PUT(td, v) (GXWGFifoWrite(), (void)(v))\n#endif", 1),
+     "#ifdef __cplusplus\nextern \"C\"\n#endif\nvoid GXWGFifoWrite(void) __attribute__((noreturn));\n#define GXWGFIFO_PUT(td, v) (GXWGFifoWrite(), (void)(v))\n#endif", 1),
     ("GXWGFifo.td = (td)x;", "GXWGFIFO_PUT(td, x);", 4),
     ("GXWGFifo.td = (td)y;", "GXWGFIFO_PUT(td, y);", 3),
     ("GXWGFifo.td = (td)z;", "GXWGFIFO_PUT(td, z);", 2),
@@ -1473,7 +1473,30 @@ adapt("libs/RVL_SDK/include/revolution/gx/GXRegs.h", "include/revolution/gx/GXRe
     (f"#define GX_WRITE_{kind}({arg}) gxfifo.{field} = ({cast})({arg})", f"#define GX_WRITE_{kind}({arg}) (GXWGFifoWrite(), (void)({arg}))", 1)
     for kind, arg, field, cast in [("U8", "ub", "u8", "u8"), ("U16", "us", "u16", "u16"), ("S16", "us", "s16", "u16"),
                                    ("U32", "ui", "u32", "u32"), ("F32", "f", "f32", "f32")]
-] + [("#define MEM_PE_REQCOUNTH_IDX", "void GXWGFifoWrite(void) __attribute__((noreturn));\n\n#define MEM_PE_REQCOUNTH_IDX", 1)])
+] + [("#define MEM_PE_REQCOUNTH_IDX", "#ifdef __cplusplus\nextern \"C\"\n#endif\nvoid GXWGFifoWrite(void) __attribute__((noreturn));\n\n#define MEM_PE_REQCOUNTH_IDX", 1),
+      # Upstream's fallbacks for other compilers are empty, fit only for an editor's parser: the counters read
+      # nothing and FAST_FLAG_SET, which packs every register's fields, does nothing. GCC gets real ones:
+      # Metrowerks' counter reader, and rlwimi's insert under its mask in C.
+      ("#ifdef __MWERKS__\n#define GX_DEFINE_GX_READ_COUNTER(unit)", "#if 1\n#define GX_DEFINE_GX_READ_COUNTER(unit)", 1),
+      ("#else\n#define GX_CP_COUNTER_READ_U32(name)\n#define GX_PE_COUNTER_READ_U32(name)\n#define GX_MEM_COUNTER_READ_U32(name)\n"
+       "#define FAST_FLAG_SET(regOrg, newFlag, shift, size)\n#endif",
+       "#else\n#define GX_CP_COUNTER_READ_U32(name) __GXReadCPCounterU32(name##L, name##H)\n"
+       "#define GX_PE_COUNTER_READ_U32(name) __GXReadPECounterU32(name##L_ID, name##H_ID)\n"
+       "#define GX_MEM_COUNTER_READ_U32(name) __GXReadMEMCounterU32(name##L_IDX, name##H_IDX)\n"
+       "#define FAST_FLAG_SET(regOrg, newFlag, shift, size)                                                  \\\n"
+       "    do {                                                                                              \\\n"
+       "        const u32 fastFlagMask = (u32)(((1ULL << (size)) - 1) << (shift));                            \\\n"
+       "        (regOrg) = ((u32)(regOrg) & ~fastFlagMask) | (((u32)(newFlag) << (shift)) & fastFlagMask);  \\\n"
+       "    } while (0);\n#endif", 1)])
+adapt("libs/RVL_SDK/include/revolution/gx/GXFDLShortcut.h", "include/revolution/gx/GXFDLShortcut.h", [
+    ("#else\n#define FAST_GPFLAGSET(regOrg, newFlag, regName)\n#endif",
+     "#else\n// rlwimi's insert under the field's mask, in C (upstream's fallback here is empty).\n"
+     "#define FAST_GPFLAGSET(regOrg, newFlag, regName)                                                                 \\\n"
+     "    do {                                                                                                          \\\n"
+     "        const u32 fastFlagMask = (u32)(((1ULL << (regName##_SIZE)) - 1) << (regName##_SHIFT));                     \\\n"
+     "        (regOrg) = ((u32)(regOrg) & ~fastFlagMask) | (((u32)(newFlag) << (regName##_SHIFT)) & fastFlagMask);     \\\n"
+     "    } while (0)\n#endif", 1),
+])
 # JKRAram.hpp declared JKRDecomp's inline helper as an ordinary function, which Metrowerks then emitted somewhere.
 adapt("libs/JSystem/include/JSystem/JKernel/JKRAram.hpp", "include/JSystem/JKernel/JKRAram.hpp", [
     ("u32 JKRDecompExpandSize(u8*);", '#include "JSystem/JKernel/JKRDecomp.hpp"', 1),
@@ -1534,3 +1557,69 @@ adapt("src/JSystem/JKernel/JKRMemArchive.cpp", "JSystem/JKernel/JKRMemArchive.cp
     ("    mHeader = reinterpret_cast< RarcHeader* >(pData);\n    mInfoBlock =",
      "    mHeader = reinterpret_cast< RarcHeader* >(pData);\n    smgNativeRarc(mHeader);\n    mInfoBlock =", 1),
 ], cases=["    case JKR_COMPRESSION_SZS:"])
+
+# The SDK's own GX (petari_game): its paired-single writers get C bodies. Every one writes the write-gather pipe,
+# whatever address it is handed, so each value goes through the GX FIFO macros in order.
+gx_transform = (root / "src/RVL_SDK/gx/GXTransform.c").read_text()
+gx_writers = gx_transform[gx_transform.index("static void WriteProjPS("):gx_transform.index("void __GXSetProjection(void) {")]
+gx_writers_c = """#ifdef __MWERKS__
+""" + gx_writers + """#else
+static void WriteProjPS(const f32 proj[6], volatile void*) {
+    for (int i = 0; i < 6; ++i) GX_WRITE_F32(proj[i]);
+}
+
+static void Copy6Floats(const f32 src[6], f32 dst[6]) {
+    for (int i = 0; i < 6; ++i) dst[i] = src[i];
+}
+#endif
+
+"""
+gx_matrices = gx_transform[gx_transform.index("static void  WriteMTXPS3x3from3x4("):gx_transform.index("void GXLoadPosMtxImm(")]
+gx_matrices_c = """#ifdef __MWERKS__
+""" + gx_matrices + """#else
+static void WriteMTXPS3x3from3x4(void* mtx, volatile void*) {
+    const f32(*m)[4] = (const f32(*)[4])mtx;
+    for (int row = 0; row < 3; ++row) for (int col = 0; col < 3; ++col) GX_WRITE_F32(m[row][col]);
+}
+
+static void WriteMTXPS4x3(const f32 src[3][4], volatile void*) {
+    for (int row = 0; row < 3; ++row) for (int col = 0; col < 4; ++col) GX_WRITE_F32(src[row][col]);
+}
+
+static void WriteMTXPS4x2(const f32 mtx[3][4], volatile void*) {
+    for (int row = 0; row < 2; ++row) for (int col = 0; col < 4; ++col) GX_WRITE_F32(mtx[row][col]);
+}
+#endif
+
+"""
+adapt("src/RVL_SDK/gx/GXTransform.c", "RVL_SDK/gx/GXTransform.c", [(gx_writers, gx_writers_c, 1), (gx_matrices, gx_matrices_c, 1)])
+adapt("src/RVL_SDK/gx/GXLight.c", "RVL_SDK/gx/GXLight.c", [
+    ("#else\nstatic inline void WriteLightObjPS(const GXLightObjInt* lt_obj, void* dest);\n#endif",
+     "#else\n// Three reserved words, the colour, then the attenuation, position and direction, as the asm stores them.\n"
+     "static inline void WriteLightObjPS(const GXLightObjInt* lt_obj, void*) {\n"
+     "    for (int i = 0; i < 3; ++i) GX_WRITE_U32(0);\n    GX_WRITE_U32(lt_obj->Color);\n"
+     "    for (int i = 0; i < 3; ++i) GX_WRITE_F32(lt_obj->a[i]);\n    for (int i = 0; i < 3; ++i) GX_WRITE_F32(lt_obj->k[i]);\n"
+     "    for (int i = 0; i < 3; ++i) GX_WRITE_F32(lt_obj->lpos[i]);\n    for (int i = 0; i < 3; ++i) GX_WRITE_F32(lt_obj->ldir[i]);\n}\n#endif", 1),
+])
+adapt("src/RVL_SDK/gx/GXInit.c", "RVL_SDK/gx/GXInit.c", [
+    ('#include "revolution/gx.h"\n', '#include "revolution/gx.h"\n#include <smg/GxPrivate.h>\n', 1),
+    # The GPU's register blocks are the port's memory (source/compat/GxFifo.cpp), not the Wii's uncached addresses.
+    ("    __piReg = (void*)OSPhysicalToUncached(0x0c003000);\n    __cpReg = (void*)OSPhysicalToUncached(0x0c000000);\n"
+     "    __peReg = (void*)OSPhysicalToUncached(0x0c001000);\n    __memReg = (void*)OSPhysicalToUncached(0x0c004000);",
+     "    __piReg = smgGXRegisters(0);\n    __cpReg = smgGXRegisters(1);\n    __peReg = smgGXRegisters(2);\n    __memReg = smgGXRegisters(3);", 1),
+])
+for gx in ["GXDisplayList", "GXMisc"]:
+    adapt(f"src/RVL_SDK/gx/{gx}.c", f"RVL_SDK/gx/{gx}.c", [('#include "revolution/gx.h"\n', '#include "revolution/gx.h"\n#include <smg/GxPrivate.h>\n', 1)])
+
+# The Wii's hardware registers: the GX library's processor interface and memory interface blocks are the port's
+# register memory (source/compat/GxFifo.cpp), the same blocks __piReg and __memReg view; every other block has no
+# counterpart here, so touching one stops the program by name.
+adapt("libs/RVL_SDK/include/private/flipper.h", "include/private/flipper.h", [
+    ("#else\nvu16 __VIRegs[0x3B];\nvu32 __PIRegs[0xC];\nvu16 __DSPRegs[0x20];\nvu32 __AIRegs[0x8];\nvu32 __EXIRegs[0x10];\n"
+     "vu16 __MEMRegs[0x40];\nvu32 __DIRegs[16];\nvu32 __SIRegs[64];\nvu32 __ACRRegs[89];\nvu32 __IPCRegs[4];\n#endif",
+     "#else\n#include <smg/GxPrivate.h>\n#define __PIRegs ((vu32*)smgGXRegisters(0))\n#define __MEMRegs ((vu16*)smgGXRegisters(3))\n"
+     + "".join(f'#define {name} (({kind}*)smgUnportedRegisters("{name}"))\n'
+               for name, kind in [("__VIRegs", "vu16"), ("__DSPRegs", "vu16"), ("__AIRegs", "vu32"), ("__EXIRegs", "vu32"),
+                                  ("__DIRegs", "vu32"), ("__SIRegs", "vu32"), ("__ACRRegs", "vu32"), ("__IPCRegs", "vu32")])
+     + "#endif", 1),
+])

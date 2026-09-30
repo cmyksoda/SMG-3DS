@@ -96,3 +96,45 @@ u32 sMachineState = 0x0000B032;
 } // namespace
 u32 PPCMfmsr() { return sMachineState; }
 void PPCMtmsr(u32 state) { sMachineState = state; }
+
+// The Wii's interrupt handlers by source, and which sources are unmasked. The port's own devices raise the ones it
+// has (the GPU's, from its command processor); the table is the SDK's, kept as the SDK keeps it.
+#include <revolution/os/OSContext.h>
+#include <revolution/os/OSReset.h>
+namespace {
+__OSInterruptHandler sInterruptHandlers[32] = {};
+OSInterruptMask sUnmasked = 0;
+u32 sHid2 = 0, sWpar = 0;
+} // namespace
+__OSInterruptHandler __OSSetInterruptHandler(__OSInterrupt interrupt, __OSInterruptHandler handler) {
+    const __OSInterruptHandler previous = sInterruptHandlers[interrupt & 31];
+    sInterruptHandlers[interrupt & 31] = handler;
+    return previous;
+}
+OSInterruptMask __OSUnmaskInterrupts(OSInterruptMask mask) {
+    const OSInterruptMask previous = ~sUnmasked;
+    sUnmasked |= mask;
+    return previous;
+}
+OSInterruptMask __OSMaskInterrupts(OSInterruptMask mask) {
+    const OSInterruptMask previous = ~sUnmasked;
+    sUnmasked &= ~mask;
+    return previous;
+}
+__OSInterruptHandler smgInterruptHandler(__OSInterrupt interrupt) {
+    return sUnmasked & (0x80000000u >> (interrupt & 31)) ? sInterruptHandlers[interrupt & 31] : nullptr;
+}
+
+// Interrupt handlers switch the floating-point context the PowerPC saves lazily; the 3DS kernel saves a thread's
+// own, so there is nothing to switch.
+void OSSetCurrentContext(OSContext*) {}
+void OSClearContext(OSContext*) {}
+
+// Functions to run as the console shuts down or resets. The port ends as a 3DS app does, without the Wii's
+// shutdown sequence that would run them.
+void OSRegisterShutdownFunction(OSShutdownFunctionInfo*) {}
+
+// HID2 enables the write-gather pipe and WPAR aims it; the port's GX FIFO takes the writes itself.
+u32 PPCMfhid2() { return sHid2; }
+void PPCMthid2(u32 value) { sHid2 = value; }
+void PPCMtwpar(u32 value) { sWpar = value; }

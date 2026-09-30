@@ -71,7 +71,13 @@ typedef volatile f64 vf64;
 
 // Metrowerks intrinsics, declared as upstream declares them for other compilers; source/compat/Math.cpp has
 // them. __fabs and __fabsf are left to the C library, which declares its own.
+#ifdef __cplusplus
+extern "C" {
+#endif
 f32 __frsqrte(f32);
 u32 __cntlzw(u32);
 s32 __abs(s32);
 void* __memcpy(void*, const void*, int);
+#ifdef __cplusplus
+}
+#endif

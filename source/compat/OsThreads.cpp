@@ -262,6 +262,41 @@ void OSCancelThread(OSThread* thread) {
     thread->state = OS_THREAD_STATE_MORIBUND;
 }
 
+// Threads asleep on a queue wake together when it is woken, as the SDK's do. Each queue counts its wake-ups, so a
+// sleeper waits for the next one after it lay down.
+namespace {
+struct Sleepers {
+    CondVar woken;
+    u32 wakeups = 0;
+};
+LightLock sSleepLock = 1;
+smg::FreeMap<OSThreadQueue*, Sleepers>& sleepers() {
+    static smg::FreeMap<OSThreadQueue*, Sleepers> queues;
+    return queues;
+}
+} // namespace
+
+void OSInitThreadQueue(OSThreadQueue* queue) {
+    queue->head = queue->tail = nullptr;
+}
+
+void OSSleepThread(OSThreadQueue* queue) {
+    LightLock_Lock(&sSleepLock);
+    Sleepers& waiting = sleepers()[queue];
+    if (waiting.wakeups == 0 && !waiting.woken) CondVar_Init(&waiting.woken);
+    const u32 lay = waiting.wakeups;
+    while (waiting.wakeups == lay) CondVar_Wait(&waiting.woken, &sSleepLock);
+    LightLock_Unlock(&sSleepLock);
+}
+
+void OSWakeupThread(OSThreadQueue* queue) {
+    LightLock_Lock(&sSleepLock);
+    Sleepers& waiting = sleepers()[queue];
+    ++waiting.wakeups;
+    CondVar_Broadcast(&waiting.woken);
+    LightLock_Unlock(&sSleepLock);
+}
+
 void OSYieldThread() { svcSleepThread(0); }
 void OSSleepTicks(OSTime ticks) { svcSleepThread(static_cast<s64>(toNanoseconds(ticks))); }
 
