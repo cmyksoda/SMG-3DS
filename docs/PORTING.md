@@ -337,6 +337,15 @@ stands in until then.
 3. **MarioActor headless.** `MarioActor`, `Mario` and its state modules on the actor core, input
    through the original `WPad` path from `InputFrame`, camera direction through an explicit
    boundary. Mario idles, walks and jumps on Good Egg's first planet.
+   Measured with `tools/petari-link-needs.sh BUILD Game/Player OUT`: all 107 player sources compile for
+   ARM (after `Inline.hpp`'s `NO_INLINE`, a header named in another case, the SDK's angle macros,
+   comparisons of a `bool` or a pointer-holding `u32` with `nullptr`, `Mario.hpp`'s union names, and
+   case labels that jump past declarations), and linking them needs 543 symbols the port does not yet
+   define: 353 `MR::` helpers (by file, LiveActorUtil 46, SoundUtil 25, CameraUtil 24, MapUtil 22,
+   PlayerUtil 22, EventUtil 20, GamePadUtil 19, AreaObjUtil 16, ActorSensorUtil 15, JointUtil 13,
+   ModelUtil 12, ScreenUtil 12, ActorShadowUtil 10, and a tail), 53 SDK functions, `XanimePlayer` (28),
+   `TDDraw` debug drawing (16), effects (`MultiEmitter`, `EffectKeeper`), `PartsModel`, layouts, and
+   single references into bosses, map objects and races that Mario's reactions name.
 4. **The game camera.** `CameraDirector` and the camera classes (120 of 127 files already compile).
 5. **Map objects.** `MapObjActor` and the factory for the common objects, so moving parts and
    switches act as in the game.
