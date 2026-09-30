@@ -60,6 +60,7 @@ private:
         float center[3], radius;
         bool sky;
         int light; // index into lightSets_
+        const std::vector<Material>* materials; // the model's own unless an animation set them for this placement
     };
     // An area light's planet set, as the director loads it for a draw buffer.
     struct LightSet {
@@ -77,6 +78,7 @@ private:
     void resetCamera();
     void drawInstance(const Instance& instance, const C3D_Mtx& view, bool translucent, const Material*& current);
     int lightSet(const AreaLightInfo* area);
+    const std::vector<Material>& framedMaterials(GpuModel& model, int frame);
     void loadLightSet(const LightSet& set, const C3D_Mtx& view);
     void dropProbe();
     void stepProbe(float seconds);

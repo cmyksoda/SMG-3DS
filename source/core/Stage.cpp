@@ -45,7 +45,13 @@ void place(const Archive& archive, const std::string& zone, std::int32_t mask, c
                 const float position[3]{field(info, row, "pos_x", 0), field(info, row, "pos_y", 0), field(info, row, "pos_z", 0)};
                 const float rotation[3]{field(info, row, "dir_x", 0), field(info, row, "dir_y", 0), field(info, row, "dir_z", 0)};
                 const float scale[3]{field(info, row, "scale_x", 1), field(info, row, "scale_y", 1), field(info, row, "scale_z", 1)};
-                objects.push_back({name, zone, multiply(zoneTransform, placementMatrix(position, rotation, scale))});
+                StageObject object{name, zone, multiply(zoneTransform, placementMatrix(position, rotation, scale))};
+                for (int arg = 0; arg < 8; ++arg) {
+                    const char field[]{'O', 'b', 'j', '_', 'a', 'r', 'g', static_cast<char>('0' + arg), 0};
+                    s32 value = -1;
+                    if (info.getValue(row, field, &value)) object.args[arg] = value;
+                }
+                objects.push_back(object);
             }
         }
     }

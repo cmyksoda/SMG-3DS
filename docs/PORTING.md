@@ -97,6 +97,16 @@ completion does not make those interfaces portable to ARM11/PICA200.
   of a model with a `<name>.kcl` its own server and does for every part what
   `CollisionParts::checkStrikeLine` does. From Mario's start in Good Egg scenario 1 the pull lands on
   `DiskGardenPlanet`'s collision 13.9 units below, on a Normal floor (the drawn grass is 9.2 below).
+- TEV register animation (BRK) is evaluated by JSystem's own `J3DAnmTevRegKey` and
+  `J3DGetKeyFrameInterpolation`, copied out of `J3DAnimation.cpp`. `J3DAnmKeyLoader_v15` points those
+  objects straight into the big-endian file; `smg::TevRegAnimation` validates the TRK1 block and gives
+  them native copies instead. Three SDK and compiler gaps had no GCC body: the `s16` Hermite overload
+  and `__OSf32tos16`/`__OSf32tou8` were Metrowerks assembly only (the fast casts would have returned
+  garbage). `OSInitFastCast` sets the quantization registers to plain integers, and `psq_st` truncates
+  and saturates, so the port converts and clamps the same way. All 503 BRK files on the disc load and
+  name materials of their archive's models. Map parts take the BRK named after them at frame 0, as
+  `MapObjActor::init`'s `tryStartAllAnim` starts it; a warp pipe stops at its color, `Obj_arg7`
+  (Good Egg's are green at 0 and orange at 1). Playing a BRK over time waits for frame control.
 - newlib's `<ctype.h>` defines `_U`, `_L`, `_N`, `_S`, `_P`, `_C`, `_X` and `_B` as macros, and
   Petari uses some of them as member names. ARM builds force-include `compat/smg/NewlibCtype.hpp`,
   which lets libstdc++ read them once and then undefines them.
@@ -148,7 +158,7 @@ borrows its owner's sample storage rather than allocating the Wii's 120-sample I
    names and text encodings deliberately.
 3. **PICA200 renderer.** The static stage path exists. Still missing: point lights, GX's second
    color channel, projection texgens (they
-   fall back to sphere maps), mipmaps, BTK/BRK/BPK material animation, billboards, runtime
+   fall back to sphere maps), mipmaps, BTK and BPK animation and BRK playback over time, billboards, runtime
    skinning, fog, particles and postprocessing. `resource_audit --models` lists the 831
    approximated TEV programs by reason: an unclamped output or value outside 0..1 (370 and 156,
    which the combiner saturates where GX would wrap or carry it) and more than two distinct
@@ -324,6 +334,6 @@ across 12 zones; the preview draws 56 rigid models in 172 placements.
 
 The portable math tests check tolerances and conventions, not bit-identical Gekko rounding.
 The native validation app passes 1,069 math, 37 WPad, 179 BCSV, 1,043 J3D model/texture,
-8,607 TEV combiner, 27 original gravity, 27 NameObj, 89 scene and gravity creator, 48 collision, 7 ETC1 and 8 GPU texture checks on emulated ARM
+8,607 TEV combiner, 27 original gravity, 27 NameObj, 89 scene and gravity creator, 48 collision, 12 J3D animation, 7 ETC1 and 8 GPU texture checks on emulated ARM
 in Azahar; the GPU checks compare the hardware's ETC1 decoding against ours. Of the disc's
 7,780 materials, 6,949 translate to the combiner exactly. No physical console has been tested.

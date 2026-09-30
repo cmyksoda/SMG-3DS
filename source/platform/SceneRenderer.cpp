@@ -1,5 +1,6 @@
 #include <smg/SceneRenderer.hpp>
 #include <ModelShader.hpp>
+#include <smg/Animation.hpp>
 #include <smg/Archive.hpp>
 #include <smg/Etc1.hpp>
 #include <smg/Scene.hpp>
@@ -12,6 +13,7 @@
 #include <Game/Scene/SceneObjHolder.hpp>
 #include <Game/Util/StringUtil.hpp>
 #include <algorithm>
+#include <map>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -37,6 +39,10 @@ struct SceneRenderer::Material {
 
 struct SceneRenderer::GpuModel {
     std::string name;
+    // A BRK named after the model sets TEV registers; each frame placements use gets its own materials.
+    std::unique_ptr<TevRegAnimation> brk;
+    std::vector<ModelMaterial> source;
+    std::map<int, std::vector<Material>> framed;
     void* vertices = nullptr;
     void* indices = nullptr;
     std::vector<PackedShape> shapes;
@@ -344,6 +350,8 @@ struct SceneRenderer::Prepared {
     std::string name;
     std::unique_ptr<StageCollision::Model> collision; // read from the same archive, whatever the model is
     std::string collisionError;
+    std::unique_ptr<TevRegAnimation> brk;
+    std::vector<ModelMaterial> source;
     PackedMesh mesh;
     std::vector<TiledTexture> textures;
     std::vector<Material> materials;
@@ -367,6 +375,15 @@ std::unique_ptr<SceneRenderer::Prepared> prepareModel(const std::string& root, c
     Model model;
     out->result = SceneRenderer::Prepared::Result::Failed;
     if (!loadModel({storage.data() + entry->offset, entry->size}, model, ModelBudget, error)) return out;
+    // MapObjActor::init's tryStartAllAnim plays the BRK named after the model.
+    const auto brk = std::find_if(entries.begin(), entries.end(), [&](const ArchiveEntry& e) { return endsWith(e.path, name + ".brk"); });
+    if (brk != entries.end()) {
+        auto animation = std::make_unique<TevRegAnimation>();
+        if (animation->load({storage.data() + brk->offset, brk->size}, error)) {
+            out->brk = std::move(animation);
+            out->source = model.materials;
+        }
+    }
     std::vector<std::uint8_t>().swap(storage);
     out->result = SceneRenderer::Prepared::Result::Skinned;
     if (model.skinned) return out;
@@ -617,6 +634,25 @@ void SceneRenderer::resetCamera() {
     position_[2] = stage_.start[2] - std::cos(yaw_) * 2400;
 }
 
+namespace {
+// The frame a placement shows its BRK at: EarthenPipe stops at its color, Obj_arg7 (0 when unset); other map
+// parts start theirs at 0 and play it, which waits for animation playback.
+int brkFrame(const StageObject& object) {
+    if (object.name == "EarthenPipe" || object.name == "EarthenPipeInWater") return object.args[7] < 0 ? 0 : object.args[7];
+    return 0;
+}
+} // namespace
+
+const std::vector<SceneRenderer::Material>& SceneRenderer::framedMaterials(GpuModel& model, int frame) {
+    auto found = model.framed.find(frame);
+    if (found != model.framed.end()) return found->second;
+    std::vector<ModelMaterial> materials = model.source;
+    model.brk->apply(static_cast<float>(frame), materials);
+    std::vector<Material> prepared;
+    for (const auto& material : materials) prepared.push_back(prepare(material));
+    return model.framed.emplace(frame, std::move(prepared)).first->second;
+}
+
 void SceneRenderer::consume(Prepared& prepared) {
     if (!prepared.collisionError.empty()) startLanding_ = "collision unavailable: " + prepared.collisionError;
     if (prepared.collision && collision_) collision_->addParts(stage_, std::move(prepared.collision));
@@ -645,13 +681,16 @@ void SceneRenderer::consume(Prepared& prepared) {
         }
     }
     gpu->materials = std::move(prepared.materials);
+    gpu->brk = std::move(prepared.brk);
+    gpu->source = std::move(prepared.source);
 
     const bool sky = prepared.name.size() > 2 && prepared.name[0] == 'V' && prepared.name[1] == 'R';
     for (const auto& object : stage_.objects) {
         if (object.name != prepared.name) continue;
         // ActorLightCtrl::init: the light area around the placement, else the stage's default.
         const int light = gravity_ ? lightSet(gravity_->areaLightAt(TVec3f(object.transform[3], object.transform[7], object.transform[11]))) : 0;
-        Instance instance{gpu.get(), {}, {}, 0, sky, light};
+        Instance instance{gpu.get(), {}, {}, 0, sky, light, nullptr};
+        if (gpu->brk) instance.materials = &framedMaterials(*gpu, brkFrame(object));
         setMatrix(instance.transform, object.transform);
         const auto& t = object.transform;
         float scale = 0;
@@ -732,8 +771,9 @@ void SceneRenderer::drawInstance(const Instance& instance, const C3D_Mtx& view, 
     C3D_Mtx modelView;
     Mtx_Multiply(&modelView, &view, &instance.transform);
     C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, modelView_, &modelView);
+    const auto& materials = instance.materials ? *instance.materials : model.materials;
     for (const auto& shape : model.shapes) {
-        const Material& m = model.materials[shape.material];
+        const Material& m = materials[shape.material];
         if (m.translucent != translucent) continue;
         if (current != &m) {
             current = &m;

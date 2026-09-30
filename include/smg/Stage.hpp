@@ -10,6 +10,7 @@ using Transform = std::array<float, 12>; // row-major 3x4
 struct StageObject {
     std::string name, zone;
     Transform transform{};
+    std::int32_t args[8]{-1, -1, -1, -1, -1, -1, -1, -1}; // Obj_arg0..7, -1 when unset
 };
 
 struct StageZone {
