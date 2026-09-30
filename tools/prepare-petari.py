@@ -1559,6 +1559,11 @@ adapt("src/Game/Player/MarioJump.cpp", "Game/Player/MarioJump.cpp", [
     ("        _1C_WORD |= 0x00100000;", "        _1C._B = true;", 1),
     ("    _1C_WORD |= 0x2000;", "    _1C.mIsUnderwater = true;", 1),
 ])
+# A Yaz0 header's words are big-endian; the decoder's end is the decompressed size JKRDecompExpandSize reads.
+adapt("src/JSystem/JKernel/JKRDecomp.cpp", "JSystem/JKernel/JKRDecomp.cpp", [
+    ("    u32 decompSize = ((s32)pDst + *(u32*)(pSrc + 4)) - a4;", "    u32 decompSize = ((s32)pDst + JKRDecompExpandSize(pSrc)) - a4;", 1),
+    ("    if (a4 > *(u32*)pSrc) {", "    if (a4 > (u32(pSrc[0]) << 24 | u32(pSrc[1]) << 16 | u32(pSrc[2]) << 8 | pSrc[3])) {", 1),
+])
 # A primitive's vertex count in a display list is the GPU's big-endian half, as the model file holds it.
 adapt("src/JSystem/J3DGraphBase/J3DShapeDraw.cpp", "JSystem/J3DGraphBase/J3DShapeDraw.cpp", [
     ("        int vtxNum = *reinterpret_cast< u16* >(dl);", "        int vtxNum = dl[0] << 8 | dl[1];", 1),
