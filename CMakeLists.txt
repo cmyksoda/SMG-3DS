@@ -36,6 +36,8 @@ add_library(petari_core STATIC
   "${CMAKE_CURRENT_BINARY_DIR}/petari/JSystem/JMath/JMATrigonometric.cpp"
   "${JMAP_SOURCE}"
   "${PETARI}/src/JSystem/JGadget/hashcode.cpp"
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/JSystem/J3DGraphAnimator/J3DAnimationKeys.cpp"
+  "${PETARI}/src/JSystem/JUtility/JUTNameTab.cpp"
   "${PETARI}/src/Game/LiveActor/Nerve.cpp"
   "${PETARI}/src/Game/LiveActor/Spine.cpp"
   "${PETARI}/src/Game/LiveActor/ActorStateBase.cpp"
@@ -127,12 +129,14 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
   "${PETARI}/src/Game/Map/LightZoneDataHolder.cpp" "${PETARI}/src/Game/Map/LightFunction.cpp"
   "${PETARI}/include/Game/Map/LightDataHolder.hpp" "${PETARI}/include/Game/Map/LightZoneDataHolder.hpp"
   "${PETARI}/src/Game/AreaObj/AreaForm.cpp" "${PETARI}/src/Game/AreaObj/AreaObj.cpp"
-  "${PETARI}/include/Game/AreaObj/AreaForm.hpp")
+  "${PETARI}/include/Game/AreaObj/AreaForm.hpp" "${PETARI}/src/JSystem/J3DGraphAnimator/J3DAnimation.cpp"
+  "${PETARI}/libs/RVL_SDK/include/revolution/os.h"
+  "${PETARI}/libs/JSystem/include/JSystem/J3DGraphAnimator/J3DAnimation.hpp")
 
 add_library(smg_platform STATIC
   source/core/Input.cpp source/core/Motion.cpp source/core/Settings.cpp source/core/Session.cpp
   source/core/Archive.cpp source/core/Bcsv.cpp source/core/Model.cpp source/core/Texture.cpp source/core/Combiner.cpp
-  source/core/Stage.cpp source/core/StageGravity.cpp source/core/Mesh.cpp source/core/Etc1.cpp source/core/Kcl.cpp source/core/StageCollision.cpp source/core/StageLight.cpp
+  source/core/Stage.cpp source/core/StageGravity.cpp source/core/Mesh.cpp source/core/Etc1.cpp source/core/Kcl.cpp source/core/StageCollision.cpp source/core/StageLight.cpp source/core/Animation.cpp
   source/compat/NativePad.cpp)
 target_include_directories(smg_platform PUBLIC include)
 target_link_libraries(smg_platform PUBLIC petari_scene)
@@ -165,7 +169,7 @@ if(NINTENDO_3DS)
   if(SMG_BUILD_VALIDATION)
     add_executable(native_validation tests/NativeTests.cpp tests/MathTests.cpp tests/PadTests.cpp tests/BcsvTests.cpp
       tests/ModelTests.cpp tests/CombinerTests.cpp tests/GravityTests.cpp tests/Etc1Tests.cpp tests/GpuTests.cpp
-      tests/NameObjTests.cpp tests/SceneTests.cpp tests/CollisionTests.cpp)
+      tests/NameObjTests.cpp tests/SceneTests.cpp tests/CollisionTests.cpp tests/AnimationTests.cpp)
     set_target_properties(native_validation PROPERTIES SUFFIX ".elf")
     target_compile_definitions(native_validation PRIVATE SMG_TEST_RUNNER)
     target_link_directories(native_validation PRIVATE "${DEVKITPRO}/libctru/lib")
@@ -234,6 +238,10 @@ else()
   target_link_libraries(collision_tests PRIVATE smg_platform)
   target_compile_options(collision_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME original_collision COMMAND collision_tests)
+  add_executable(animation_tests tests/AnimationTests.cpp)
+  target_link_libraries(animation_tests PRIVATE smg_platform)
+  target_compile_options(animation_tests PRIVATE -Wall -Wextra -Werror)
+  add_test(NAME j3d_animation COMMAND animation_tests)
   add_executable(combiner_tests tests/CombinerTests.cpp)
   target_link_libraries(combiner_tests PRIVATE smg_platform)
   target_compile_options(combiner_tests PRIVATE -Wall -Wextra -Werror)

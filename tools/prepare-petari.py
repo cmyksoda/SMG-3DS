@@ -499,6 +499,52 @@ adapt("src/Game/AreaObj/AreaObj.cpp", "Game/AreaObj/AreaObj.cpp", [
     return nullptr;""", 1),
 ])
 
+# J3D material animation: the original key tables and their interpolation. The loader reads Wii files in
+# place; the port's loader (source/core/Animation.cpp) gives these objects native copies instead.
+# OSInitFastCast sets the quantized registers to plain integers; psq_st truncates and saturates.
+adapt("libs/RVL_SDK/include/revolution/os.h", "include/revolution/os.h", [
+    ("""        psq_st inF, 0(tmpPtr), 0x1, 5
+        lha out, 0(tmpPtr)
+    }
+#endif""", """        psq_st inF, 0(tmpPtr), 0x1, 5
+        lha out, 0(tmpPtr)
+    }
+#else
+    out = static_cast< s16 >(inF < -32768.0f ? -32768.0f : inF > 32767.0f ? 32767.0f : inF);
+#endif""", 1),
+    ("""        psq_st inF, 0(tmpPtr), 0x1, 2
+        lbz out, 0(tmpPtr)
+    }
+#endif""", """        psq_st inF, 0(tmpPtr), 0x1, 2
+        lbz out, 0(tmpPtr)
+    }
+#else
+    out = static_cast< u8 >(inF < 0.0f ? 0.0f : inF > 255.0f ? 255.0f : inF);
+#endif""", 1),
+])
+for header, fix in [("libs/JSystem/include/JSystem/J3DGraphAnimator/J3DAnimation.hpp",
+                     "#include <revolution/gx/GXStruct.h>\n#include <revolution/mtx.h>\n#include <cstddef>"),
+                    ("libs/JSystem/include/JSystem/J3DGraphBase/J3DStruct.hpp", "#include <revolution/gx/GXStruct.h>\n#include <revolution/mtx.h>\n#include <cstring>"),
+                    ("libs/JSystem/include/JSystem/J3DGraphBase/J3DTransform.hpp", "#include <revolution/mtx.h>"),
+                    ("libs/JSystem/include/JSystem/JUtility/JUTNameTab.hpp", "#include <revolution/types.h>")]:
+    # __memcpy is a Metrowerks intrinsic for the standard function.
+    extra = [("__memcpy(", "memcpy(", 5)] if header.endswith("J3DStruct.hpp") else []
+    adapt(header, header.replace("libs/JSystem/include/", "include/"), [("#include <revolution.h>", fix, 1)] + extra)
+extract("src/JSystem/J3DGraphAnimator/J3DAnimation.cpp", "JSystem/J3DGraphAnimator/J3DAnimationKeys.cpp",
+        '#include "JSystem/J3DGraphAnimator/J3DAnimation.hpp"\n#include "JSystem/J3DGraphBase/J3DStruct.hpp"\n'
+        '#include "JSystem/JMath/JMath.hpp"\n#include <revolution/os.h>\n',
+        ["inline f32 J3DHermiteInterpolation(f32 p1, f32 const* p2, f32 const* p3, f32 const* p4, f32 const* p5, f32 const* p6, f32 const* p7) {",
+         "inline f32 J3DHermiteInterpolation(__REGISTER f32 pp1, __REGISTER s16 const* pp2, __REGISTER s16 const* pp3, __REGISTER s16 const* pp4,",
+         "f32 J3DGetKeyFrameInterpolation(f32 frame, J3DAnmKeyTableBase* pKeyTable, T* pData) {",
+         "J3DAnmTextureSRTKey::J3DAnmTextureSRTKey() {",
+         "void J3DAnmTextureSRTKey::calcTransform(f32 frame, u16 jointNo, J3DTextureSRTInfo* pTexSRTInfo) const {",
+         "J3DAnmTevRegKey::J3DAnmTevRegKey() {",
+         "void J3DAnmTevRegKey::getTevColorReg(u16 index, GXColorS10* pColor) const {",
+         "void J3DAnmTevRegKey::getTevKonstReg(u16 index, GXColor* pColor) const {"],
+        fixes=[("    return value;\n#endif\n}",
+                "    return value;\n#else\n    return JMAHermiteInterpolation(pp1, *pp2, *pp3, *pp4, *pp5, *pp6, *pp7);\n#endif\n}"),
+               ("f32 J3DGetKeyFrameInterpolation(f32 frame", "template < typename T >\nf32 J3DGetKeyFrameInterpolation(f32 frame")])
+
 adapt("include/Game/System/WPadButton.hpp", "include/Game/System/WPadButton.hpp", [
     ("#include <revolution.h>", "#include <revolution/kpad.h>", 1),
 ])

@@ -1,5 +1,6 @@
 #include <smg/Archive.hpp>
 #include <smg/Bcsv.hpp>
+#include <smg/Animation.hpp>
 #include <smg/Combiner.hpp>
 #include <smg/Kcl.hpp>
 #include <smg/Model.hpp>
@@ -431,6 +432,7 @@ int main(int argc, char** argv) {
     if (ec) { std::fprintf(stderr,"Directory traversal: %s\n",ec.message().c_str()); return 2; }
     std::sort(archives.begin(), archives.end());
     std::size_t tables=0, records=0, resources=0, errors=0, modelCount=0, triangles=0, materials=0, exact=0;
+    std::size_t brks=0, brkErrors=0, brkUnmatched=0;
     std::map<std::string, std::size_t> modelErrors, approximations;
     for (const auto& path : archives) {
         std::vector<std::uint8_t> storage;
@@ -449,6 +451,25 @@ int main(int argc, char** argv) {
             } else records += table.info().getNumEntries();
         }
         if (!models) continue;
+        // BRKs, set on the archive's models: every register table should name one of their materials.
+        std::vector<smg::Model> archiveModels;
+        for (const auto& entry : entries) {
+            if (!extension(entry.path,".bdl") && !extension(entry.path,".bmd")) continue;
+            smg::Model model;
+            if (smg::loadModel({storage.data()+entry.offset,entry.size},model,256u*1024*1024,error)) archiveModels.push_back(std::move(model));
+        }
+        for (const auto& entry : entries) {
+            if (!extension(entry.path,".brk")) continue;
+            ++brks;
+            smg::TevRegAnimation brk;
+            if (!brk.load({storage.data()+entry.offset,entry.size},error)) {
+                std::fprintf(stderr,"BRK %s :: %s: %s\n",path.c_str(),entry.path.c_str(),error.c_str()); ++brkErrors; continue;
+            }
+            unsigned set = 0;
+            for (auto& model : archiveModels)
+                for (int frame = 0; frame <= brk.key().mFrameMax; ++frame) set += brk.apply(static_cast<float>(frame), model.materials);
+            if (!set) { ++brkUnmatched; std::fprintf(stderr,"BRK %s :: %s names no material here\n",path.c_str(),entry.path.c_str()); }
+        }
         for (const auto& entry : entries) {
             if (!extension(entry.path,".bdl") && !extension(entry.path,".bmd")) continue;
             ++modelCount;
@@ -475,7 +496,8 @@ int main(int argc, char** argv) {
         std::printf("%zu models, %zu loaded, %zu triangles\n", modelCount, modelCount - failed, triangles);
         std::printf("%zu materials, %zu translated to the 3DS combiner exactly\n", materials, exact);
         for (const auto& [reason, count] : approximations) std::printf("%6zu  approximated: %s\n", count, reason.c_str());
-        errors += failed;
+        std::printf("%zu BRK files, %zu failed to load, %zu name no material of their archive's models\n", brks, brkErrors, brkUnmatched);
+        errors += failed + brkErrors;
     }
     if (archives.empty()) { std::fprintf(stderr,"No archives found\n"); return 2; }
     return errors == 0 ? 0 : 1;
