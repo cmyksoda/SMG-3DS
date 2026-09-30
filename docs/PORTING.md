@@ -440,6 +440,18 @@ GX register's fields) and its counter reads, `GXFDLShortcut.h`'s `FAST_GPFLAGSET
 (an `rlwimi`-style insert under its mask). Check any SDK header newly compiled for `#else` branches that
 `#define` a function-like macro as nothing.
 
+**Reads past an array's end.** Metrowerks compiled them as plain loads; gcc at -O2 treats them as undefined
+and may drop the read or the loop around it. `tools/ub-scan.sh` recompiles every Petari object of a configured
+3DS build with `-Wall` and reports gcc's `iteration N invokes undefined behavior`, `-Warray-bounds` and
+`-Wstringop` findings, and any object that didn't compile. It found five, now adapted:
+`CameraShaker::createSinglyHorizontalTask` runs 7 times over 3 tasks (Nintendo's own; the spill landed in
+`mInfinityTasks`, replaced on the next line, so it stops at 3 and only four leaked allocations differ).
+`StarPointerTransformHolder` copies a 4x4 projection from a 3x4 table, and Petari's symbol map shows the Wii read
+`StarPointerPeekZ`'s vtable and a string for the last row, which a zero row stands in for.
+`J3DTevBlock4::patchTexNoAndTexCoordScale` loops over 8 texture numbers where the block has 4 (J3DMatBlock.cpp is
+NonMatching in Petari, and the class's own `patchTexNo` reads 4). `TVec3::setTrans` and `Swinger` read the
+same floats through `mtx[row][col]`. The scan reads 0 over 1,872 objects; run it after large source changes.
+
 **The C library.** MSL's printf writes nothing for a null `%s`; newlib writes `(null)`. The game builds archive
 paths that way (`LayoutHolder`, `ResourceHolder`: four sites adapted). Other calls may lean on it; a general fix
 would give game code MSL's own formatter (its decompiled `printf.c`) or wrap the printf family.
