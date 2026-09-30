@@ -1552,6 +1552,12 @@ adapt("libs/nw4r/include/nw4r/ut/Color.h", "include/nw4r/ut/Color.h", [
     ("            operator u32() const {\n                return ToU32ref();\n            }",
      "            operator u32() const {\n                return u32(r) << 24 | u32(g) << 16 | u32(b) << 8 | a;\n            }", 1),
 ])
+# A TEV stage's two BP commands are its bytes as the Wii's word load read them: the register on top.
+adapt("libs/JSystem/include/JSystem/J3DGraphBase/J3DTevs.hpp", "include/JSystem/J3DGraphBase/J3DTevs.hpp", [
+    ("        J3DGDWriteBPCmd(*(u32*)&field_0x0);\n        J3DGDWriteBPCmd(*(u32*)&field_0x4);",
+     "        J3DGDWriteBPCmd(u32(field_0x0) << 24 | u32(mTevColorOp) << 16 | u32(mTevColorAB) << 8 | mTevColorCD);\n"
+     "        J3DGDWriteBPCmd(u32(field_0x4) << 24 | u32(mTevAlphaOp) << 16 | u32(mTevAlphaAB) << 8 | mTevSwapModeInfo);", 1),
+])
 adapt("libs/JSystem/include/JSystem/JUtility/TColor.hpp", "include/JSystem/JUtility/TColor.hpp", [
     ("            *reinterpret_cast< u32* >(&r) = u32Color;",
      "            set(u8(u32Color >> 24), u8(u32Color >> 16), u8(u32Color >> 8), u8(u32Color));", 1),

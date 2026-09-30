@@ -1,5 +1,8 @@
+#include <JSystem/J3DGraphBase/J3DTevs.hpp>
 #include <JSystem/JUtility/TColor.hpp>
 #include <nw4r/ut/Color.h>
+#include <revolution/gd/GDBase.h>
+#include <smg/GxCommands.hpp>
 #include <cstdio>
 #include <cstdlib>
 
@@ -23,11 +26,31 @@ void packing() {
     const nw4r::ut::Color fromBytes(bytes);
     check(fromBytes.r == 1 && fromBytes.a == 4 && static_cast<u32>(fromBytes) == 0x01020304, "an nw4r colour keeps a GXColor's bytes");
 }
+
+// A TEV stage's two BP commands, through GD into the port's command processor.
+void tevStage() {
+    static std::uint8_t list[64];
+    GDLObj object;
+    GDInitGDLObj(&object, list, sizeof list);
+    __GDCurrentDL = &object;
+    J3DTevStage stage;
+    stage.setStageNo(1);
+    stage.mTevColorOp = 0x34, stage.mTevColorAB = 0x56, stage.mTevColorCD = 0x78;
+    stage.mTevAlphaOp = 0x9A, stage.mTevAlphaAB = 0xBC, stage.mTevSwapModeInfo = 0xDE;
+    stage.load(0);
+    auto* gpu = new smg::GxCommandProcessor({[](std::uint32_t) -> const std::uint8_t* { return nullptr; }, [] {},
+                                             [](std::uint16_t, bool) {}, [](const char*, std::uint32_t) { std::exit(1); },
+                                             [](std::uint8_t, std::uint8_t, std::uint16_t, const std::uint8_t*) {}});
+    gpu->put(list, static_cast<std::uint32_t>(object.ptr - list));
+    check(gpu->bp[0xC2] == 0x345678 && gpu->bp[0xC3] == 0x9ABCDE, "a TEV stage's BP commands name its registers, as on the Wii");
+    delete gpu;
+}
 } // namespace
 
 int runColorTests() {
     packing();
-    std::printf("%u colour packing checks passed\n", checks);
+    tevStage();
+    std::printf("%u colour and TEV word checks passed\n", checks);
     return 0;
 }
 
