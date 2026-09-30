@@ -254,11 +254,16 @@ if(NINTENDO_3DS)
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/embed-binary.py"
       "${CMAKE_CURRENT_BINARY_DIR}/model.shbin" "${MODEL_SHADER}"
     DEPENDS shaders/model.v.pica tools/embed-binary.py VERBATIM)
+  # What both renderers hand the PICA: tiled textures, combiner environments, pixel tests.
+  add_library(smg_pica STATIC source/platform/Pica.cpp)
+  target_include_directories(smg_pica PUBLIC "${DEVKITPRO}/libctru/include")
+  target_link_libraries(smg_pica PUBLIC smg_platform)
+  target_compile_options(smg_pica PRIVATE -Wall -Wextra -Werror)
   add_executable(SMG-3DS source/platform/Main.cpp source/platform/TouchUi.cpp source/platform/SceneRenderer.cpp "${MODEL_SHADER}")
   set_target_properties(SMG-3DS PROPERTIES SUFFIX ".elf")
   target_include_directories(SMG-3DS PRIVATE "${DEVKITPRO}/libctru/include" "${CMAKE_CURRENT_BINARY_DIR}")
   target_link_directories(SMG-3DS PRIVATE "${DEVKITPRO}/libctru/lib")
-  target_link_libraries(SMG-3DS PRIVATE smg_native_pad smg_platform citro2d citro3d ctru m)
+  target_link_libraries(SMG-3DS PRIVATE smg_native_pad smg_pica smg_platform citro2d citro3d ctru m)
   target_compile_options(SMG-3DS PRIVATE -Wall -Wextra -Werror)
   target_link_options(SMG-3DS PRIVATE "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/SMG-3DS.map")
   add_custom_command(TARGET SMG-3DS POST_BUILD
