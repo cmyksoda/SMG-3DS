@@ -342,9 +342,114 @@ void OSTicksToCalendarTime(OSTime ticks, OSCalendarTime* calendar) {
     calendar->yday = monthStarts[calendar->mon] + calendar->mday - 1 + (leap && calendar->mon > 1);
 }
 
-// No alarm is ever set in what the port links (OSSetAlarm is not reached), so cancelling one finds it idle, as
-// the SDK then returns at once.
+OSPriority OSGetThreadPriority(OSThread* thread) { return thread->priority; }
+
+BOOL OSSetThreadPriority(OSThread* thread, OSPriority priority) {
+    if (priority < 0 || priority > 31) return FALSE;
+    thread->priority = thread->base = priority;
+    const Native* native = thread == &sDefaultThread ? nullptr : nativeOf(thread);
+    if (native && native->thread) svcSetThreadPriority(threadGetHandle(native->thread), nativePriority(priority));
+    else if (thread == OSGetCurrentThread()) svcSetThreadPriority(CUR_THREAD_HANDLE, nativePriority(priority));
+    return TRUE;
+}
+}
+
+// Alarms, kept as the SDK keeps them: a list in firing order through their own links. A thread above every game
+// thread sleeps until the first is due and runs its handler, as the Wii's decrementer interrupt did.
+namespace {
+LightLock sAlarmLock = 1;
+LightEvent sAlarmChanged;
+OSAlarm* sFirstAlarm = nullptr;
+
+void unlinkAlarm(OSAlarm* alarm) {
+    if (alarm->prev) alarm->prev->next = alarm->next;
+    else if (sFirstAlarm == alarm) sFirstAlarm = alarm->next;
+    if (alarm->next) alarm->next->prev = alarm->prev;
+    alarm->prev = alarm->next = nullptr;
+}
+
+// A periodic alarm that fell behind fires next at its first due time still ahead, as the SDK's InsertAlarm does.
+void insertAlarm(OSAlarm* alarm, OSTime fire, OSAlarmHandler handler) {
+    if (alarm->period > 0) {
+        const OSTime now = OSGetTime();
+        fire = alarm->start;
+        if (alarm->start < now) fire += alarm->period * ((now - alarm->start) / alarm->period + 1);
+    }
+    alarm->handler = handler;
+    alarm->fire = fire;
+    OSAlarm** at = &sFirstAlarm;
+    OSAlarm* previous = nullptr;
+    while (*at && (*at)->fire <= fire) previous = *at, at = &(*at)->next;
+    alarm->prev = previous;
+    alarm->next = *at;
+    if (*at) (*at)->prev = alarm;
+    *at = alarm;
+}
+
+void alarms(void*) {
+    while (true) {
+        LightLock_Lock(&sAlarmLock);
+        OSAlarm* due = sFirstAlarm;
+        const OSTime now = OSGetTime();
+        if (due && due->fire <= now) {
+            // A one-shot alarm is idle again before its handler runs, which may set it anew.
+            const OSAlarmHandler handler = due->handler;
+            unlinkAlarm(due);
+            due->handler = nullptr;
+            if (due->period > 0) insertAlarm(due, 0, handler);
+            LightLock_Unlock(&sAlarmLock);
+            OSContext context;
+            std::memset(&context, 0, sizeof context);
+            handler(due, &context);
+            continue;
+        }
+        const s64 wait = due ? static_cast<s64>(toNanoseconds(due->fire - now)) : -1;
+        LightLock_Unlock(&sAlarmLock);
+        if (wait < 0) LightEvent_Wait(&sAlarmChanged);
+        else LightEvent_WaitTimeout(&sAlarmChanged, wait);
+    }
+}
+
+void startAlarms() {
+    static Thread thread = nullptr;
+    if (thread) return;
+    LightEvent_Init(&sAlarmChanged, RESET_ONESHOT);
+    thread = threadCreate(alarms, nullptr, 0x4000, 0x18, -2, true);
+    if (!thread) unported("OSSetAlarm: the 3DS kernel made no alarm thread");
+}
+
+void setAlarm(OSAlarm* alarm, OSTime fire, OSAlarmHandler handler) {
+    startAlarms();
+    LightLock_Lock(&sAlarmLock);
+    if (alarm->handler) unlinkAlarm(alarm);
+    insertAlarm(alarm, fire, handler);
+    LightLock_Unlock(&sAlarmLock);
+    LightEvent_Signal(&sAlarmChanged);
+}
+} // namespace
+
+extern "C" {
+void OSCreateAlarm(OSAlarm* alarm) {
+    alarm->handler = nullptr;
+    alarm->tag = 0;
+}
+
+void OSSetAlarm(OSAlarm* alarm, OSTime ticks, OSAlarmHandler handler) {
+    alarm->period = 0;
+    setAlarm(alarm, OSGetTime() + ticks, handler);
+}
+
+void OSSetPeriodicAlarm(OSAlarm* alarm, OSTime start, OSTime period, OSAlarmHandler handler) {
+    alarm->period = period;
+    alarm->start = start;
+    setAlarm(alarm, 0, handler);
+}
+
 void OSCancelAlarm(OSAlarm* alarm) {
-    if (alarm->handler) unported("OSCancelAlarm of a set alarm");
+    LightLock_Lock(&sAlarmLock);
+    if (alarm->handler) unlinkAlarm(alarm);
+    alarm->handler = nullptr;
+    LightLock_Unlock(&sAlarmLock);
+    LightEvent_Signal(&sAlarmChanged);
 }
 }

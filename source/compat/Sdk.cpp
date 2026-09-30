@@ -53,18 +53,13 @@ void NANDOpen() { unported("NANDOpen"); }
 void NANDRead() { unported("NANDRead"); }
 void NANDWrite() { unported("NANDWrite"); }
 // OS
-void OSCreateAlarm() { unported("OSCreateAlarm"); }
 void OSFillFPUContext() { unported("OSFillFPUContext"); }
 void OSGetCurrentContext() { unported("OSGetCurrentContext"); }
 void OSGetStackPointer() { unported("OSGetStackPointer"); }
-void OSGetThreadPriority() { unported("OSGetThreadPriority"); }
 void OSProtectRange() { unported("OSProtectRange"); }
 void OSRebootSystem() { unported("OSRebootSystem"); }
 void OSRestart() { unported("OSRestart"); }
 void OSReturnToMenu() { unported("OSReturnToMenu"); }
-void OSSetAlarm() { unported("OSSetAlarm"); }
-void OSSetPeriodicAlarm() { unported("OSSetPeriodicAlarm"); }
-void OSSetThreadPriority() { unported("OSSetThreadPriority"); }
 // RFL
 void RFLDrawOpa() { unported("RFLDrawOpa"); }
 void RFLDrawOpaCore() { unported("RFLDrawOpaCore"); }
