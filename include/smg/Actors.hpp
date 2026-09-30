@@ -24,14 +24,22 @@ private:
 class ProbeActor : public LiveActor {
 public:
     explicit ProbeActor(const TVec3f& position);
+    // Back to a point, still, as MR::resetPosition leaves an actor that appears there.
+    void drop(const TVec3f& position);
     void control() override;
     MtxPtr getBaseMtx() const override;
     bool landed() const { return mLanded; }
     float fallen() const { return mFallen; }
+    // The part and floor type of the last ground the Binder held it on.
+    const char* groundHost() const { return mGroundHost; }
+    const char* groundFloor() const { return mGroundFloor; }
 
 private:
     mutable TPos3f mBase;
+    TVec3f mLastPosition;
     bool mLanded = false;
     float mFallen = 0;
+    const char* mGroundHost = "";
+    const char* mGroundFloor = "";
 };
 } // namespace smg

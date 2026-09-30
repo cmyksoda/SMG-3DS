@@ -1,4 +1,5 @@
 #include <smg/StageCollision.hpp>
+#include <smg/Actors.hpp>
 #include <smg/Archive.hpp>
 #include <smg/Scene.hpp>
 #include <Game/Camera/CameraPolygonCodeUtil.hpp>
@@ -44,7 +45,7 @@ std::unique_ptr<StageCollision::Model> StageCollision::readModel(const std::stri
     return model->kcl.triangles() ? std::move(model) : nullptr;
 }
 
-void StageCollision::addParts(const Stage& stage, std::unique_ptr<Model> model) {
+StageCollision::Model* StageCollision::addParts(const Stage& stage, std::unique_ptr<Model> model) {
     for (std::size_t i = 0; i < stage.objects.size(); ++i) {
         const StageObject& object = stage.objects[i];
         if (object.name != model->name) continue;
@@ -69,6 +70,24 @@ void StageCollision::addParts(const Stage& stage, std::unique_ptr<Model> model) 
         parts_.push_back(part);
     }
     models_.push_back(std::move(model));
+    return models_.back().get();
+}
+
+void StageCollision::addHosts(NativeScene& scene, const Stage& stage, Model& model) const {
+    for (const StageObject& object : stage.objects) {
+        if (object.name != model.name) continue;
+        const auto zone = std::find_if(stage.zones.begin(), stage.zones.end(), [&](const StageZone& z) { return z.name == object.zone; });
+        TPos3f placement;
+        for (int row = 0; row < 3; ++row)
+            for (int column = 0; column < 4; ++column) placement.mMtx[row][column] = object.transform[row * 4 + column];
+        scene.setPlacementZone(static_cast<s32>(zone - stage.zones.begin()));
+        new CollisionHost(object.name.c_str(), placement, model.kcl.data(), model.attributes.info().mData); // the scene's
+        scene.setPlacementZone(0);
+    }
+}
+
+void StageCollision::addHosts(NativeScene& scene, const Stage& stage) {
+    for (auto& model : models_) addHosts(scene, stage, *model);
 }
 
 bool StageCollision::load(const std::string& root, const Stage& stage, std::string& error) {

@@ -14,6 +14,7 @@ struct AreaLightInfo;
 
 namespace smg {
 class NativeScene;
+class ProbeActor;
 class StageCollision;
 
 // Draws a galaxy's placed models with their translated materials. A worker thread decodes
@@ -40,8 +41,9 @@ public:
     // Where that pull meets the placed models' original collision.
     const std::string& startLanding() const { return startLanding_; }
 
-    // A diagnostic marker, not Mario: dropped above Mario's start, it falls along the original gravity and
-    // stops on the original collision. Positions are on the top screen, from the last draw.
+    // A diagnostic marker, not Mario: an original LiveActor with no model, dropped above Mario's start, falling
+    // along the original gravity in the scene's movement until its Binder meets the original collision.
+    // Positions are on the top screen, from the last draw.
     struct Probe {
         bool visible = false, falling = false;
         float x = 0, y = 0;
@@ -81,6 +83,7 @@ private:
     void stopWorker();
     void consume(Prepared& prepared);
     void resetCamera();
+    void viewMatrix(C3D_Mtx& view) const;
     void drawInstance(const Instance& instance, const C3D_Mtx& view, bool translucent, const Material*& current);
     int lightSet(const AreaLightInfo* area, bool player = false);
     std::unique_ptr<GpuModel> uploadModel(Prepared& prepared);
@@ -89,7 +92,7 @@ private:
     const std::vector<Material>& framedMaterials(GpuModel& model, int frame);
     void loadLightSet(const LightSet& set, const C3D_Mtx& view);
     void dropProbe();
-    void stepProbe(float seconds);
+    void watchProbe();
 
     DVLB_s* shader_ = nullptr;
     shaderProgram_s program_{};
@@ -117,8 +120,8 @@ private:
     std::vector<Instance> instances_;
     float position_[3]{}, yaw_ = 0, pitch_ = 0;
     int view_ = 0; // L steps through views of the start: behind, close in front, a figure's head, close behind
-    bool probeFalling_ = false;
-    float probe_[3]{}, probeVelocity_[3]{}, probeFallen_ = 0, probeSinceTrail_ = 0;
+    ProbeActor* probe_ = nullptr; // the scene's, freed with it
+    int probeFrames_ = 0;
     std::vector<std::array<float, 3>> probeTrail_;
     std::string probeState_;
     Probe probeView_;

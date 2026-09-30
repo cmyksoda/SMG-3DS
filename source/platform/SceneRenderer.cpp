@@ -1,5 +1,6 @@
 #include <smg/SceneRenderer.hpp>
 #include <ModelShader.hpp>
+#include <smg/Actors.hpp>
 #include <smg/Animation.hpp>
 #include <smg/Archive.hpp>
 #include <smg/Etc1.hpp>
@@ -539,6 +540,7 @@ void SceneRenderer::shutdown() {
     stopWorker();
     collision_.reset();
     gravity_.reset();
+    probe_ = nullptr;
     instances_.clear();
     figure_.reset();
     models_.clear();
@@ -562,6 +564,9 @@ void SceneRenderer::loadStage(const std::string& root, const std::string& galaxy
     // The collision's parts read the scene's codes, so they go before the scene does.
     collision_.reset();
     gravity_.reset();
+    probe_ = nullptr;
+    probeState_.clear();
+    probeTrail_.clear();
     startLanding_.clear();
     title_ = galaxy + " / scenario " + std::to_string(scenario);
     std::string error;
@@ -643,67 +648,41 @@ void SceneRenderer::loadLightSet(const LightSet& set, const C3D_Mtx& view) {
 }
 
 void SceneRenderer::dropProbe() {
-    probeFalling_ = false;
     probeTrail_.clear();
     probeState_.clear();
-    if (!gravity_ || !collision_ || !stage_.entrance || loading()) return;
+    if (!gravity_ || !stage_.entrance || loading()) return;
     TVec3f pull;
     const TVec3f start(stage_.start[0], stage_.start[1], stage_.start[2]);
     auto* manager = MR::getSceneObj<PlanetGravityManager>(SceneObj_PlanetGravityManager);
     if (!manager->calcTotalGravityVector(&pull, nullptr, start, GRAVITY_TYPE_NORMAL, 0)) return;
     // 800 units up the start's own pull, where the start view can see it fall.
-    for (int i = 0; i < 3; ++i) probe_[i] = stage_.start[i] - (&pull.x)[i] * 800, probeVelocity_[i] = 0;
-    probeFallen_ = probeSinceTrail_ = 0;
-    probeFalling_ = true;
+    const TVec3f above(start.x - pull.x * 800, start.y - pull.y * 800, start.z - pull.z * 800);
+    if (!probe_) probe_ = new ProbeActor(above); // the scene owns its actors
+    else probe_->drop(above);
+    probeFrames_ = 0;
     probeState_ = "probe";
 }
 
-void SceneRenderer::stepProbe(float seconds) {
-    // A fixed pull and top speed for a diagnostic marker; Mario's own physics are not what this shows.
-    constexpr float Acceleration = 500, TopSpeed = 4000, Step = 1 / 60.0f, GiveUp = 30000;
-    auto* manager = MR::getSceneObj<PlanetGravityManager>(SceneObj_PlanetGravityManager);
-    for (float left = seconds; probeFalling_ && left > 0; left -= Step) {
-        const float dt = std::min(left, Step);
-        const TVec3f at(probe_[0], probe_[1], probe_[2]);
-        TVec3f pull;
-        if (!manager->calcTotalGravityVector(&pull, nullptr, at, GRAVITY_TYPE_NORMAL, 0)) {
-            probeState_ = "probe: no gravity here";
-            return;
-        }
-        float speed = 0;
-        for (int i = 0; i < 3; ++i) {
-            probeVelocity_[i] += (&pull.x)[i] * Acceleration * dt;
-            speed += probeVelocity_[i] * probeVelocity_[i];
-        }
-        speed = std::sqrt(speed);
-        if (speed > TopSpeed) for (float& v : probeVelocity_) v *= TopSpeed / speed;
-        const TVec3f step(probeVelocity_[0] * dt, probeVelocity_[1] * dt, probeVelocity_[2] * dt);
-        StageCollision::Hit hit;
-        if (collision_->strikeLine(at, step, hit)) {
-            for (int i = 0; i < 3; ++i) probe_[i] = (&hit.position.x)[i] + (&hit.normal.x)[i] * 2;
-            probeFallen_ += hit.distance;
-            probeFalling_ = false;
-            char text[128];
-            std::snprintf(text, sizeof text, "probe: on %s, %s floor, fell %.0f", stage_.objects[hit.object].name.c_str(), hit.floor,
-                          probeFallen_);
-            probeState_ = text;
-        } else {
-            for (int i = 0; i < 3; ++i) probe_[i] += (&step.x)[i];
-            probeFallen_ += step.length();
-            char text[64];
-            std::snprintf(text, sizeof text, "probe: falling, %.0f so far", probeFallen_);
-            probeState_ = text;
-            if (probeFallen_ > GiveUp) {
-                probeFalling_ = false;
-                probeState_ = "probe: fell 30000 without meeting collision";
-            }
-        }
-        probeSinceTrail_ += dt;
-        if (probeSinceTrail_ >= 0.05f) {
-            probeSinceTrail_ = 0;
-            probeTrail_.push_back({probe_[0], probe_[1], probe_[2]});
-        }
-    }
+// The probe moves in the scene's movement; this reads where it went.
+void SceneRenderer::watchProbe() {
+    if (!probe_ || probeState_.empty()) return;
+    if (++probeFrames_ % 3 == 0 && !probe_->landed())
+        probeTrail_.push_back({probe_->mPosition.x, probe_->mPosition.y, probe_->mPosition.z});
+    char text[128];
+    if (probe_->landed())
+        std::snprintf(text, sizeof text, "probe: on %s, %s floor, fell %.0f", probe_->groundHost(), probe_->groundFloor(),
+                      probe_->fallen());
+    else if (probe_->fallen() > 30000)
+        std::snprintf(text, sizeof text, "probe: fell 30000 without meeting collision");
+    else
+        std::snprintf(text, sizeof text, "probe: falling, %.0f so far", probe_->fallen());
+    probeState_ = text;
+}
+
+void SceneRenderer::viewMatrix(C3D_Mtx& view) const {
+    const float forward[3]{std::sin(yaw_) * std::cos(pitch_), std::sin(pitch_), std::cos(yaw_) * std::cos(pitch_)};
+    Mtx_LookAt(&view, FVec3_New(position_[0], position_[1], position_[2]),
+               FVec3_New(position_[0] + forward[0], position_[1] + forward[1], position_[2] + forward[2]), FVec3_New(0, 1, 0), false);
 }
 
 void SceneRenderer::resetCamera() {
@@ -770,7 +749,11 @@ std::unique_ptr<SceneRenderer::GpuModel> SceneRenderer::uploadModel(Prepared& pr
 
 void SceneRenderer::consume(Prepared& prepared) {
     if (!prepared.collisionError.empty()) startLanding_ = "collision unavailable: " + prepared.collisionError;
-    if (prepared.collision && collision_) collision_->addParts(stage_, std::move(prepared.collision));
+    if (prepared.collision && collision_) {
+        StageCollision::Model* model = collision_->addParts(stage_, std::move(prepared.collision));
+        // The same parts again in the original CollisionDirector, which the probe's Binder reads.
+        if (gravity_) collision_->addHosts(*gravity_, stage_, *model);
+    }
     if (prepared.result == Prepared::Result::Figure) { placeFigure(prepared); return; }
     if (!prepared.error.empty()) figureState_ = prepared.name + ": " + prepared.error;
     if (prepared.result == Prepared::Result::Missing) { ++missing_; return; }
@@ -905,6 +888,8 @@ void SceneRenderer::update(const InputFrame& input, float seconds) {
                 std::snprintf(parts, sizeof parts, " (%zu parts)", collision_->parts());
                 startLanding_ += parts;
             }
+            // Every part's collision is in: the placement of actors is over, as GameScene::init ends it.
+            if (gravity_) gravity_->endActorPlacement();
             dropProbe();
         }
     }
@@ -924,10 +909,20 @@ void SceneRenderer::update(const InputFrame& input, float seconds) {
     for (int i = 0; i < 3; ++i)
         position_[i] += (forward[i] * input.moveY + right[i] * input.moveX) * speed + (i == 1 ? rise * speed : 0);
     if (gravity_) {
-        // The scene's movement, as the game runs it each frame: switch and sleep state follow here.
-        gravity_->movement();
+        // The scene's movement, as the game runs it each frame once placement is over: switches, sleep, the
+        // collision and clipping directors, and the probe. Clipping judges by the preview's camera.
+        if (!loading()) {
+            NativeScene::View view;
+            C3D_Mtx camera;
+            viewMatrix(camera);
+            for (int row = 0; row < 3; ++row)
+                for (int column = 0; column < 4; ++column) view.view.mMtx[row][column] = camera.r[row].c[3 - column];
+            view.fovy = FieldOfView, view.aspect = C3D_AspectRatioTop, view.farZ = Far;
+            gravity_->setView(view);
+            gravity_->movement();
+        }
         gravityHere_ = describeGravity(*gravity_, stage_, position_);
-        if (collision_) stepProbe(seconds);
+        watchProbe();
     }
     if (figure_) animateFigure(seconds);
 }
@@ -988,10 +983,8 @@ void SceneRenderer::draw(C3D_RenderTarget* target) {
     AttrInfo_AddLoader(attrs, 3, GPU_BYTE, 4);
     C3D_TexEnvBufUpdate(C3D_Both, 0);
 
-    const float forward[3]{std::sin(yaw_) * std::cos(pitch_), std::sin(pitch_), std::cos(yaw_) * std::cos(pitch_)};
     C3D_Mtx view, projection;
-    Mtx_LookAt(&view, FVec3_New(position_[0], position_[1], position_[2]),
-               FVec3_New(position_[0] + forward[0], position_[1] + forward[1], position_[2] + forward[2]), FVec3_New(0, 1, 0), false);
+    viewMatrix(view);
     Mtx_PerspTilt(&projection, C3D_AngleFromDegrees(FieldOfView), C3D_AspectRatioTop, Near, Far, false);
     C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, projection_, &projection);
     // Each placement's light set is loaded as it draws; the sky's view differs, so it loads its own.
@@ -1045,9 +1038,10 @@ void SceneRenderer::draw(C3D_RenderTarget* target) {
     };
     probeView_.trail.clear();
     probeView_.label = probeState_;
-    probeView_.falling = probeFalling_;
+    probeView_.falling = probe_ && !probe_->landed();
     std::array<float, 2> at{};
-    probeView_.visible = !probeState_.empty() && toScreen(probe_, at);
+    const float probeAt[3]{probe_ ? probe_->mPosition.x : 0, probe_ ? probe_->mPosition.y : 0, probe_ ? probe_->mPosition.z : 0};
+    probeView_.visible = probe_ && !probeState_.empty() && toScreen(probeAt, at);
     probeView_.x = at[0], probeView_.y = at[1];
     for (const auto& point : probeTrail_)
         if (toScreen(point.data(), at)) probeView_.trail.push_back(at);

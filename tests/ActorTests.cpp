@@ -11,6 +11,7 @@
 #include <Game/Util/LiveActorUtil.hpp>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 
 namespace {
 unsigned checks = 0;
@@ -37,7 +38,7 @@ void probeLands() {
     placement.identity();
     scene.addZone("TestGalaxy", placement); // a stage's zone 0, where its collision belongs
     new smg::CollisionHost("floor", placement, kcl.data(), pa.info().mData);
-    auto* probe = new smg::ProbeActor(TVec3f(50.0f, 200.0f, 50.0f));
+    auto* probe = new smg::ProbeActor(TVec3f(30.0f, 200.0f, 30.0f));
     scene.endActorPlacement();
     check(!MR::isDead(probe) && scene.isExecuted(probe), "the probe appears and joins the scene's movement");
 
@@ -50,9 +51,10 @@ void probeLands() {
     check(frames > 10 && frames < 60, "after a fall of about twenty frames");
     // Pressed down a unit each frame, the Binder sets the sphere back about a unit above touching, so contact
     // comes every other frame; the sphere never moves more than that.
-    const auto resting = [&] { return probe->mPosition.y > 19.9f && probe->mPosition.y < 21.5f && std::fabs(probe->mPosition.x - 50.0f) < 0.01f; };
+    const auto resting = [&] { return probe->mPosition.y > 19.9f && probe->mPosition.y < 21.5f && std::fabs(probe->mPosition.x - 30.0f) < 0.01f; };
     check(resting(), "its sphere rests on the floor, where it fell");
     check(probe->mGravity.y < -0.99f, "under the gravity the original manager picked");
+    check(std::fabs(probe->fallen() - 180.0f) < 2.0f, "having fallen the 180 units the Binder let it");
     for (int i = 0; i < 2 && !MR::isBindedGround(probe); ++i) scene.movement();
     check(MR::isBindedGround(probe) && probe->getBinder()->mGroundInfo.mParentTriangle.getNormal(0)->y > 0.99f,
           "the Binder's ground is the floor's up-facing triangle");
@@ -62,6 +64,12 @@ void probeLands() {
         stays &= resting();
     }
     check(stays, "and it stays there");
+    check(!std::strcmp(probe->groundHost(), "floor") && !std::strcmp(probe->groundFloor(), "Death"),
+          "its ground is the floor part's first triangle, a death floor by the attribute table");
+    probe->drop(TVec3f(30.0f, 120.0f, 30.0f));
+    check(!probe->landed() && probe->mPosition.y == 120.0f, "dropped again, it starts over");
+    for (int i = 0; i < 60 && !probe->landed(); ++i) scene.movement();
+    check(probe->landed(), "and lands again");
 
     // Off the square's edge, nothing holds it.
     auto* past = new smg::ProbeActor(TVec3f(300.0f, 200.0f, 50.0f));

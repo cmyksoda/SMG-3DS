@@ -1,3 +1,4 @@
+#include <smg/Actors.hpp>
 #include <smg/Archive.hpp>
 #include <smg/Bcsv.hpp>
 #include <smg/Animation.hpp>
@@ -44,7 +45,7 @@ bool used(const JMapInfo& info, int row, const char* field) {
 }
 
 // Every gravity row in every stage archive, then every scenario through placeStageGravity.
-int auditGravity(const fs::path& root) {
+int auditGravity(const fs::path& root, bool dropProbes) {
     std::size_t errors = 0;
     struct Rows { std::size_t count = 0, switchA = 0, switchB = 0, sleep = 0, follower = 0; std::set<std::string> tables; };
     std::map<std::string, Rows> rows;
@@ -110,7 +111,10 @@ int auditGravity(const fs::path& root) {
                 asleep = 0;
     std::map<std::string, std::size_t> placed, skipped, areasSkipped;
     std::size_t areasPlaced = 0;
-    std::vector<std::string> noStartGravity, withSkipped, noEntrance, noLanding, farLandings;
+    std::vector<std::string> noStartGravity, withSkipped, noEntrance, noLanding, farLandings, probeApart;
+    std::size_t probes = 0, probesLanded = 0, probesSame = 0;
+    float probeDrift = 0;
+    std::vector<std::string> probeDrifted;
     std::map<std::string, std::size_t> landings, floors;
     for (const auto& galaxy : galaxies) {
         std::vector<std::uint8_t> storage;
@@ -223,10 +227,11 @@ int auditGravity(const fs::path& root) {
                 // Follow the start's pull onto the placed models' own collision.
                 smg::StageCollision collision;
                 smg::StageCollision::Hit hit;
+                bool hitFound = false;
                 if (!collision.load(root.string(), stage, error)) {
                     std::fprintf(stderr, "COLLISION %s: %s\n", label.c_str(), error.c_str());
                     ++errors;
-                } else if (!collision.land(start, pull, hit)) {
+                } else if (!(hitFound = collision.land(start, pull, hit))) {
                     noLanding.push_back(label);
                 } else {
                     ++landings[hit.distance < -1 ? "1 to 100 units above the start" : hit.distance < 0 ? "within 1 unit above the start"
@@ -237,6 +242,31 @@ int auditGravity(const fs::path& root) {
                                      stage.objects[hit.object].name.c_str(), -hit.distance, hit.normal.x, hit.normal.y, hit.normal.z);
                     ++floors[hit.floor];
                     if (hit.distance >= 500) farLandings.push_back(label + " " + stage.objects[hit.object].name);
+                }
+                if (dropProbes) {
+                    // The same fall through the original actor stack: parts as CollisionParts, a ProbeActor, its Binder.
+                    collision.addHosts(scene, stage);
+                    scene.endActorPlacement();
+                    auto* probe = new smg::ProbeActor(TVec3f(start.x - pull.x * 800, start.y - pull.y * 800, start.z - pull.z * 800));
+                    for (int frame = 0; frame < 900 && !probe->landed(); ++frame) scene.movement();
+                    ++probes;
+                    if (probe->landed()) {
+                        ++probesLanded;
+                        const bool same = hitFound && stage.objects[hit.object].name == probe->groundHost();
+                        probesSame += same;
+                        if (!same) probeApart.push_back(label + " on " + probe->groundHost());
+                        // How far across the pull it came to rest from where the ray met the ground.
+                        if (hitFound) {
+                            TVec3f apart(probe->mPosition.x - hit.position.x, probe->mPosition.y - hit.position.y,
+                                         probe->mPosition.z - hit.position.z);
+                            apart -= pull * apart.dot(pull);
+                            const float across = apart.length();
+                            probeDrift = std::max(probeDrift, across);
+                            if (across > 5) probeDrifted.push_back(label + " " + std::to_string(static_cast<int>(across)));
+                        }
+                    } else {
+                        probeApart.push_back(label + " did not land");
+                    }
                 }
             }
         }
@@ -266,6 +296,14 @@ int auditGravity(const fs::path& root) {
     std::printf("\n%zu meet no collision:", noLanding.size());
     for (const auto& label : noLanding) std::printf(" [%s]", label.c_str());
     std::printf("\n");
+    if (dropProbes) {
+        std::printf("%zu probes dropped 800 up the start's pull as original actors: %zu landed through their Binder, %zu on the "
+                    "part the ray found\n", probes, probesLanded, probesSame);
+        for (const auto& label : probeApart) std::printf("  [%s]\n", label.c_str());
+        std::printf("most rested %.1f units across the pull from the ray's landing; more than 5:", probeDrift);
+        for (const auto& label : probeDrifted) std::printf(" [%s]", label.c_str());
+        std::printf("\n");
+    }
     return errors + failed == 0 ? 0 : 1;
 }
 
@@ -416,10 +454,11 @@ int auditCollision(const fs::path& root) {
 }
 
 int main(int argc, char** argv) {
-    if (argc == 3 && !std::strcmp(argv[2], "--gravity")) return auditGravity(argv[1]);
+    if (argc == 3 && !std::strcmp(argv[2], "--gravity")) return auditGravity(argv[1], false);
+    if (argc == 3 && !std::strcmp(argv[2], "--actors")) return auditGravity(argv[1], true);
     if (argc == 3 && !std::strcmp(argv[2], "--collision")) return auditCollision(argv[1]);
     const bool models = argc == 3 && !std::strcmp(argv[2], "--models");
-    if (argc != 2 && !models) { std::fprintf(stderr,"Usage: resource_audit EXTRACTED_FILES_DIRECTORY [--models|--gravity|--collision]\n"); return 2; }
+    if (argc != 2 && !models) { std::fprintf(stderr,"Usage: resource_audit EXTRACTED_FILES_DIRECTORY [--models|--gravity|--actors|--collision]\n"); return 2; }
     std::error_code ec;
     const fs::path root(argv[1]);
     if (!fs::is_directory(root, ec)) { std::fprintf(stderr,"Not a readable directory\n"); return 2; }

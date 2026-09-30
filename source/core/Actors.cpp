@@ -1,9 +1,12 @@
 #include <smg/Actors.hpp>
 #include <Game/LiveActor/Binder.hpp>
+#include <Game/Map/CollisionCode.hpp>
+#include <Game/Map/CollisionDirector.hpp>
 #include <Game/Map/CollisionParts.hpp>
 #include <Game/Scene/SceneFunction.hpp>
 #include <Game/Util/ObjUtil.hpp>
 #include <Game/Util/ActorSensorUtil.hpp>
+#include <Game/Util/ActorMovementUtil.hpp>
 #include <Game/Util/LiveActorUtil.hpp>
 #include <cmath>
 
@@ -32,6 +35,7 @@ CollisionHost::CollisionHost(const char* name, const TPos3f& placement, const vo
 
 ProbeActor::ProbeActor(const TVec3f& position) : LiveActor("probe") {
     mPosition = position;
+    mLastPosition = position;
     initHitSensor(1);
     MR::addHitSensorBinder(this, "body", 8, 20.0f, TVec3f(0.0f, 0.0f, 0.0f));
     initBinder(20.0f, 0.0f, 0);
@@ -42,10 +46,26 @@ ProbeActor::ProbeActor(const TVec3f& position) : LiveActor("probe") {
     MR::invalidateClipping(this);
 }
 
+void ProbeActor::drop(const TVec3f& position) {
+    mPosition = position;
+    mLastPosition = position;
+    mVelocity.zero();
+    mLanded = false;
+    mFallen = 0;
+    mGroundHost = mGroundFloor = "";
+    MR::resetPosition(this);
+}
+
 void ProbeActor::control() {
     // A fixed pull and top speed per frame for a marker; the game's own actors each choose theirs.
     constexpr float Acceleration = 1.0f, TopSpeed = 60.0f;
+    // What the Binder let it move since the last frame, not what it asked for.
+    if (!mLanded) mFallen += PSVECDistance(&mPosition, &mLastPosition);
+    mLastPosition = mPosition;
     if (MR::isOnGround(this)) {
+        const Triangle& ground = mBinder->mGroundInfo.mParentTriangle;
+        mGroundHost = ground.getHostName();
+        mGroundFloor = MR::getCollisionDirector()->mCode->getFloorCodeString(ground);
         // Standing: only this frame's pull remains, pressing into the ground for the Binder to answer.
         mVelocity = mGravity * Acceleration;
         mLanded = true;
@@ -53,7 +73,6 @@ void ProbeActor::control() {
     }
     mVelocity += mGravity * Acceleration;
     if (mVelocity.length() > TopSpeed) mVelocity.setLength(TopSpeed);
-    mFallen += mVelocity.length();
 }
 
 MtxPtr ProbeActor::getBaseMtx() const {

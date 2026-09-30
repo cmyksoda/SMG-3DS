@@ -85,8 +85,10 @@ completion does not make those interfaces portable to ARM11/PICA200.
   `DiskGardenZone` pulls straight down onto `DiskGardenPlanet`, 9.2 units below. The preview
   shows the same answer at Mario's start and, live, at the camera. A gravity probe, a magenta
   marker drawn over the scene and plainly not Mario, drops 800 units up the pull at Mario's start
-  (again with L): each frame it asks the original manager for the pull, speeds up along it at a fixed
-  500 units/s², and sweeps its step through the original collision, stopping on the first face.
+  (again with L). It is an original `LiveActor` with no model (`smg::ProbeActor`), run by the scene's
+  movement: `LiveActor::movement` takes its gravity from the original manager, its `control` adds a
+  fixed unit per frame along it, and its original `Binder` stops it on the original `CollisionParts`
+  of every placed part.
 - Collision runs through the original `KCollisionServer` (`KCollision`, `KCollisionPlus`) and
   `CollisionCode`. `smg::Kcl` validates a disc KCL and repacks it, as `Bcsv` repacks tables: every
   field swapped by its type (octree nodes are found by walking the tree the way `searchBlock` does;
@@ -266,7 +268,7 @@ stands in until then.
 
 **Milestones**, each on screen in the preview before the next:
 
-1. **An original LiveActor falls and lands (running).** `LiveActor`, `LiveActorFlag`, `HitSensor`,
+1. **An original LiveActor falls and lands (done in the preview).** `LiveActor`, `LiveActorFlag`, `HitSensor`,
    `HitSensorKeeper`, `HitSensorInfo`, `Binder`, `HitInfo`, `CollisionDirector`,
    `CollisionCategorizedKeeper`, `CollisionParts`, `LiveActorGroup`, `AllLiveActorGroup`,
    `SensorHitChecker`, the clipping family (`ClippingDirector`, `ClippingJudge`, `ClippingActorHolder`,
@@ -283,8 +285,15 @@ stands in until then.
    gravity (host and ARM). Pressed down a unit each frame, the original Binder sets the sphere back
    about a unit above touching, so contact comes every other frame. On the host, `LiveActor.cpp`
    builds without UBSan's vptr check, which needs the type info of its unbuilt model and sound
-   classes; the 3DS build has no RTTI. Next: map parts' collision through `CollisionHost` in the
-   preview, and the probe as a `ProbeActor`.
+   classes; the 3DS build has no RTTI. The preview gives every placed part a `CollisionHost` as its
+   collision arrives, ends actor placement when the last one has, and drops the probe as a
+   `ProbeActor`; the scene's movement waits for placement to end, as the game's does. `ViewGroupCtrlCube`
+   areas are the original plain `AreaObj` cubes in an `AreaObjMgr`; `ClippingDirector` stays out of the
+   movement until the player runs (view groups follow the player's position), so every actor stays
+   unclipped, as each starts. `resource_audit --actors` drops a probe above every start on the disc:
+   124 dropped, 116 land through their Binder, all on the part the ray audit finds (the other 8 have no
+   collision below). Most rest within 5 units of the ray's landing; with no friction of its own the
+   probe slides on sloped starts, up to 246 units on StarDust's.
 2. **ModelManager and XanimePlayer.** J3D's CPU side (`J3DModel::calc`, joints, envelope matrices)
    is portable; `J3DModelData` gets a native loader from the port's parsers instead of J3D's in-place
    big-endian loader. `XanimePlayer`/`XanimeCore` blend Mario's animations; the renderer draws what
@@ -434,6 +443,6 @@ across 12 zones; the preview draws 56 rigid models in 172 placements.
 
 The portable math tests check tolerances and conventions, not bit-identical Gekko rounding.
 The native validation app passes 1,069 math, 37 WPad, 179 BCSV, 1,043 J3D model/texture,
-8,810 TEV combiner, 27 original gravity, 27 NameObj, 89 scene and gravity creator, 48 collision, 21 J3D animation, 9 original actor, 7 ETC1 and 8 GPU texture checks on emulated ARM
+8,810 TEV combiner, 27 original gravity, 27 NameObj, 89 scene and gravity creator, 48 collision, 21 J3D animation, 13 original actor, 7 ETC1 and 8 GPU texture checks on emulated ARM
 in Azahar; the GPU checks compare the hardware's ETC1 decoding against ours. Of the disc's
 7,780 materials, 6,987 translate to the combiner exactly. No physical console has been tested.
