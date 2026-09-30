@@ -1,4 +1,6 @@
 #include <smg/Archive.hpp>
+#include <dirent.h>
+#include <strings.h>
 #include <cstdio>
 #include <cstring>
 #include <set>
@@ -113,11 +115,39 @@ bool indexRarc(Bytes source, std::vector<ArchiveEntry>& entries, std::string& er
     return true;
 }
 
+// The Wii's DVD file system ignores case, and the disc relies on it (FloaterOtakingGalaxy.arc is
+// asked for as FloaterOtaKingGalaxy); a case-sensitive host or SD folder needs each part matched.
+namespace {
+FILE* openDiscFile(const char* path) {
+    if (FILE* file = std::fopen(path, "rb")) return file;
+    std::string resolved, rest = path;
+    if (const auto root = rest.find('/'); root != std::string::npos) {
+        resolved = rest.substr(0, root + 1);
+        rest.erase(0, root + 1);
+    }
+    while (!rest.empty()) {
+        const auto slash = rest.find('/');
+        const std::string part = rest.substr(0, slash);
+        rest = slash == std::string::npos ? "" : rest.substr(slash + 1);
+        DIR* directory = opendir(resolved.empty() ? "." : resolved.c_str());
+        if (!directory) return nullptr;
+        std::string match;
+        while (const dirent* entry = readdir(directory)) {
+            if (!strcasecmp(entry->d_name, part.c_str())) { match = entry->d_name; break; }
+        }
+        closedir(directory);
+        if (match.empty()) return nullptr;
+        resolved += match + (rest.empty() ? "" : "/");
+    }
+    return std::fopen(resolved.c_str(), "rb");
+}
+} // namespace
+
 bool readArchive(const char* path, std::vector<std::uint8_t>& storage,
     std::vector<ArchiveEntry>& entries, std::size_t memoryBudget, std::string& error) {
     std::vector<std::uint8_t>().swap(storage);
     entries.clear(); error.clear();
-    FILE* file = std::fopen(path, "rb");
+    FILE* file = openDiscFile(path);
     if (!file) return fail(error, "Cannot open archive");
     if (std::fseek(file, 0, SEEK_END)) { std::fclose(file); return fail(error, "Cannot seek archive"); }
     const long length = std::ftell(file);

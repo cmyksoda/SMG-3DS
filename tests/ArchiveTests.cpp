@@ -2,6 +2,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <string>
 
 namespace {
 unsigned checks = 0;
@@ -64,5 +66,19 @@ int main() {
     bad=data; put32(bad,84,0x02000000);
     check(!smg::indexRarc({bad.data(),bad.size()},entries,error), "RARC directory cycle rejected");
     check(entries.empty(), "failed index never exposes partially indexed entries");
+
+    // The disc names FloaterOtakingGalaxy.arc; the game asks for FloaterOtaKingGalaxy, as the Wii DVD allows.
+    char folder[] = "/tmp/smg-archive-XXXXXX";
+    check(mkdtemp(folder) != nullptr, "temporary folder");
+    const std::string root = folder;
+    std::filesystem::create_directory(root + "/StageData");
+    FILE* file = std::fopen((root + "/StageData/FloaterOtakingGalaxy.arc").c_str(), "wb");
+    check(file && std::fwrite(data.data(), 1, data.size(), file) == data.size() && !std::fclose(file), "archive written");
+    std::vector<std::uint8_t> storage;
+    check(smg::readArchive((root + "/stagedata/FloaterOtaKingGalaxy.arc").c_str(), storage, entries, 1 << 20, error) &&
+          entries.size() == 1, "archive found whatever the case of its name");
+    check(!smg::readArchive((root + "/StageData/FloaterGalaxy.arc").c_str(), storage, entries, 1 << 20, error),
+          "a missing archive is still missing");
+    std::filesystem::remove_all(root);
     std::printf("%u archive checks passed\n",checks);
 }
