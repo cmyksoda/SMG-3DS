@@ -66,7 +66,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PETARI}/src/Ga
 add_library(petari_gravity STATIC ${GRAVITY_SOURCES})
 target_link_libraries(petari_gravity PUBLIC petari_core)
 
-add_library(petari_nameobj STATIC
+add_library(petari_scene STATIC
   source/compat/Scene.cpp
   "${PETARI}/src/Game/NameObj/NameObj.cpp"
   "${PETARI}/src/Game/NameObj/NameObjRegister.cpp"
@@ -75,11 +75,16 @@ add_library(petari_nameobj STATIC
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/NameObj/NameObjHolder.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/HashUtil.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/ObjUtilNameObj.cpp"
-  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/SystemUtilSceneNameObj.cpp")
-target_link_libraries(petari_nameobj PUBLIC petari_core)
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/SystemUtilSceneNameObj.cpp"
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Scene/SceneObjHolderMethods.cpp"
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Gravity/PlanetGravityManager.cpp"
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Gravity/GravityInfo.cpp")
+target_link_libraries(petari_scene PUBLIC petari_gravity)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
   "${PETARI}/src/Game/NameObj/NameObjHolder.cpp" "${PETARI}/src/Game/Util/HashUtil.cpp"
   "${PETARI}/src/Game/NameObj/NameObjCategoryList.cpp" "${PETARI}/include/Game/NameObj/NameObjCategoryList.hpp"
+  "${PETARI}/src/Game/Scene/SceneObjHolder.cpp" "${PETARI}/src/Game/Gravity/PlanetGravityManager.cpp"
+  "${PETARI}/src/Game/Gravity/GravityInfo.cpp" "${PETARI}/include/Game/Gravity/GravityInfo.hpp"
   "${PETARI}/src/Game/Util/ObjUtil.cpp" "${PETARI}/src/Game/Util/SystemUtil.cpp"
   "${PETARI}/include/Game/NameObj/NameObjHolder.hpp" "${PETARI}/include/Game/Util/ObjUtil.hpp"
   "${PETARI}/libs/JSystem/include/JSystem/JSupport/JSUList.hpp"
@@ -119,11 +124,11 @@ if(NINTENDO_3DS)
   if(SMG_BUILD_VALIDATION)
     add_executable(native_validation tests/NativeTests.cpp tests/MathTests.cpp tests/PadTests.cpp tests/BcsvTests.cpp
       tests/ModelTests.cpp tests/CombinerTests.cpp tests/GravityTests.cpp tests/Etc1Tests.cpp tests/GpuTests.cpp
-      tests/NameObjTests.cpp)
+      tests/NameObjTests.cpp tests/SceneTests.cpp)
     set_target_properties(native_validation PROPERTIES SUFFIX ".elf")
     target_compile_definitions(native_validation PRIVATE SMG_TEST_RUNNER)
     target_link_directories(native_validation PRIVATE "${DEVKITPRO}/libctru/lib")
-    target_link_libraries(native_validation PRIVATE smg_platform petari_gravity petari_nameobj citro2d citro3d ctru m)
+    target_link_libraries(native_validation PRIVATE smg_platform petari_gravity petari_scene citro2d citro3d ctru m)
     target_compile_options(native_validation PRIVATE -Wall -Wextra -Werror)
     add_custom_command(TARGET native_validation POST_BUILD
       COMMAND "${DEVKITPRO}/tools/bin/3dsxtool" "$<TARGET_FILE:native_validation>"
@@ -174,9 +179,13 @@ else()
   target_compile_options(gravity_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME original_gravity COMMAND gravity_tests)
   add_executable(nameobj_tests tests/NameObjTests.cpp)
-  target_link_libraries(nameobj_tests PRIVATE petari_nameobj)
+  target_link_libraries(nameobj_tests PRIVATE petari_scene)
   target_compile_options(nameobj_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME original_nameobj COMMAND nameobj_tests)
+  add_executable(scene_tests tests/SceneTests.cpp)
+  target_link_libraries(scene_tests PRIVATE petari_scene)
+  target_compile_options(scene_tests PRIVATE -Wall -Wextra -Werror)
+  add_test(NAME original_scene_gravity COMMAND scene_tests)
   add_executable(combiner_tests tests/CombinerTests.cpp)
   target_link_libraries(combiner_tests PRIVATE smg_platform)
   target_compile_options(combiner_tests PRIVATE -Wall -Wextra -Werror)

@@ -38,10 +38,13 @@ def adapt(relative, target, replacements):
 
 
 def extract(relative, target, prologue, first_lines, epilogue=""):
-    """Copy whole function definitions, found by their first line, out of a file too entangled to compile."""
+    """Copy whole function definitions, found by their first line, out of a file too entangled to compile.
+
+    A (namespace, first line) pair copies a definition that sits inside that namespace's block."""
     text = (root / relative).read_text()
     bodies = []
     for first in first_lines:
+        space, first = first if isinstance(first, tuple) else (None, first)
         if text.count(first) != 1:
             raise SystemExit(f"Upstream changed; review {relative}: {first!r}")
         start = text.rfind("\n", 0, text.index(first)) + 1
@@ -51,7 +54,7 @@ def extract(relative, target, prologue, first_lines, epilogue=""):
             end += 1
             if depth == 0:
                 break
-        bodies.append(text[start:end])
+        bodies.append(f"namespace {space} {{\n{text[start:end]}\n}}  // namespace {space}" if space else text[start:end])
     text = (f"// Generated from Petari's {relative}: only these functions; see tools/prepare-petari.py.\n"
             + prologue + "\n" + "\n\n".join(bodies) + "\n" + epilogue)
     destination = output / target
@@ -300,6 +303,27 @@ extract("src/Game/Util/SystemUtil.cpp", "Game/Util/SystemUtilSceneNameObj.cpp",
         "NameObjHolder* getSceneNameObjHolder();\n\nnamespace MR {",
         ["void callMethodAllSceneNameObj(NameObjMethod pMethod) {", "void suspendAllSceneNameObj() {",
          "void resumeAllSceneNameObj() {", "void syncWithFlagsAllSceneNameObj() {"], "};  // namespace MR\n")
+
+# Hosts are compared as u32, which holds a pointer on the Wii and the 3DS; 64-bit host tests compare the low half.
+adapt("src/Game/Gravity/PlanetGravityManager.cpp", "Game/Gravity/PlanetGravityManager.cpp", [
+    ('#include "Game/Gravity.hpp"', '#include "Game/Gravity/GravityInfo.hpp"\n#include "Game/Gravity/PlanetGravityManager.hpp"\n#include <cstdint>', 1),
+    ("(host != (u32)(*pGravities)->mHost)", "(host != (u32)(uintptr_t)(*pGravities)->mHost)", 1),
+])
+
+adapt("src/Game/Gravity/GravityInfo.cpp", "Game/Gravity/GravityInfo.cpp", [
+    ('#include "Game/Gravity.hpp"', '#include "Game/Gravity/GravityInfo.hpp"', 1),
+])
+
+adapt("include/Game/Gravity/GravityInfo.hpp", "include/Game/Gravity/GravityInfo.hpp", [
+    ("#include <revolution.h>", "#include <revolution/types.h>", 1),
+])
+
+# SceneObjHolder's own methods; the objects it makes, and where it lives, are the native scene's (source/compat/Scene.cpp).
+extract("src/Game/Scene/SceneObjHolder.cpp", "Game/Scene/SceneObjHolderMethods.cpp",
+        '#include "Game/Scene/SceneObjHolder.hpp"\n#include "Game/NameObj/NameObj.hpp"\n',
+        ["SceneObjHolder::SceneObjHolder() {", "NameObj* SceneObjHolder::create(int id) {",
+         "NameObj* SceneObjHolder::getObj(int id) const {", "bool SceneObjHolder::isExist(int id) const {",
+         ("MR", "NameObj* createSceneObj(int id) {")])
 
 adapt("include/Game/System/WPadButton.hpp", "include/Game/System/WPadButton.hpp", [
     ("#include <revolution.h>", "#include <revolution/kpad.h>", 1),

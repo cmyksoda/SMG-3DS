@@ -54,6 +54,9 @@ completion does not make those interfaces portable to ARM11/PICA200.
   lowering it holds) and ObjUtil's and SystemUtil's NameObj helpers copied out of their files
   verbatim by `tools/prepare-petari.py`. Their scene is the native scene described below. Plain
   `char` is unsigned on every build, as on the Wii and the 3DS, so Shift-JIS names hash the same.
+- The original `PlanetGravityManager` and `GravityInfo` combine every registered gravity by
+  priority, type, host and switch state. Hosts are compared as `u32`, which holds a pointer on
+  the Wii and the 3DS; 64-bit host tests compare its low half.
 - `NameObjCategoryList`, the lists the scheduler runs movement, calcAnim and draw through,
   compiles with one adaptation: the game calls every list's delegator through the non-const
   type, const draw lists included, which is undefined behavior UBSan reports; the two delegator
@@ -146,11 +149,16 @@ Three ways forward:
 - the movement-sync request. `MR::notifyRequestNameObjMovementOnOff` asks for it, and
   `NativeScene::movement()` answers it the way the first half of
   `SceneNameObjMovementController::movement()` does. The stop-scene states in its second half
-  (demos, pause categories) are not brought up.
+  (demos, pause categories) are not brought up;
+- the scene's `SceneObjHolder`, answering `MR::getSceneObjHolder` and `MR::isExistSceneObj`.
+  The class and its own methods (`create`, `getObj`, `isExist`, `MR::createSceneObj`) are the
+  original's, copied out verbatim; `newEachObj` makes only `PlanetGravityManager` (as the game
+  names it, "重力"), which the scene creates first, as `GameScene::init` does. Any other scene
+  object stops the program with a message naming its id.
 
 Everything else about the scene still belongs to `GameSystem`. Asking for the scene before one
-exists stops the program with a message. Once `GameSystem` and `SceneObjHolder` run, delete the
-native scene and the `getSceneNameObjHolder` it answers.
+exists stops the program with a message. Once `GameSystem` and the original `SceneObjHolder.cpp`
+run, delete the native scene, its `newEachObj`, and the holder lookups it answers.
 
 ## Pointer details to preserve
 
@@ -203,6 +211,6 @@ across 12 zones; the preview draws 56 rigid models in 172 placements.
 
 The portable math tests check tolerances and conventions, not bit-identical Gekko rounding.
 The native validation app passes 1,069 math, 37 WPad, 179 BCSV, 1,043 J3D model/texture,
-4,404 TEV combiner, 23 original gravity, 27 NameObj, 7 ETC1 and 8 GPU texture checks on emulated ARM
+4,404 TEV combiner, 23 original gravity, 27 NameObj, 22 scene and gravity manager, 7 ETC1 and 8 GPU texture checks on emulated ARM
 in Azahar; the GPU checks compare the hardware's ETC1 decoding against ours. Of the disc's
 7,780 materials, 7,526 translate to the combiner exactly. No physical console has been tested.

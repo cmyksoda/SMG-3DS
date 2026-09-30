@@ -1,6 +1,7 @@
 #pragma once
 
 class NameObjHolder;
+class SceneObjHolder;
 
 namespace smg {
 // The scene state GameSystemSceneController owns in the game, held natively until GameSystem runs.
@@ -14,6 +15,7 @@ public:
 
     static NativeScene& current();
     NameObjHolder& nameObjHolder() { return *mNameObjHolder; }
+    SceneObjHolder& sceneObjHolder() { return *mSceneObjHolder; }
 
     // The first half of SceneNameObjMovementController::movement(): apply requested suspends and resumes.
     void movement();
@@ -21,6 +23,7 @@ public:
 
 private:
     NameObjHolder* mNameObjHolder;
+    SceneObjHolder* mSceneObjHolder;
     bool mSyncRequested = false;
 };
 } // namespace smg

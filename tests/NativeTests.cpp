@@ -10,6 +10,7 @@ int runGravityTests();
 int runEtc1Tests();
 int runGpuTests();
 int runNameObjTests();
+int runSceneTests();
 
 int main() {
     gfxInitDefault();
@@ -22,9 +23,10 @@ int main() {
     runCombinerTests();
     runGravityTests();
     runNameObjTests();
+    runSceneTests();
     runEtc1Tests();
     runGpuTests();
-    std::puts("\nPASS: math, WPad, BCSV, J3D, TEV, gravity, NameObj, ETC1\n\nSTART: exit");
+    std::puts("\nPASS: math, WPad, BCSV, J3D, TEV, gravity, NameObj, scene, ETC1\n\nSTART: exit");
     while (aptMainLoop()) {
         hidScanInput();
         if (hidKeysDown() & KEY_START) break;
