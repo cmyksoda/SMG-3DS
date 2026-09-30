@@ -1,4 +1,7 @@
 #include <smg/Model.hpp>
+#include <JSystem/J3DGraphBase/J3DTransform.hpp>
+#include <JSystem/JMath/JMath.hpp>
+#include <revolution/mtx.h>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -47,18 +50,53 @@ Mtx34 multiply(const Mtx34& a, const Mtx34& b) {
 }
 
 // J3D joints are T * Rz * Ry * Rx * S, with angles in 1/32768ths of a half turn.
-Mtx34 jointMatrix(const float scale[3], const std::int16_t rotation[3], const float translation[3]) {
-    constexpr float toRadians = 3.14159265358979f / 32768.0f;
-    const float sx = std::sin(rotation[0] * toRadians), cx = std::cos(rotation[0] * toRadians);
-    const float sy = std::sin(rotation[1] * toRadians), cy = std::cos(rotation[1] * toRadians);
-    const float sz = std::sin(rotation[2] * toRadians), cz = std::cos(rotation[2] * toRadians);
-    const Mtx34 r{
-        cz * cy, cz * sy * sx - sz * cx, cz * sy * cx + sz * sx, translation[0],
-        sz * cy, sz * sy * sx + cz * cx, sz * sy * cx - cz * sx, translation[1],
-        -sy, cy * sx, cy * cx, translation[2]};
-    Mtx34 m = r;
-    for (int row = 0; row < 3; ++row) for (int col = 0; col < 3; ++col) m[row * 4 + col] *= scale[col];
-    return m;
+// J3D's joint state as J3DSys carries it down the tree: the running matrix, the accumulated scale and the
+// parent's own scale (for Maya's compensation). Each child starts from what its parent left.
+struct JointState {
+    Mtx34 current = Identity;
+    float accumulated[3]{1, 1, 1}, parent[3]{1, 1, 1};
+};
+
+// J3DMtxCalcCalcTransform{Basic,Softimage,Maya}::calcTransform, on J3D's own rotation (its sine table) and
+// scale helpers: the joint's matrix, and the state its children start from. The mode is INF1's.
+Mtx34 calcTransform(unsigned mode, bool compensate, const float scale[3], const std::int16_t rotation[3],
+                    const float translation[3], JointState& state) {
+    const auto one = [](const float v[3]) { return v[0] == 1.0f && v[1] == 1.0f && v[2] == 1.0f; };
+    Mtx current, anm;
+    std::memcpy(current, state.current.data(), sizeof(current));
+    float* acc = state.accumulated;
+    if (mode == 1) {
+        J3DGetTranslateRotateMtx(rotation[0], rotation[1], rotation[2], translation[0] * acc[0], translation[1] * acc[1],
+                                 translation[2] * acc[2], anm);
+        PSMTXConcat(current, anm, current);
+        for (int k = 0; k < 3; ++k) acc[k] *= scale[k];
+        if (!one(acc)) {
+            JMAMTXApplyScale(current, anm, acc[0], acc[1], acc[2]);
+            for (int row = 0; row < 3; ++row) anm[row][3] = current[row][3];
+        } else {
+            PSMTXCopy(current, anm);
+        }
+    } else {
+        J3DTransformInfo info;
+        info.mScale = {scale[0], scale[1], scale[2]};
+        info.mRotation = {rotation[0], rotation[1], rotation[2]};
+        info.mTranslate = {translation[0], translation[1], translation[2]};
+        if (mode != 2) for (int k = 0; k < 3; ++k) acc[k] *= scale[k];
+        J3DGetTranslateRotateMtx(info, anm);
+        // Basic scales when the accumulated scale is not one; Maya when the joint's own is not.
+        if (!one(mode == 2 ? scale : acc)) JMAMTXApplyScale(anm, anm, scale[0], scale[1], scale[2]);
+        if (mode == 2 && compensate) {
+            for (int row = 0; row < 3; ++row)
+                for (int column = 0; column < 3; ++column) anm[row][column] *= 1.0f / state.parent[row];
+        }
+        PSMTXConcat(current, anm, current);
+        PSMTXCopy(current, anm);
+        if (mode == 2) std::copy(scale, scale + 3, state.parent);
+    }
+    std::memcpy(state.current.data(), current, sizeof(current));
+    Mtx34 result;
+    std::memcpy(result.data(), anm, sizeof(anm));
+    return result;
 }
 
 void transform(const Mtx34& m, ModelVertex& v) {
@@ -362,7 +400,9 @@ bool readJoints(const Sections& s, Model& model, std::string& error) {
     for (unsigned i = 0; i < count; ++i) if (i < jointNames.size()) model.joints[i].name = jointNames[i];
     if (!readHierarchy(s.inf, count, model, error)) return false;
     // Parents always precede children in INF1, so one pass in placement order resolves them.
+    model.jointMode = s.inf.u16(8) & 0xf;
     std::vector<Mtx34> world(count, Identity);
+    std::vector<JointState> states(count);
     std::vector<bool> done(count, false);
     for (unsigned pass = 0; pass < count; ++pass) {
         bool progressed = false;
@@ -382,8 +422,9 @@ bool readJoints(const Sections& s, Model& model, std::string& error) {
             std::copy(scale, scale + 3, joint.scale);
             std::copy(translation, translation + 3, joint.translation);
             std::copy(rotation, rotation + 3, joint.rotation);
-            const auto local = jointMatrix(scale, rotation, translation);
-            world[i] = parent >= 0 ? multiply(world[parent], local) : local;
+            joint.compensate = jnt.u8(at + 2) == 1;
+            states[i] = parent >= 0 ? states[parent] : JointState{};
+            world[i] = calcTransform(model.jointMode, joint.compensate, scale, rotation, translation, states[i]);
             std::copy(world[i].begin(), world[i].end(), model.joints[i].world);
             done[i] = progressed = true;
         }
@@ -676,6 +717,7 @@ bool loadModel(Bytes source, Model& output, std::size_t decodedBudget, std::stri
 void poseSkeleton(const Model& model, const std::vector<JointTransform>& local, std::vector<std::array<float, 12>>& world) {
     const std::size_t count = model.joints.size();
     world.assign(count, Identity);
+    std::vector<JointState> states(count);
     std::vector<bool> done(count, false);
     for (std::size_t pass = 0; pass < count; ++pass) {
         bool progressed = false;
@@ -683,8 +725,8 @@ void poseSkeleton(const Model& model, const std::vector<JointTransform>& local, 
             const int parent = model.joints[i].parent;
             if (done[i] || (parent >= 0 && !done[parent])) continue;
             const JointTransform& t = i < local.size() ? local[i] : JointTransform{};
-            const auto matrix = jointMatrix(t.scale, t.rotation, t.translation);
-            world[i] = parent >= 0 ? multiply(world[parent], matrix) : matrix;
+            states[i] = parent >= 0 ? states[parent] : JointState{};
+            world[i] = calcTransform(model.jointMode, model.joints[i].compensate, t.scale, t.rotation, t.translation, states[i]);
             done[i] = progressed = true;
         }
         if (!progressed) break;

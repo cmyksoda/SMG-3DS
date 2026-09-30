@@ -74,6 +74,7 @@ struct ModelJoint {
     float world[12]{}; // bind pose, row-major 3x4
     float scale[3]{1, 1, 1}, translation[3]{};
     std::int16_t rotation[3]{}; // the bind pose's own transform, in 1/32768ths of a half turn
+    bool compensate = false;    // Maya's scale compensation: the parent's own scale does not reach it
 };
 
 // What skinning needs, kept when loadModel is asked for it: each vertex before its draw matrix, which draw
@@ -98,6 +99,7 @@ struct Model {
     std::vector<ModelJoint> joints;
     std::array<float, 3> minimum{}, maximum{};
     bool skinned = false; // uses weighted envelopes, so it needs animation to look right
+    unsigned jointMode = 0; // INF1's: how J3D composes joints (0 basic, 1 Softimage, 2 Maya)
     ModelSkin skin;       // empty unless loadModel was asked to keep it
 };
 
@@ -109,7 +111,7 @@ struct JointTransform {
     std::int16_t rotation[3]{};
     float translation[3]{};
 };
-// Each joint's world matrix for a pose, composed down the hierarchy as the loader composes the bind pose.
+// Each joint's world matrix for a pose, composed down the hierarchy as J3D's joint calc does in the model's mode.
 void poseSkeleton(const Model& model, const std::vector<JointTransform>& local, std::vector<std::array<float, 12>>& world);
 // Each draw matrix for those joints: its joint's world, or its envelope's weighted skin. Needs the kept skin.
 void skinMatrices(const Model& model, const std::vector<std::array<float, 12>>& world, std::vector<std::array<float, 12>>& draws);
