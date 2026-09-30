@@ -1,6 +1,7 @@
 // Big-endian game data turned to native order in place, format by format, where original code first reads it.
 // See compat/smg/NativeResources.hpp.
 #include <JSystem/JKernel/JKRArchive.hpp>
+#include <smg/AudioData.hpp>
 #include <smg/Bmg.hpp>
 #include <smg/FreeStore.hpp>
 #include <smg/Layout.hpp>
@@ -74,6 +75,64 @@ void smgNativeBmg(void* bmg, u32 size) {
     const smg::PortMemory memory;
     if (const char* why = smg::nativeBmg(static_cast<std::uint8_t*>(bmg), size)) {
         std::fprintf(stderr, "A BMG message file %s\n", why);
+        std::abort();
+    }
+}
+
+void smgNativeMeTable(void* table, u32 size) {
+    const smg::PortMemory memory;
+    if (const char* why = smg::nativeMeTable(static_cast<std::uint8_t*>(table), size)) {
+        std::fprintf(stderr, "The music-event table (.bmt) %s\n", why);
+        std::abort();
+    }
+}
+
+void smgNativeMeSequences(void* sequences, u32 size) {
+    const smg::PortMemory memory;
+    if (const char* why = smg::nativeMeSequences(static_cast<std::uint8_t*>(sequences), size)) {
+        std::fprintf(stderr, "The music-event sequences (.bme) %s\n", why);
+        std::abort();
+    }
+}
+
+void smgNativeChordTable(void* table, u32 size) {
+    const smg::PortMemory memory;
+    if (const char* why = smg::nativeChordTable(static_cast<std::uint8_t*>(table), size)) {
+        std::fprintf(stderr, "A chord table (.cit) %s\n", why);
+        std::abort();
+    }
+}
+
+void smgNativeRemixSequence(void* sequence, u32 size) {
+    const smg::PortMemory memory;
+    if (const char* why = smg::nativeRemixSequence(static_cast<std::uint8_t*>(sequence), size)) {
+        std::fprintf(stderr, "The remix sequence (.brs) %s\n", why);
+        std::abort();
+    }
+}
+
+void smgNativeSpeakerTable(void* table, u32 size) {
+    const smg::PortMemory memory;
+    if (const char* why = smg::nativeSpeakerTable(static_cast<std::uint8_t*>(table), size)) {
+        std::fprintf(stderr, "The Wii Remote speaker's table (.bct) %s\n", why);
+        std::abort();
+    }
+}
+
+void smgNativeSpeakerWaves(void* waves, u32 size) {
+    const smg::PortMemory memory;
+    if (const char* why = smg::nativeSpeakerWaves(static_cast<std::uint8_t*>(waves), size)) {
+        std::fprintf(stderr, "The Wii Remote speaker's waves (.csw) %s\n", why);
+        std::abort();
+    }
+}
+
+void smgNativeAudioArchive(void* archive, s32 size) {
+    const smg::PortMemory memory;
+    const char* why = size <= 0 ? "is in no heap the port can bound it by"
+                                : smg::nativeAudioArchive(static_cast<std::uint8_t*>(archive), static_cast<std::size_t>(size));
+    if (why) {
+        std::fprintf(stderr, "The audio archive (SMR.szs) %s\n", why);
         std::abort();
     }
 }

@@ -23,6 +23,7 @@ int runLayoutTests();
 int runWideTests();
 int runGxDrawTests();
 int runWiiDspTests();
+int runAudioDataTests();
 
 int main() {
     gfxInitDefault();
@@ -44,13 +45,14 @@ int main() {
     runGxCommandTests();
     runGxDrawTests();
     runWiiDspTests();
+    runAudioDataTests();
     runBmgTests();
     runColorTests();
     runLayoutTests();
     runWideTests();
     runEtc1Tests();
     runGpuTests();
-    std::puts("\nPASS: math, WPad, BCSV, J3D, TEV, gravity, NameObj, scene, collision, animation, actors, J3D transforms, GX commands and draws, Wii DSP, BMG text, colours, layouts, wide text, ETC1\n\nSTART: exit");
+    std::puts("\nPASS: math, WPad, BCSV, J3D, TEV, gravity, NameObj, scene, collision, animation, actors, J3D transforms, GX commands and draws, Wii DSP, audio data, BMG text, colours, layouts, wide text, ETC1\n\nSTART: exit");
     while (aptMainLoop()) {
         hidScanInput();
         if (hidKeysDown() & KEY_START) break;

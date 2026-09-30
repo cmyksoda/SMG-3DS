@@ -760,6 +760,24 @@ adapt("libs/RVL_SDK/include/revolution/mem/heapCommon.h", "include/revolution/me
 ])
 adapt("libs/JSystem/include/JSystem/JAudio2/JASSeqReader.hpp", "include/JSystem/JAudio2/JASSeqReader.hpp", [
     ("return (u32)mSeqCursor - (u32)mSeqBuff;", "return static_cast< u32 >(mSeqCursor - mSeqBuff);", 1),
+    # Sequence arguments and tables are big-endian in the bytecode, which the Wii's plain loads read as such.
+    ("    u32 get24(u32 param_0) const {\n        return (*(u32*)(mSeqBuff + param_0 - 1)) & 0xffffff;\n    }",
+     "    u32 get24(u32 param_0) const {\n        const u8* at = mSeqBuff + param_0;\n        return u32(at[0]) << 16 | u32(at[1]) << 8 | at[2];\n    }", 1),
+    ("    u16 get16(u32 param_0) const {\n        return *(u16*)(mSeqBuff + param_0);\n    }",
+     "    u16 get16(u32 param_0) const {\n        const u8* at = mSeqBuff + param_0;\n        return u16(at[0] << 8 | at[1]);\n    }", 1),
+    ("    u32 get32(u32 param_0) const {\n        return *(u32*)(mSeqBuff + param_0);\n    }",
+     "    u32 get32(u32 param_0) const {\n        const u8* at = mSeqBuff + param_0;\n        return u32(at[0]) << 24 | u32(at[1]) << 16 | u32(at[2]) << 8 | at[3];\n    }", 1),
+    ("#else\n        u16* value = (u16*)mSeqCursor;\n        mSeqCursor += 2;\n        return *value;\n#endif",
+     "#else\n        const u32 value = u32(mSeqCursor[0]) << 8 | mSeqCursor[1];\n        mSeqCursor += 2;\n        return value;\n#endif", 1),
+    ("        mSeqCursor--;\n#ifdef __MWERKS__\n        return (*((u32*)mSeqCursor)++) & 0x00ffffff;\n#else\n        u32* value = (u32*)mSeqCursor;\n"
+     "        mSeqCursor += 4;\n        return *value & 0x00ffffff;\n#endif",
+     "#ifdef __MWERKS__\n        mSeqCursor--;\n        return (*((u32*)mSeqCursor)++) & 0x00ffffff;\n#else\n"
+     "        const u32 value = u32(mSeqCursor[0]) << 16 | u32(mSeqCursor[1]) << 8 | mSeqCursor[2];\n        mSeqCursor += 3;\n"
+     "        return value;\n#endif", 1),
+])
+# The audio archive's commands and arguments are big-endian words.
+adapt("libs/JSystem/include/JSystem/JAudio2/JAUAudioArcInterpreter.hpp", "include/JSystem/JAudio2/JAUAudioArcInterpreter.hpp", [
+    ("        u32 temp = *(u32*)mReadPtr;\n", "        const u32 temp = u32(mReadPtr[0]) << 24 | u32(mReadPtr[1]) << 16 | u32(mReadPtr[2]) << 8 | mReadPtr[3];\n", 1),
 ])
 
 # GX display list writing, whose inline writers every J3D-facing header reaches.
@@ -1548,7 +1566,11 @@ adapt("src/JSystem/JAudio2/dsptask.cpp", "JSystem/JAudio2/dsptask.cpp", [
 ])
 # Metrowerks' size_t is u32's unsigned long; the toolchains' own size_t is what operator new takes. The Wii's
 # boot info sits at the start of MEM1; the port's is in source/compat/OsMemory.cpp.
+# JSystem's getSize for any block, which the decomp declares but never defines, as JKRHeap::free finds its heap.
 adapt("src/JSystem/JKernel/JKRHeap.cpp", "JSystem/JKernel/JKRHeap.cpp", [
+    ("JKRHeap* JKRHeap::findFromRoot(void* pData) {",
+     "s32 JKRHeap::getSize(void* pData, JKRHeap* pHeap) {\n    if (!pHeap) {\n        pHeap = findFromRoot(pData);\n    }\n"
+     "    return pHeap ? pHeap->do_getSize(pData) : -1;\n}\n\nJKRHeap* JKRHeap::findFromRoot(void* pData) {", 1),
     ("void* operator new(u32 size", "void* operator new(size_t size", 3), ("void* operator new[](u32 size", "void* operator new[](size_t size", 3),
     ("    OSBootInfo* code = (OSBootInfo*)OSPhysicalToCached(0);", "    OSBootInfo* code = smgBootInfo();", 1),
     ("bool JKRHeap::initArena(char** memory, u32* size, int maxHeaps) {",
@@ -1640,6 +1662,23 @@ adapt("src/JSystem/JAudio2/JASAudioThread.cpp", "JSystem/JAudio2/JASAudioThread.
     ("    JASDriver::startDMA();\n", "    JASDriver::startDMA();\n    sStarted = true;\n", 1),
     ("void JASAudioThread::create(s32 threadPriority) {", "static volatile bool sStarted = false;\n\nvoid JASAudioThread::create(s32 threadPriority) {", 1),
 ])
+# The music-event table and sequence index turn native as the game takes them (compat/smg/NativeResources.hpp).
+adapt("src/Game/AudioLib/AudSystem.cpp", "Game/AudioLib/AudSystem.cpp", [
+    ('#include "Game/AudioLib/AudSystem.hpp"\n', '#include "Game/AudioLib/AudSystem.hpp"\n#include <smg/NativeResources.hpp>\n', 1),
+    ("    void* meSeq = pArchive->getResource(a2);\n",
+     "    void* meSeq = pArchive->getResource(a2);\n    smgNativeMeTable(meTable, pArchive->getResSize(meTable));\n"
+     "    smgNativeMeSequences(meSeq, pArchive->getResSize(meSeq));\n", 1),
+    ("        mRemixMgr->setRemixSeqResource(pRemixArchive->getResource(static_cast< u16 >(0)));",
+     "        void* remix = pRemixArchive->getResource(static_cast< u16 >(0));\n"
+     "        smgNativeRemixSequence(remix, pRemixArchive->getResSize(remix));\n        mRemixMgr->setRemixSeqResource(remix);", 1),
+])
+# A chord table turns native as it is first taken, while its relocated flag (0 in either byte order) is still clear.
+adapt("src/Game/RhythmLib/AudChordInfo.cpp", "Game/RhythmLib/AudChordInfo.cpp", [
+    ("#include <JSystem/JKernel/JKRArchive.hpp>\n", "#include <JSystem/JKernel/JKRArchive.hpp>\n#include <smg/NativeResources.hpp>\n", 1),
+    ("    bool loaded = setChordTableResource(pArchive->getResource((u16)id));",
+     "    void* resource = pArchive->getResource((u16)id);\n    if (resource != nullptr && *(s32*)resource == 0) {\n"
+     "        smgNativeChordTable(resource, pArchive->getResSize(resource));\n    }\n    bool loaded = setChordTableResource(resource);", 1),
+])
 # A failed allocation panics with an empty message on the Wii; the port's names the heap, size and alignment.
 adapt("src/Game/System/HeapMemoryWatcher.cpp", "Game/System/HeapMemoryWatcher.cpp", [
     ("void HeapMemoryWatcher::memoryErrorCallback(void*, u32, int) {\n    OSPanic(__FILE__, 537, \"\");",
@@ -1647,6 +1686,43 @@ adapt("src/Game/System/HeapMemoryWatcher.cpp", "Game/System/HeapMemoryWatcher.cp
      "    JKRHeap* heap = static_cast< JKRHeap* >(pHeap);\n"
      "    OSPanic(__FILE__, 537, \"heap %p (%lu of %lu bytes free, %lu in one block) could not give %lu bytes aligned %d\", pHeap,\n"
      "            (unsigned long)heap->getTotalFreeSize(), (unsigned long)heap->mSize, (unsigned long)heap->getFreeSize(), (unsigned long)size, align);", 1),
+])
+# The Wii Remote speaker's table and waves turn native as they load, once each (SpkSystem::setResource).
+adapt("src/Game/Speaker/SpkData.cpp", "Game/Speaker/SpkData.cpp", [
+    ('#include "Game/Speaker/SpkData.hpp"\n', '#include "Game/Speaker/SpkData.hpp"\n#include <smg/NativeResources.hpp>\n', 1),
+    ("    void* resource = mArchive->getResource(table);\n",
+     "    void* resource = mArchive->getResource(table);\n    smgNativeSpeakerTable(resource, mArchive->getResSize(resource));\n", 1),
+    ("    void* resource = mArchive->getResource(wave);\n",
+     "    void* resource = mArchive->getResource(wave);\n    smgNativeSpeakerWaves(resource, mArchive->getResSize(resource));\n", 1),
+])
+# A sound's type is its item word's top byte, which the Wii's byte order put first in memory.
+adapt("libs/JSystem/include/JSystem/JAudio2/JAUSoundTable.hpp", "include/JSystem/JAudio2/JAUSoundTable.hpp", [
+    ("        return ((u8*)mItemOffsets)[index * 4];", "        return mItemOffsets[index] >> 24;", 1),
+])
+# The audio archive's parts turn native as it loads, before its interpreter reads them (smg::nativeAudioArchive);
+# it arrives without its size, so the heap block holding it bounds it.
+adapt("src/JSystem/JAudio2/JAUAudioArcLoader.cpp", "JSystem/JAudio2/JAUAudioArcLoader.cpp", [
+    ('#include "JSystem/JKernel/JKRDvdRipper.hpp"\n', '#include "JSystem/JKernel/JKRDvdRipper.hpp"\n#include <smg/NativeResources.hpp>\n', 1),
+    ("bool JAUAudioArcLoader::load(void const* pData) {\n    return parse(pData);",
+     "bool JAUAudioArcLoader::load(void const* pData) {\n    smgNativeAudioArchive(const_cast< void* >(pData), JKRHeap::getSize(const_cast< void* >(pData), nullptr));\n"
+     "    return parse(pData);", 1),
+])
+# The collection's group tables sit at odd offsets, which ARM's word loads can't take; they stay big-endian and are
+# read by bytes (smg::nativeAudioArchive turns only the collection's header).
+adapt("src/JSystem/JAudio2/JAUSeqCollection.cpp", "JSystem/JAudio2/JAUSeqCollection.cpp", [
+    ("    u32 offset = mSoundTableOffsets[groupId];\n    JAUSeqCollectionSoundTable* pSoundTable = (JAUSeqCollectionSoundTable*)((u8*)mCollectionData + offset);\n\n"
+     "    if (waveId >= pSoundTable->mWaveNum) {\n        return false;\n    }\n\n"
+     "    pSeqData->set((void*)mCollectionData, pSoundTable->mWaveSeqOffsets[waveId]);",
+     "    u32 offset = mSoundTableOffsets[groupId];\n    const u8* pSoundTable = (const u8*)mCollectionData + offset;\n"
+     "    auto be32 = [](const u8* p) { return u32(p[0]) << 24 | u32(p[1]) << 16 | u32(p[2]) << 8 | p[3]; };\n\n"
+     "    if (waveId >= be32(pSoundTable)) {\n        return false;\n    }\n\n"
+     "    pSeqData->set((void*)mCollectionData, be32(pSoundTable + 4 + 4 * waveId));", 1),
+])
+# A FIR filter's eight taps sit in the sequence, big-endian like the rest of it.
+adapt("src/JSystem/JAudio2/JASSeqParser.cpp", "JSystem/JAudio2/JASSeqParser.cpp", [
+    ("    track->setFIR((s16*)track->getSeqCtrl()->getAddr(args[0]));",
+     "    const u8* taps = (const u8*)track->getSeqCtrl()->getAddr(args[0]);\n    s16 fir[8];\n    for (u32 i = 0; i < 8; i++) {\n"
+     "        fir[i] = s16(taps[2 * i] << 8 | taps[2 * i + 1]);\n    }\n    track->setFIR(fir);", 1),
 ])
 # MSL's own wide-string functions, built as C over newlib's headers (compat/smg/MslWide.h stands in for MSL's).
 adapt("src/MSL_C/wstring.c", "MSL_C/wstring.c", [('#include "size_t.h"\n#include "wchar_t.h"\n', "#include <smg/MslWide.h>\n", 1)])

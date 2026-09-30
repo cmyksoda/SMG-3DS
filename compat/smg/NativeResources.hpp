@@ -16,3 +16,14 @@ void smgNativeBmg(void* bmg, u32 size);
 void smgNativeLayoutFile(const char* name, void* data, u32 size);
 // A font (BRFNT) turned in place as ResFont takes it, sized by its own header.
 void smgNativeFont(void* brfnt);
+// The music-event table (.bmt) and sequence index (.bme), turned in place (smg::nativeMeTable, nativeMeSequences).
+void smgNativeMeTable(void* table, u32 size);
+void smgNativeMeSequences(void* sequences, u32 size);
+// A chord table (.cit) before its first relocation, and the remix sequence (.brs), turned in place.
+void smgNativeChordTable(void* table, u32 size);
+void smgNativeRemixSequence(void* sequence, u32 size);
+// The Wii Remote speaker's table (.bct) and waves (.csw), turned in place.
+void smgNativeSpeakerTable(void* table, u32 size);
+void smgNativeSpeakerWaves(void* waves, u32 size);
+// JAudio2's audio archive (SMR.szs), its parts turned in place; `size` is the heap block holding it (negative if none).
+void smgNativeAudioArchive(void* archive, s32 size);

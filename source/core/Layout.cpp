@@ -1,13 +1,8 @@
 // nw4r's layout family turned native for nw4r's own readers. Every field is planned once, by the struct its reader
 // takes it through, before a byte moves: a file the plan cannot cover is left untouched with the reason.
 #include <smg/Layout.hpp>
-#include <cstdarg>
-#include <cstdio>
+#include <smg/SwapPlan.hpp>
 #include <cstring>
-#include <utility>
-#include <vector>
-
-static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__, "the port turns big-endian data into little-endian");
 
 namespace smg {
 namespace {
@@ -21,91 +16,7 @@ std::uint32_t native32(const std::uint8_t* at) {
     return value;
 }
 
-char sProblem[160];
-
-// What becomes of each byte: kept, or part of a half or word that turns.
-enum Tag : std::uint8_t { Unread, Keep, Half0, Half1, Word0, Word1, Word2, Word3 };
-
-class Plan {
-public:
-    Plan(std::uint8_t* data, std::size_t size) : data_(data), size_(size), tags_(size, Unread) {}
-
-    bool ok() const { return failed_ == nullptr; }
-    const char* failed() const { return failed_; }
-    bool fail(const char* format, ...) {
-        if (!failed_) {
-            std::va_list args;
-            va_start(args, format);
-            std::vsnprintf(sProblem, sizeof sProblem, format, args);
-            va_end(args);
-            failed_ = sProblem;
-        }
-        return false;
-    }
-
-    // Whether [at, at + count) lies before `end` (and inside the file).
-    bool fits(std::size_t at, std::size_t count, std::size_t end) const { return end <= size_ && at <= end && count <= end - at; }
-    bool need(std::size_t at, std::size_t count, std::size_t end, const char* what) {
-        return ok() && (fits(at, count, end) || fail("has %s that runs past its end", what));
-    }
-    // base + offset, or the file's end when that would pass it (or wrap a 32-bit size_t).
-    std::size_t from(std::size_t base, std::uint32_t offset) const { return base <= size_ && offset <= size_ - base ? base + offset : size_; }
-    std::uint32_t be8(std::size_t at) const { return data_[at]; }
-    std::uint32_t be16(std::size_t at) const { return std::uint32_t(data_[at]) << 8 | data_[at + 1]; }
-    std::uint32_t be32(std::size_t at) const { return be16(at) << 16 | be16(at + 2); }
-    bool is(std::size_t at, const char (&kind)[5]) const { return std::memcmp(data_ + at, kind, 4) == 0; }
-
-    void keep(std::size_t at, std::size_t count) {
-        for (std::size_t i = 0; i < count; ++i) set(at + i, Keep);
-    }
-    // ARM faults on a misaligned float load, so every field turned must sit where its CPU load can take it.
-    void half(std::size_t at) {
-        if (at % 2) fail("has a half at 0x%zx that ARM cannot load there", at);
-        set(at, Half0), set(at + 1, Half1);
-    }
-    void halves(std::size_t at, std::size_t count) {
-        for (std::size_t i = 0; i < count; ++i) half(at + 2 * i);
-    }
-    void word(std::size_t at) {
-        if (at % 4) fail("has a word at 0x%zx that ARM cannot load there", at);
-        set(at, Word0), set(at + 1, Word1), set(at + 2, Word2), set(at + 3, Word3);
-    }
-    void words(std::size_t at, std::size_t count) {
-        for (std::size_t i = 0; i < count; ++i) word(at + 4 * i);
-    }
-    // A NUL-terminated name, read as bytes.
-    bool name(std::size_t at, std::size_t end, const char* what) {
-        if (!need(at, 1, end, what)) return false;
-        const void* nul = std::memchr(data_ + at, 0, end - at);
-        if (!nul) return fail("has %s with no end", what);
-        keep(at, static_cast<const std::uint8_t*>(nul) - (data_ + at) + 1);
-        return true;
-    }
-
-    const char* apply() {
-        if (failed_) return failed_;
-        for (std::size_t i = 0; i < size_; ++i) {
-            if (tags_[i] == Half0) std::swap(data_[i], data_[i + 1]);
-            if (tags_[i] == Word0) {
-                std::swap(data_[i], data_[i + 3]);
-                std::swap(data_[i + 1], data_[i + 2]);
-            }
-        }
-        return nullptr;
-    }
-
-private:
-    void set(std::size_t at, Tag tag) {
-        if (at >= size_) return void(fail("has a field past its end"));
-        if (tags_[at] != Unread && tags_[at] != tag) fail("has bytes at 0x%zx that two readers take different ways", at);
-        tags_[at] = tag;
-    }
-
-    std::uint8_t* data_;
-    std::size_t size_;
-    std::vector<std::uint8_t> tags_;
-    const char* failed_ = nullptr;
-};
+using Plan = SwapPlan;
 
 // nw4r's BinaryFileHeader (lyt::res and ut alike): a signature compared as a word, then the byte order mark.
 struct File {
