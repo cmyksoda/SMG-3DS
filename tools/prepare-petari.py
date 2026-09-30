@@ -37,6 +37,26 @@ def definition(text, relative, first):
             return start, end
 
 
+def msl_binders(text):
+    """MSL's binder2nd names the bound argument's type as a second parameter; the standard one reads it from the
+    function object, and every use in the game binds exactly that type, so the second parameter goes."""
+    start = 0
+    while (start := text.find("std::binder2nd<", start)) != -1:
+        depth, position, comma = 0, start + len("std::binder2nd"), None
+        while True:
+            character = text[position]
+            depth += {"<": 1, ">": -1}.get(character, 0)
+            if character == "," and depth == 1:
+                comma = position
+            if depth == 0:
+                break
+            position += 1
+        if comma is not None:
+            text = text[:comma] + " " + text[position:]
+        start += 1
+    return text
+
+
 def adapt(relative, target, replacements, drop=(), reason=""):
     """Copy a file with exact replacements; `drop` leaves out whole definitions, found by first line, for `reason`."""
     text = (root / relative).read_text()
@@ -44,6 +64,7 @@ def adapt(relative, target, replacements, drop=(), reason=""):
         if text.count(before) != expected:
             raise SystemExit(f"Upstream changed; review {relative}: {before!r}")
         text = text.replace(before, after)
+    text = msl_binders(text)
     for first in drop:
         start, end = definition(text, relative, first)
         indent = text[start:text.index(first)]
@@ -664,11 +685,20 @@ adapt("include/Inline.hpp", "include/Inline.hpp", [
     ("#define NO_INLINE __attribute__((noinline))", "#define NO_INLINE", 1),
 ])
 # Metrowerks on Windows opened headers whatever the case of the name in the include.
-alias = output / "include/Game/Enemy/KariKariDirector.hpp"
-alias.parent.mkdir(parents=True, exist_ok=True)
-alias_text = '// Generated Petari adaptation: Metrowerks found KarikariDirector.hpp under this case.\n#include "Game/Enemy/KarikariDirector.hpp"\n'
-if not alias.exists() or alias.read_text() != alias_text:
-    alias.write_text(alias_text)
+for included, present in [
+    ("Game/Enemy/KariKariDirector.hpp", "Game/Enemy/KarikariDirector.hpp"),
+    ("Game/Animation/Xanimecore.hpp", "Game/Animation/XanimeCore.hpp"),
+    ("Game/Map/FileSelectItem.hpp", "Game/Map/FIleSelectItem.hpp"),
+    ("JSystem/JAudio2/JASDSPInterface.hpp", "JSystem/JAudio2/JASDspInterface.hpp"),
+    ("revolution/FS.h", "revolution/fs.h"),
+    ("revolution/MEM.h", "revolution/mem.h"),
+    ("revolution/NAND.h", "revolution/nand.h"),
+]:
+    alias = output / "include" / included
+    alias.parent.mkdir(parents=True, exist_ok=True)
+    alias_text = f'// Generated Petari adaptation: Metrowerks found {present} under this case.\n#include "{present}"\n'
+    if not alias.exists() or alias.read_text() != alias_text:
+        alias.write_text(alias_text)
 # Comparisons of a bool or a pointer-holding u32 with nullptr, which Metrowerks took as with 0.
 adapt("src/Game/Player/Mario.cpp", "Game/Player/Mario.cpp", [
     ("if (MR::normalizeOrZero(&front) == nullptr) {", "if (!MR::normalizeOrZero(&front)) {", 1),
@@ -963,3 +993,22 @@ destination.parent.mkdir(parents=True, exist_ok=True)
 text = "// Adapted from Petari: minimal type include and standard C++ inline/return declarations.\n" + text
 if not destination.exists() or destination.read_text() != text:
     destination.write_text(text)
+
+# Nerves live in anonymous namespaces as often as named ones, where GCC refuses a weak definition; an inline one
+# is still a single instance wherever the name is shared, as Metrowerks' weak one was.
+adapt("include/Game/LiveActor/Nerve.hpp", "include/Game/LiveActor/Nerve.hpp", [
+    ("    name name::sInstance ATTRIBUTE_WEAK;", "    inline name name::sInstance;", 2),
+])
+# ShadowDrawer declares neither: the volume drawer introduces both for its shapes.
+adapt("include/Game/LiveActor/ShadowVolumeDrawer.hpp", "include/Game/LiveActor/ShadowVolumeDrawer.hpp", [
+    ("    virtual void loadModelDrawMtx() const override;\n    virtual void drawShape() const override;",
+     "    virtual void loadModelDrawMtx() const;\n    virtual void drawShape() const;", 1),
+])
+for relative in ["Game/AreaObj/AreaObjContainer.cpp", "Game/Screen/GalaxyMap.cpp", "Game/Demo/DemoExecutor.cpp",
+                 "Game/Effect/MultiEmitter.cpp", "Game/LiveActor/EffectKeeper.cpp", "Game/LiveActor/LiveActorGroupArray.cpp",
+                 "Game/MapObj/ElectricBall.cpp", "Game/MapObj/GeneralMapParts.cpp", "Game/Scene/MultiSceneEffectKeeper.cpp"]:
+    adapt("src/" + relative, relative, [])
+# MSL's headers declared the narrow string functions along with the rest; the standard <cstring> does.
+adapt("src/Game/Util/StringUtil.cpp", "Game/Util/StringUtil.cpp", [
+    ("#include <cstdio>\n#include <wstring.h>", "#include <cstdio>\n#include <cstring>\n#include <wstring.h>", 1),
+])

@@ -51,7 +51,10 @@ add_library(petari_core STATIC
 target_include_directories(petari_core PUBLIC compat)
 # Upstream headers are compiled as they are; their warnings are not ours to fail on.
 target_include_directories(petari_core SYSTEM PUBLIC "${CMAKE_CURRENT_BINARY_DIR}/petari/include" "${PETARI}/include"
-  "${PETARI}/libs/RVL_SDK/include" "${PETARI}/libs/JSystem/include" "${PETARI}/libs/nw4r/include")
+  "${PETARI}/libs/RVL_SDK/include" "${PETARI}/libs/JSystem/include" "${PETARI}/libs/nw4r/include"
+  "${PETARI}/libs/RVLFaceLib/include")
+# MSL's additions to the standard headers, which the game's sources reach through <algorithm>.
+target_compile_options(petari_core PUBLIC "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/compat/smg/Msl.hpp>")
 # Original resource interfaces reinterpret stored numeric fields through several types.
 target_compile_options(petari_core PUBLIC -fno-strict-aliasing)
 # Plain char is unsigned on the Wii and the 3DS; hashes of Shift-JIS names depend on it, so hosts match.
@@ -167,6 +170,11 @@ add_library(petari_scene STATIC
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/MapUtilCore.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/LiveActor/ShadowRequests.cpp")
 target_link_libraries(petari_scene PUBLIC petari_gravity)
+# Metrowerks stored a constant that does not fit, such as -1 in a table of u32, as its bit pattern; so does GCC
+# once the narrowing is not an error.
+foreach(library petari_core petari_gravity petari_j3d petari_anim petari_scene)
+  target_compile_options(${library} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wno-narrowing>)
+endforeach()
 if(NOT NINTENDO_3DS)
   # UBSan's vptr check needs the type info of every class LiveActor calls through; its model and sound classes
   # are not brought up, so theirs does not exist yet. The 3DS build has no RTTI at all.

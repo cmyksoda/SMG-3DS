@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Compiles every source under one Petari directory for the 3DS (generated copies where the port adapts one) and
 # lists what they reference that neither they nor the port's libraries define: a bring-up's work list.
+# symbols.txt keeps every object's symbols for tools/petari-closure.py.
 set -euo pipefail
 project_dir=$(cd -- "$(dirname -- "$0")/.." && pwd)
 build_dir=$(cd -- "${1:?usage: petari-link-needs.sh 3DS_BUILD_DIR Game/Player OUT_DIR}" && pwd)
@@ -11,9 +12,9 @@ builder_image=devkitpro/devkitarm@sha256:116afba8df8453961de2936ffab20dd441edf4d
 script='
 P=/src/upstream/Petari
 FLAGS="-march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft -D__3DS__ -fno-rtti -fno-exceptions -std=c++17 -c -O1 -w
-  -funsigned-char -fno-strict-aliasing -include /src/compat/smg/NewlibCtype.hpp -I/src/compat -I/src/include
+  -funsigned-char -fno-strict-aliasing -include /src/compat/smg/NewlibCtype.hpp -include /src/compat/smg/Msl.hpp -Wno-narrowing -I/src/compat -I/src/include
   -isystem /opt/devkitpro/libctru/include -isystem /build/petari/include -isystem $P/include
-  -isystem $P/libs/RVL_SDK/include -isystem $P/libs/JSystem/include -isystem $P/libs/nw4r/include"
+  -isystem $P/libs/RVL_SDK/include -isystem $P/libs/JSystem/include -isystem $P/libs/nw4r/include -isystem $P/libs/RVLFaceLib/include"
 cd /out && rm -f -- *.o
 compile() {
     relative=${1#$P/src/}; src=$1; object=$(echo "${relative%.cpp}" | tr / _).o
@@ -28,6 +29,7 @@ arm-none-eabi-nm -C --undefined-only -- *.o | sed "s/^ *U //" | grep -v ":$" |
     grep -v "^\(std::\|operator \|__aeabi\|__cxa\|__gxx\|mem\|str\|sqrt\|sin\|cos\|tan\|atan\|acos\|asin\|fmod\|pow\|floor\|ceil\|abort\|printf\|snprintf\|vsnprintf\|sprintf\|fabs\|__sync\|_Unwind\|__stack_chk\)" |
     sort -u > needed.txt
 comm -23 needed.txt defined.txt > missing.txt
+arm-none-eabi-nm -A -- *.o /build/lib*.a 2>/dev/null > symbols.txt
 rm -f -- *.o'
 rm -f "$out_dir/failed.txt"
 docker run --rm --network none --user "$(id -u):$(id -g)" \
