@@ -15,6 +15,7 @@ private:
     void drawTop(const InputFrame& input, const NativePad& pad, SceneRenderer& scene, bool coreReady, const char* assetStatus);
     void drawPlayPage(const InputFrame& input, const Settings& settings, bool motionReady);
     void drawOptionsPage(const InputFrame& input, const Settings& settings);
+    void drawRemapPage(const InputFrame& input, const Settings& settings);
     void background(float width, unsigned phase);
     void label(const char* text, float x, float y, float size, u32 color, bool center = false);
     void button(const Rect& bounds, bool active, bool pressed, float alpha, C2D_SpriteSheet icon,

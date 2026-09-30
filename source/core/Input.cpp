@@ -89,6 +89,27 @@ void Input::beginGesture(const RawInput& raw) {
     const bool stylus = settings_.pointer == PointerMode::Stylus;
     gesture_ = Gesture::Ignored;
     gestureOption_ = -1;
+    if (capturing_ >= 0) {
+        // Any tap finishes choosing; buttons still held stay out of the game until released.
+        capturing_ = -1;
+        suppressed_ = previousHeld_;
+        return;
+    }
+    if (remapOpen_) {
+        if (OptionsButton.contains(x, y)) {
+            remapOpen_ = false;
+            gesture_ = Gesture::OptionsTab;
+            return;
+        }
+        for (unsigned action = 0; action < ActionCount; ++action) {
+            if (!remapRow(action).contains(x, y)) continue;
+            gesture_ = Gesture::RemapRow;
+            gestureOption_ = capturing_ = static_cast<int>(action);
+            captureFresh_ = true;
+            return;
+        }
+        return;
+    }
     if (optionsOpen_) {
         for (const auto& button : OptionButtons) {
             if (!button.bounds.contains(x, y)) continue;
@@ -96,6 +117,8 @@ void Input::beginGesture(const RawInput& raw) {
             gestureOption_ = static_cast<int>(button.option);
             if (button.option == Option::Done) {
                 optionsOpen_ = false;
+            } else if (button.option == Option::Remap) {
+                remapOpen_ = true;
             } else if (const auto next = applyOption(button.option, settings_); next != settings_) {
                 setSettings(next);
                 settingsChanged_ = true;
@@ -130,9 +153,23 @@ const InputFrame& Input::update(const RawInput& raw, float seconds) {
     const bool touchActive = raw.touching && !suppressUntilLift_;
     const bool stylus = settings_.pointer == PointerMode::Stylus;
 
+    std::uint32_t held = raw.held;
+    const std::uint32_t pressed = held & ~previousHeld_;
+    previousHeld_ = held;
+    suppressed_ &= held;
+    if (capturing_ >= 0) {
+        if (pressed) {
+            auto& binding = settings_.bindings[capturing_];
+            binding = captureFresh_ ? pressed : binding | pressed;
+            captureFresh_ = false;
+            settingsChanged_ = true;
+        }
+        held = 0;
+    }
+    held &= ~suppressed_;
     Button actions[ActionCount];
     for (unsigned action = 0; action < ActionCount; ++action)
-        actions[action] = sample(actions_[action], (raw.held & settings_.bindings[action]) != 0);
+        actions[action] = sample(actions_[action], (held & settings_.bindings[action]) != 0);
     frame_ = {};
     frame_.pointerMode = settings_.pointer;
     frame_.jump = actions[Jump];
@@ -140,10 +177,10 @@ const InputFrame& Input::update(const RawInput& raw, float seconds) {
     frame_.crouch = actions[Crouch];
     frame_.pause = actions[Pause];
     frame_.minus = actions[Minus];
-    frame_.dpadUp = sample(up_, (raw.held & Up) != 0);
-    frame_.dpadDown = sample(down_, (raw.held & Down) != 0);
-    frame_.dpadLeft = sample(left_, (raw.held & Left) != 0);
-    frame_.dpadRight = sample(right_, (raw.held & Right) != 0);
+    frame_.dpadUp = sample(up_, (held & Up) != 0);
+    frame_.dpadDown = sample(down_, (held & Down) != 0);
+    frame_.dpadLeft = sample(left_, (held & Left) != 0);
+    frame_.dpadRight = sample(right_, (held & Right) != 0);
     radial(raw.circleX, raw.circleY, 15.0f, 156.0f, frame_.moveX, frame_.moveY);
     float stickX, stickY;
     radial(raw.cstickX, raw.cstickY, 15.0f, 140.0f, stickX, stickY);
@@ -154,6 +191,7 @@ const InputFrame& Input::update(const RawInput& raw, float seconds) {
     frame_.heldOption = touchActive && gesture_ == Gesture::Option ? gestureOption_ : -1;
     frame_.optionsButtonHeld = touchActive &&
         (gesture_ == Gesture::OptionsTab || frame_.heldOption == static_cast<int>(Option::Done));
+    if (gesture_ == Gesture::RemapRow) frame_.heldOption = -1;
     frame_.camera = sample(camera_, actions[CameraReset].held || frame_.cameraButtonHeld);
     frame_.recenter = sample(recenter_, !stylus && (actions[PointerReset].held || frame_.recenterButtonHeld));
     if (frame_.recenter.pressed) recenter();
@@ -186,6 +224,8 @@ const InputFrame& Input::update(const RawInput& raw, float seconds) {
     const bool touchShot = frame_.shootMode && touchActive && gesture_ == Gesture::Aim;
     frame_.shoot = sample(shoot_, frame_.pointer.visible && (actions[Shoot].held || touchShot));
     frame_.optionsOpen = optionsOpen_;
+    frame_.remapOpen = remapOpen_;
+    frame_.capturing = capturing_;
     return frame_;
 }
 

@@ -23,7 +23,7 @@ inline constexpr float TopWidth = 400, TopHeight = 240;
 
 enum class Option : std::uint8_t {
     PointerMotion, PointerCStick, PointerStylus, MotionSlower, MotionFaster,
-    StickSlower, StickFaster, InvertX, InvertY, ResetButtons, Done, Count
+    StickSlower, StickFaster, InvertX, InvertY, ResetButtons, Remap, Done, Count
 };
 struct OptionButton { Option option; Rect bounds; };
 inline constexpr OptionButton OptionButtons[]{
@@ -32,8 +32,10 @@ inline constexpr OptionButton OptionButtons[]{
     {Option::MotionSlower, {88, 74, 40, 30}}, {Option::MotionFaster, {272, 74, 40, 30}},
     {Option::StickSlower, {88, 112, 40, 30}}, {Option::StickFaster, {272, 112, 40, 30}},
     {Option::InvertX, {88, 150, 110, 30}}, {Option::InvertY, {202, 150, 110, 30}},
-    {Option::ResetButtons, {88, 196, 224, 30}}, {Option::Done, OptionsButton},
+    {Option::ResetButtons, {88, 196, 110, 30}}, {Option::Remap, {202, 196, 110, 30}}, {Option::Done, OptionsButton},
 };
+// One row per action on the remap page, below its title.
+constexpr Rect remapRow(unsigned action) { return {8, 34 + static_cast<int>(action) * 24, 304, 22}; }
 Settings applyOption(Option option, Settings settings);
 bool optionActive(Option option, const Settings& settings);
 
@@ -65,6 +67,8 @@ struct InputFrame {
     bool shootButtonHeld = false, cameraButtonHeld = false, recenterButtonHeld = false;
     bool optionsOpen = false, optionsButtonHeld = false;
     int heldOption = -1;
+    bool remapOpen = false;
+    int capturing = -1; // the action whose buttons are being chosen
 };
 inline float touchButtonOpacity(const InputFrame& frame) {
     return frame.pointerMode == PointerMode::Stylus && frame.pointer.visible ? 0.5f : 1.0f;
@@ -81,7 +85,7 @@ public:
     // True once after an options-page change, so the caller can save it.
     bool takeSettingsChanged();
 private:
-    enum class Gesture { None, Aim, Camera, Shoot, Recenter, OptionsTab, Option, Ignored };
+    enum class Gesture { None, Aim, Camera, Shoot, Recenter, OptionsTab, Option, RemapRow, Ignored };
     static Button sample(TriggerChecker& checker, bool held);
     void beginGesture(const RawInput& raw);
     void recenter();
@@ -91,7 +95,9 @@ private:
     Gesture gesture_ = Gesture::None;
     int gestureOption_ = -1;
     bool touching_ = false, suppressUntilLift_ = false, shootMode_ = false;
-    bool optionsOpen_ = false, settingsChanged_ = false;
+    bool optionsOpen_ = false, settingsChanged_ = false, remapOpen_ = false, captureFresh_ = false;
+    int capturing_ = -1;
+    std::uint32_t previousHeld_ = 0, suppressed_ = 0;
     float pointerX_ = (TopWidth - 1) / 2, pointerY_ = (TopHeight - 1) / 2;
     TriggerChecker actions_[ActionCount];
     TriggerChecker shoot_, camera_, recenter_;

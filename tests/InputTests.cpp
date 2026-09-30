@@ -246,6 +246,40 @@ void touchPages() {
     check(input.update(touch(160, 120)).pointer.visible, "stylus aims again once closed");
 }
 
+void remapPage() {
+    smg::Input input;
+    input.update(touch(280, 12));
+    input.update({});
+    input.update(touch(250, 205));
+    input.update({});
+    check(input.frame().remapOpen && input.frame().optionsOpen, "remap chip opens the remap page");
+    auto frame = input.update(touch(100, 34 + 3 * 24 + 5));
+    check(frame.capturing == smg::Shoot, "a row starts choosing buttons for its action");
+    input.update({});
+    smg::RawInput raw;
+    raw.held = smg::R;
+    frame = input.update(raw);
+    check(!frame.recenter.pressed && !frame.shoot.pressed, "buttons pressed while choosing never reach the game");
+    check(input.settings().bindings[smg::Shoot] == smg::R, "the first press replaces the old binding");
+    raw.held = smg::R | smg::ZR;
+    input.update(raw);
+    check(input.settings().bindings[smg::Shoot] == (smg::R | smg::ZR), "later presses add aliases");
+    raw.touching = true;
+    raw.touchX = raw.touchY = 100;
+    frame = input.update(raw);
+    check(frame.capturing == -1 && input.takeSettingsChanged(), "a tap finishes and reports the change");
+    raw.touching = false;
+    check(!input.update(raw).shoot.pressed, "buttons held through the finishing tap stay suppressed");
+    input.update({});
+    raw = {};
+    raw.held = smg::R;
+    check(input.update(raw).shoot.pressed, "the new binding works once pressed again");
+    input.update({});
+    input.update(touch(280, 12));
+    input.update({});
+    check(!input.frame().remapOpen && input.frame().optionsOpen, "back returns to the options page");
+}
+
 void settingsFiles() {
     smg::Settings settings;
     settings.pointer = smg::PointerMode::CStick;
@@ -269,6 +303,7 @@ int main() {
     stickPointer();
     stylusPointer();
     touchPages();
+    remapPage();
     settingsFiles();
 
     smg::Session session;

@@ -43,8 +43,9 @@ The star pointer has three modes, chosen on the bottom screen's **Options** page
   turn 50% transparent while aiming.
 
 Options also sets motion and C-Stick speed, inverts either axis, and restores the Switch
-layout. Settings are saved to `sdmc:/3ds/SMG-3DS/settings.ini`; buttons are remapped by
-editing its `bind.` lines, for example `bind.shoot=ZR+R`. The bottom screen's corner
+layout. **Remap...** lists every action: tap one, press the button or buttons it should use,
+then tap again. Settings are saved to `sdmc:/3ds/SMG-3DS/settings.ini`, whose `bind.` lines
+can also be edited by hand, for example `bind.shoot=ZR+R`. The bottom screen's corner
 buttons reset the camera and recenter the pointer, and it lists the current bindings.
 
 The current build streams in Good Egg's first scenario as a stage preview: every rigid model

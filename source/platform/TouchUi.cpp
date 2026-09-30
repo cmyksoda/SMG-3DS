@@ -242,9 +242,24 @@ void TouchUi::drawOptionsPage(const InputFrame& input, const Settings& settings)
     label(speed, 200, 119, 0.5f, color(236, 243, 255), true);
     show(Option::InvertX, "Horizontal");
     show(Option::InvertY, "Vertical");
-    show(Option::ResetButtons, settings.bindings == defaultBindings() ? "Switch layout" : "Reset to Switch layout");
-    label("remap buttons in settings.ini", 200, 228, 0.3f, color(139, 156, 192), true);
+    show(Option::ResetButtons, settings.bindings == defaultBindings() ? "Switch layout" : "Reset layout");
+    show(Option::Remap, "Remap...");
+    label("also saved as settings.ini", 200, 228, 0.3f, color(139, 156, 192), true);
     show(Option::Done, "Done");
+}
+
+void TouchUi::drawRemapPage(const InputFrame& input, const Settings& settings) {
+    label("BUTTONS", 12, 8, 0.55f, color(236, 243, 255));
+    chip(OptionsButton, "Back", false, input.optionsButtonHeld);
+    const char* names[ActionCount]{"Jump", "Spin", "Crouch", "Star Bits", "Camera", "Recenter", "Pause", "Minus"};
+    for (unsigned action = 0; action < ActionCount; ++action) {
+        const Rect row = remapRow(action);
+        const bool choosing = input.capturing == static_cast<int>(action);
+        C2D_DrawRectSolid(row.x, row.y, 0, row.width, row.height, choosing ? color(112, 66, 36) : color(22, 36, 70, 0.9f));
+        label(names[action], row.x + 8, row.y + 4, 0.42f, color(214, 229, 250));
+        const std::string bound = choosing ? "press buttons, then tap" : keys(settings.bindings[action]);
+        label(bound.c_str(), row.x + 218, row.y + 4, 0.42f, choosing ? color(255, 231, 176) : color(255, 218, 147), true);
+    }
 }
 
 void TouchUi::draw(const InputFrame& input, const Settings& settings, const NativePad& pad, SceneRenderer& scene,
@@ -255,7 +270,8 @@ void TouchUi::draw(const InputFrame& input, const Settings& settings, const Nati
     C2D_TargetClear(bottom_, color(4, 9, 26));
     C2D_SceneBegin(bottom_);
     background(320, frame_);
-    if (input.optionsOpen) drawOptionsPage(input, settings);
+    if (input.remapOpen) drawRemapPage(input, settings);
+    else if (input.optionsOpen) drawOptionsPage(input, settings);
     else drawPlayPage(input, settings, motionReady);
     C3D_FrameEnd(0);
     ++frame_;
