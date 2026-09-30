@@ -1637,3 +1637,17 @@ adapt("libs/RVL_SDK/include/private/flipper.h", "include/private/flipper.h", [
                                   ("__DIRegs", "vu32"), ("__SIRegs", "vu32"), ("__ACRRegs", "vu32"), ("__IPCRegs", "vu32")])
      + "#endif", 1),
 ])
+# MSL's printf writes nothing for a null %s (printf.c: buff_ptr = ""), newlib writes "(null)": a folder of the
+# archive's root must be found as "/name", as on the Wii.
+adapt("src/Game/System/LayoutHolder.cpp", "Game/System/LayoutHolder.cpp", [
+    ('                sprintf(path, "%s%s%s", pRoot, "/", pFinder->mName);',
+     '                sprintf(path, "%s%s%s", pRoot ? pRoot : "", "/", pFinder->mName);', 1),
+    ('                snprintf(path, 128, "%s/%s", pRoot, pFinder->mName);',
+     '                snprintf(path, 128, "%s/%s", pRoot ? pRoot : "", pFinder->mName);', 1),
+])
+adapt("src/Game/System/ResourceHolder.cpp", "Game/System/ResourceHolder.cpp", [
+    ('                sprintf(path, "%s%s%s", pPath, "/", finder->mName);',
+     '                sprintf(path, "%s%s%s", pPath ? pPath : "", "/", finder->mName);', 1),
+    ('                snprintf(path, 128, "%s/%s", pPath, finder->mName);',
+     '                snprintf(path, 128, "%s/%s", pPath ? pPath : "", finder->mName);', 1),
+])
