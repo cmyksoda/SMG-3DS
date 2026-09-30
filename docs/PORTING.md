@@ -458,7 +458,9 @@ which on ARM would have named a setting as the register; they are packed by valu
 pins both, the TEV stage through GD into the port's command processor. `J3DShapeDraw` read each primitive's
 vertex count out of a display list as a native `u16`; it is the GPU's big-endian half, so a strip of 3 would
 have counted 768 and the walk (`countVertex`, `addTexMtxIndexInDL`, which `ModelUtil` calls) run past the list.
-It reads and writes those halves big-endian now.
+It reads and writes those halves big-endian now. Plain copies between same-typed structs through `u32` keep
+their bytes on either CPU and are left alone. Resource colours the game reads as `u32` (BRLYT's `vtxCols` and
+`textCols`) must therefore be word-swapped when their format is turned native, like any other word.
 
 **Bitfields read as words.** Metrowerks packs bitfields from each word's top bit; GCC on ARM from the bottom.
 That only matters where code reaches a bitfield struct through the word it shares a union with. Of the 17 files
@@ -466,10 +468,12 @@ that declare bitfields, Mario's state unions are the ones used that way: `MarioJ
 with word constants (`0x00100000`, `0x2000`: fields `_B` and `mIsUnderwater`), and `MarioActor` tested bit 8 of
 the high movement word (field `_37`). They name the fields now. Petari names these fields by their index in
 hex, which makes the mapping checkable. Whole-word clears and copies are safe either way. Not yet run: the boot
-doesn't reach Mario. Plain copies between same-typed structs
-through `u32` keep their bytes on either CPU and are left alone.
-Resource colours the game reads as `u32` (BRLYT's `vtxCols` and `textCols`) must therefore be word-swapped
-when their format is turned native, like any other word.
+doesn't reach Mario.
+
+**Raw readers of file data.** `JKRDecomp::decodeSZS` took its end from the Yaz0 header's size as a native word;
+it reads it big-endian (`JKRDecompExpandSize`) now. The boot's archive mounts decompress through another path,
+so this one isn't exercised yet. Game, nw4r and JSystem code hold 191 such casts in all; most mark formats still
+to turn native (THP movies, JPA particles, BMD models, camera animations, audio banks, save data).
 
 **Upstream fallbacks that compile to nothing.** Besides the asm blocks, some SDK headers give non-Metrowerks
 compilers empty definitions meant only for an editor's parser: `GXRegs.h`'s `FAST_FLAG_SET` (which packs every
