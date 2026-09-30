@@ -10,7 +10,7 @@ docker run --rm --network none --user "$(id -u):$(id -g)" \
   --mount "type=bind,source=$build_dir,target=/build,readonly" \
   "$builder_image" bash -c '
 cd /build
-ninja -t commands | grep -E "CMakeFiles/petari_[a-z0-9_]+\.dir/.*\.obj " | grep -- " -c " |
+ninja -t commands | grep -E "CMakeFiles/(petari_[a-z0-9_]+|msl_wide)\.dir/.*\.obj " | grep -- " -c " |
   sed "s| -MD -MT [^ ]* -MF [^ ]*||; s| -o [^ ]*| -Wall -Wno-unused -Wno-sign-compare -Wno-reorder -o /dev/null|" > /tmp/commands
 xargs -P "$(nproc)" -d "\n" -I{} sh -c "{} 2>&1 || echo SCAN-FAILED" < /tmp/commands > /tmp/output || true
 grep -E "invokes undefined behavior|Warray-bounds|is out of the bounds|Wstringop-overread|Wstringop-overflow" /tmp/output | sort -u > /tmp/found || true

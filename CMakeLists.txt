@@ -4,6 +4,13 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+if(NINTENDO_3DS)
+  # The game reads its UTF-16 text through wchar_t, two bytes on the Wii. Every file agrees on that size, and the
+  # wide functions the game calls are MSL's own (msl_wide below), not newlib's four-byte ones.
+  add_compile_options(-fshort-wchar)
+  add_link_options(LINKER:--no-wchar-size-warning)
+endif()
+
 set(PETARI "${CMAKE_CURRENT_SOURCE_DIR}/upstream/Petari")
 if(NOT EXISTS "${PETARI}/src/Game/LiveActor/Spine.cpp")
   message(FATAL_ERROR "Run git submodule update --init before configuring")
@@ -309,6 +316,12 @@ if(NINTENDO_3DS)
       set_property(SOURCE "${source}" APPEND PROPERTY COMPILE_OPTIONS -fpermissive)
     endif()
   endforeach()
+  # MSL's own wide-string functions (swprintf, vswprintf, wcslen, wcsncpy and what they use), built as C.
+  add_library(msl_wide STATIC source/compat/MslWide.c "${CMAKE_CURRENT_BINARY_DIR}/petari/MSL_C/wstring.c"
+    "${CMAKE_CURRENT_BINARY_DIR}/petari/MSL_C/wmem.c" "${CMAKE_CURRENT_BINARY_DIR}/petari/MSL_C/mbstring.c"
+    "${CMAKE_CURRENT_BINARY_DIR}/petari/MSL_C/wprintf.c")
+  target_include_directories(msl_wide PRIVATE compat)
+  target_compile_options(msl_wide PRIVATE -w)
   add_library(petari_game STATIC ${PETARI_GAME_SOURCES})
   target_link_libraries(petari_game PUBLIC petari_scene petari_anim)
   target_include_directories(petari_game PRIVATE include)
@@ -321,7 +334,7 @@ if(NINTENDO_3DS)
   # The game and the port's libraries call each other: GNU ld rescans the group until nothing more resolves. The
   # boundary stops come after it, for what the game does not define.
   target_link_libraries(mario_probe PRIVATE -Wl,--start-group smg_platform petari_game petari_scene petari_anim petari_j3d
-    petari_gravity petari_core -Wl,--end-group petari_game_boundaries citro2d citro3d ctru m)
+    petari_gravity petari_core msl_wide -Wl,--end-group petari_game_boundaries citro2d citro3d ctru m)
   target_link_options(mario_probe PRIVATE -Wl,--gc-sections "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/mario_probe.map")
   add_custom_command(TARGET mario_probe POST_BUILD
     COMMAND "${DEVKITPRO}/tools/bin/3dsxtool" "$<TARGET_FILE:mario_probe>" "${CMAKE_CURRENT_BINARY_DIR}/mario_probe.3dsx" VERBATIM)
@@ -331,11 +344,11 @@ if(NINTENDO_3DS)
     add_executable(native_validation tests/NativeTests.cpp tests/MathTests.cpp tests/PadTests.cpp tests/BcsvTests.cpp
       tests/ModelTests.cpp tests/CombinerTests.cpp tests/GravityTests.cpp tests/Etc1Tests.cpp tests/GpuTests.cpp
       tests/NameObjTests.cpp tests/SceneTests.cpp tests/CollisionTests.cpp tests/AnimationTests.cpp tests/ActorTests.cpp tests/J3DTransformTests.cpp tests/J3DSkeletonTests.cpp
-      tests/GxCommandTests.cpp tests/BmgTests.cpp tests/ColorTests.cpp tests/LayoutTests.cpp)
+      tests/GxCommandTests.cpp tests/BmgTests.cpp tests/ColorTests.cpp tests/LayoutTests.cpp tests/WideTests.cpp)
     set_target_properties(native_validation PROPERTIES SUFFIX ".elf")
     target_compile_definitions(native_validation PRIVATE SMG_TEST_RUNNER)
     target_link_directories(native_validation PRIVATE "${DEVKITPRO}/libctru/lib")
-    target_link_libraries(native_validation PRIVATE smg_native_pad smg_platform petari_gravity petari_scene petari_j3d citro2d citro3d ctru m)
+    target_link_libraries(native_validation PRIVATE smg_native_pad smg_platform petari_gravity petari_scene petari_j3d msl_wide citro2d citro3d ctru m)
     target_compile_options(native_validation PRIVATE -Wall -Wextra -Werror)
     add_custom_command(TARGET native_validation POST_BUILD
       COMMAND "${DEVKITPRO}/tools/bin/3dsxtool" "$<TARGET_FILE:native_validation>"

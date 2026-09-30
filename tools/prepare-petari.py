@@ -1576,6 +1576,22 @@ adapt("src/Game/System/DrawSyncManager.cpp", "Game/System/DrawSyncManager.cpp", 
 adapt("include/Game/System/ErrorArchive.hpp", "include/Game/System/ErrorArchive.hpp", [
     ("const u8 cErrorArchive[] = {", "alignas(32) inline u8 cErrorArchive[] = {", 1),
 ])
+# MSL's own wide-string functions, built as C over newlib's headers (compat/smg/MslWide.h stands in for MSL's).
+adapt("src/MSL_C/wstring.c", "MSL_C/wstring.c", [('#include "size_t.h"\n#include "wchar_t.h"\n', "#include <smg/MslWide.h>\n", 1)])
+adapt("src/MSL_C/wmem.c", "MSL_C/wmem.c", [('#include "wchar_io.h"\n#include "cstring"\n', "#include <smg/MslWide.h>\n", 1)])
+# The game never calls setlocale: MSL's "C" locale decodes and encodes a character as one byte.
+adapt("src/MSL_C/mbstring.c", "MSL_C/mbstring.c", [
+    ('#include "mbstring.h"\n#include "locale.h"\n#include "cstring"\n#pragma exceptions on\n', "#include <smg/MslWide.h>\n", 1),
+    ("    return _current_locale.ctype_cmpt_ptr->decode_mb(pDest, s, num);", "    return __mbtowc_noconv(pDest, s, num);", 1),
+    ("inline int wctomb(char *pSrc, wchar_t wchar) {\n    return _current_locale.ctype_cmpt_ptr->encode_wc(pSrc, wchar);",
+     "int wctomb(char *pSrc, wchar_t wchar) {\n    return __wctomb_noconv(pSrc, wchar);", 1),
+])
+# PowerPC's va_list is an array, so the argument itself was the pointer parse_format advances; ARM's is a struct.
+adapt("src/MSL_C/wprintf.c", "MSL_C/wprintf.c", [
+    ('#include "ansi_fp.h"\n#include "stdio_api.h"\n#include "va_list.h"\n#include "wmem.h"\n#include "wstring.h"\n#include "cmath"\n'
+     '#include "cstdarg"\n#include "cstdlib"\n#include "cwctype"\n#include "wchar_t.h"\n\n#pragma exceptions on\n', "#include <smg/MslWide.h>\n", 1),
+    ("parse_format(format_ptr, (va_list*)arg, &format);", "parse_format(format_ptr, &arg, &format);", 1),
+])
 # Colours packed into a u32 through memory read 0xRRGGBBAA on the Wii and byte-reversed on ARM; these pack and
 # unpack the value the Wii's way, so literals like 0xFF0000FF and u32s bound for the GPU keep their meaning.
 adapt("libs/nw4r/include/nw4r/ut/Color.h", "include/nw4r/ut/Color.h", [
