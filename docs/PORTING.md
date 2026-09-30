@@ -568,7 +568,7 @@ All 1,758 BMD/BDL models load under ASan and UBSan (5,053,844 triangles), and 6,
 across 12 zones; the preview draws 56 rigid models in 172 placements.
 
 The portable math tests check tolerances and conventions, not bit-identical Gekko rounding.
-The native validation app passes 1,069 math, 37 WPad, 179 BCSV, 1,043 J3D model/texture,
-8,810 TEV combiner, 27 original gravity, 27 NameObj, 89 scene and gravity creator, 48 collision, 21 J3D animation, 13 original actor, 6 J3D transform, 6 J3D skeleton, 7 ETC1 and 8 GPU texture checks on emulated ARM
+The native validation app passes 1,069 math, 37 WPad, 190 BCSV, 1,043 J3D model/texture,
+8,810 TEV combiner, 27 original gravity, 27 NameObj, 89 scene and gravity creator, 48 collision, 21 J3D animation, 13 original actor, 6 J3D transform, 6 J3D skeleton, 8 GX command processor, 7 ETC1 and 8 GPU texture checks on emulated ARM
 in Azahar; the GPU checks compare the hardware's ETC1 decoding against ours. Of the disc's
 7,780 materials, 6,987 translate to the combiner exactly. No physical console has been tested.
