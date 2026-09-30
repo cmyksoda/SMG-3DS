@@ -225,8 +225,8 @@ Three ways forward:
   `makeActorDead` do to its gravity. `syncAfterPlacement` is GameScene's `initSyncSleepController`,
   so a gravity whose sleep switch is off starts asleep. `movement()` runs the sleep controllers, then
   `updateSwitch` for every awake gravity with switches: switch A must be on and B off. Switches live
-  in the original `StageSwitchContainer`, one set of 128 per zone plus the global ones. Followers
-  (`FollowId`, which no gravity on the disc uses) keep their placement. Creators, gravities, switch
+  in the original `StageSwitchContainer`, one set of 128 per zone plus the global ones. A row linked
+  to a map part (`MR::isValidFollowID`) keeps its placement: base matrix followers need the part's actor. Creators, gravities, switch
   controls, sleep controllers and the wire creator's `RailRider` are freed with the scene.
 - `MR::getPlacedZoneId`, `MR::getZoneNum` and `MR::getZoneNameFromZoneId`, answered from the zones
   and the tables registered for them.
@@ -298,8 +298,9 @@ kind is placed: the 59 wire placements (22 scenarios, among them Honeybee Kingdo
 Cosmos Garden) sample their real rails into 1,095 points, each from its rail's first point, with
 chords within 5% of even (the original integrates Bezier lengths numerically, a little short).
 294 placements follow their switches; 61 start asleep because their `SW_SLEEP` switch is off.
-2,175 light areas are placed across all scenarios (9 linked to map parts wait). 63 rows use switch A, 15 switch B, 11 `SW_SLEEP`, and none
-a follower. Every scenario has gravity at Mario's start except twelve hidden-star scenarios
+2,175 light areas are placed across all scenarios (9 linked to map parts wait). 63 rows use switch A, 15 switch B, 11 `SW_SLEEP`, and 78 are linked
+to a map part (`MapParts_ID`, `Obj_ID` or `ChildObjId`, which `MR::isValidFollowID` reads through
+`JMapLinkInfo`): those follow the part's moving matrix in the game and keep their placement here. Every scenario has gravity at Mario's start except twelve hidden-star scenarios
 (`IsHidden`), which place no MarioNo 0 entrance of their own; `Stage::entrance` says so instead
 of starting at the origin. Another 67 rows place actors with gravity of their own (the reverse
 and quarter-roll gravity rooms, gravity lights); they wait for `LiveActor`. The audit then follows

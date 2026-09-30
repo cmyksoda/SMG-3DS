@@ -93,7 +93,8 @@ public:
     void syncAfterPlacement();
     const std::vector<PlacedGravity>& placedGravities() const { return mGravities; }
     const std::vector<std::string>& skippedGravities() const { return mSkippedGravities; }
-    // Rows with a follower (FollowId), which keep their placement: base matrix followers are not brought up.
+    // Rows linked to a map part (MapParts_ID, Obj_ID or ChildObjId), whose matrix they follow in the game;
+    // base matrix followers are not brought up, so they keep their placement.
     const std::vector<std::string>& startStateGravities() const { return mStartStateGravities; }
 
     // LightDirector's data: LightData.bcsv and each zone's Light<zone>.bcsv, which the original holders read.

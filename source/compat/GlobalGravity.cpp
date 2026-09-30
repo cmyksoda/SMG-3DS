@@ -6,6 +6,7 @@
 #include <Game/Map/SleepController.hpp>
 #include <Game/AreaObj/LightAreaHolder.hpp>
 #include <Game/Map/StageSwitch.hpp>
+#include <Game/Util/BaseMatrixFollowTargetHolder.hpp>
 #include <Game/Util/JMapIdInfo.hpp>
 #include <Game/Util/JMapInfo.hpp>
 #include <Game/Util/JMapUtil.hpp>
@@ -162,7 +163,8 @@ bool NativeScene::placeGlobalGravity(const JMapInfoIter& row) {
         sleep->controller = new SleepController(row, sleep);
     }
     mGravities.push_back({creator, kind->destroy, gravity, name, zoneOf(row), switches, sleep});
-    if (used(row, "FollowId")) mStartStateGravities.emplace_back(name);
+    // MR::addBaseMatrixFollowerGravity: a row linked to a map part follows its matrix.
+    if (MR::isValidFollowID(row)) mStartStateGravities.emplace_back(name);
     return true;
 }
 } // namespace smg

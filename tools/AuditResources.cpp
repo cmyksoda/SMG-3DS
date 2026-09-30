@@ -80,7 +80,8 @@ int auditGravity(const fs::path& root) {
                 r.switchA += used(info, row, "SW_A");
                 r.switchB += used(info, row, "SW_B");
                 r.sleep += used(info, row, "SW_SLEEP");
-                r.follower += used(info, row, "FollowId");
+                // JMapLinkInfo: a row linked to a map part follows it.
+                r.follower += used(info, row, "MapParts_ID") || used(info, row, "Obj_ID") || used(info, row, "ChildObjId");
                 any = true;
             }
         }
@@ -90,11 +91,11 @@ int auditGravity(const fs::path& root) {
     for (const auto& [name, r] : rows) (name.rfind("Global", 0) == 0 ? global : actors) += r.count;
     std::printf("Global gravity rows on the disc: %zu, and %zu rows of other objects named for gravity, in %zu of %zu "
                 "stage archives\n", global, actors, zonesWithGravity, archives);
-    std::printf("%6s %5s %5s %5s %5s  %s\n", "rows", "SW_A", "SW_B", "SLEEP", "Follow", "name (tables)");
+    std::printf("%6s %5s %5s %5s %6s  %s\n", "rows", "SW_A", "SW_B", "SLEEP", "Linked", "name (tables)");
     for (const auto& [name, r] : rows) {
         std::string tables;
         for (const auto& t : r.tables) tables += (tables.empty() ? "" : ", ") + t;
-        std::printf("%6zu %5zu %5zu %5zu %5zu  %s (%s)\n", r.count, r.switchA, r.switchB, r.sleep, r.follower, name.c_str(), tables.c_str());
+        std::printf("%6zu %5zu %5zu %5zu %6zu  %s (%s)\n", r.count, r.switchA, r.switchB, r.sleep, r.follower, name.c_str(), tables.c_str());
     }
 
     // Every scenario of every galaxy, as the preview loads it.
@@ -245,8 +246,8 @@ int auditGravity(const fs::path& root) {
     for (const auto& [name, count] : skipped) std::printf("%6zu  skipped: %s\n", count, name.c_str());
     std::printf("%zu wire gravities sampled their rails into %zu points, from each rail's start, chords within 5%% of even\n",
                 wires, wirePoints);
-    std::printf("%zu placements follow their switches (%zu asleep as the scene starts); %zu have a follower, not brought up\n",
-                switched, asleep, startState);
+    std::printf("%zu placements follow their switches (%zu asleep as the scene starts); %zu are linked to a map part whose\n"
+                "matrix they would follow (followers are not brought up)\n", switched, asleep, startState);
     std::printf("%zu light areas placed across all scenarios; not placed:", areasPlaced);
     for (const auto& [name, count] : areasSkipped) std::printf(" %s x%zu,", name.c_str(), count);
     std::printf("\n");
