@@ -139,10 +139,12 @@ void TouchUi::drawTop(const InputFrame& input, const NativePad& pad, SceneRender
     C2D_SceneBegin(top_);
     C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
     if (scene.ready()) {
-        C2D_DrawRectSolid(0, 0, 0, 400, 30, color(4, 9, 26, 0.8f));
-        label("GOOD EGG / ORIGINAL MODEL PREVIEW", 200, 5, 0.42f, color(229, 239, 255), true);
-        label(scene.status().c_str(), 200, 203, 0.32f, color(173, 198, 223), true);
-        label("C-Stick / D-pad: orbit   Camera: reset view   Gameplay pending", 200, 221, 0.32f, color(194, 210, 230), true);
+        C2D_DrawRectSolid(0, 0, 0, 400, 22, color(4, 9, 26, 0.7f));
+        label(scene.title().c_str(), 200, 4, 0.4f, color(229, 239, 255), true);
+        C2D_DrawRectSolid(0, 206, 0, 400, 34, color(4, 9, 26, 0.7f));
+        label(scene.status().c_str(), 200, 208, 0.32f, color(173, 198, 223), true);
+        label("Circle Pad fly   C-Stick look   A up   ZL down   X faster   L start view", 200, 223, 0.32f,
+              color(194, 210, 230), true);
     } else {
         background(400, frame_);
         label("SMG-3DS", 200, 18, 0.9f, color(236, 243, 255), true);

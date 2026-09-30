@@ -46,7 +46,8 @@ target_compile_options(petari_core PUBLIC -fno-strict-aliasing)
 
 add_library(smg_platform STATIC
   source/core/Input.cpp source/core/Motion.cpp source/core/Settings.cpp source/core/Session.cpp
-  source/core/Archive.cpp source/core/Bcsv.cpp source/core/Model.cpp source/core/Texture.cpp source/core/Combiner.cpp source/compat/NativePad.cpp)
+  source/core/Archive.cpp source/core/Bcsv.cpp source/core/Model.cpp source/core/Texture.cpp source/core/Combiner.cpp
+  source/core/Stage.cpp source/core/Mesh.cpp source/compat/NativePad.cpp)
 target_include_directories(smg_platform PUBLIC include)
 target_link_libraries(smg_platform PUBLIC petari_core)
 target_compile_options(smg_platform PRIVATE -Wall -Wextra -Werror)
@@ -102,6 +103,8 @@ else()
   target_link_libraries(bcsv_tool PRIVATE smg_platform)
   add_executable(model_tool tools/ModelTool.cpp)
   target_link_libraries(model_tool PRIVATE smg_platform)
+  add_executable(stage_tool tools/StageTool.cpp)
+  target_link_libraries(stage_tool PRIVATE smg_platform)
   add_executable(resource_audit tools/AuditResources.cpp)
   target_link_libraries(resource_audit PRIVATE smg_platform)
   target_compile_options(resource_audit PRIVATE -Wall -Wextra -Werror)

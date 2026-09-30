@@ -80,6 +80,7 @@ struct Model {
     std::vector<ModelTexture> textures;
     std::vector<ModelJoint> joints;
     std::array<float, 3> minimum{}, maximum{};
+    bool skinned = false; // uses weighted envelopes, so it needs animation to look right
 };
 
 bool loadModel(Bytes source, Model& output, std::size_t decodedBudget, std::string& error);

@@ -8,6 +8,9 @@
 
 namespace {
 constexpr const char* SettingsPath = "sdmc:/3ds/SMG-3DS/settings.ini";
+constexpr const char* DataRoot = "sdmc:/3ds/SMG-3DS/game";
+// Hundreds of draws with their own combiner state overflow citro3d's default 256 KiB.
+constexpr std::size_t CommandBufferSize = 0x100000;
 bool suspendInput = false;
 
 void aptCallback(APT_HookType type, void*) {
@@ -78,7 +81,7 @@ int main() {
     gfxInitDefault();
     gfxSet3D(false);
     osSetSpeedupEnable(true);
-    if (!C3D_Init(C3D_DEFAULT_CMDBUF_SIZE)) { gfxExit(); return 1; }
+    if (!C3D_Init(CommandBufferSize)) { gfxExit(); return 1; }
     if (!C2D_Init(C2D_DEFAULT_MAX_OBJECTS)) { C3D_Fini(); gfxExit(); return 1; }
     C2D_Prepare();
     smg::TouchUi ui;
@@ -89,9 +92,9 @@ int main() {
     smg::loadSettings(SettingsPath, settings);
     smg::Input input(settings);
     smg::NativePad pad;
-    smg::Session session("sdmc:/3ds/SMG-3DS/game");
+    smg::Session session(DataRoot);
     smg::SceneRenderer scene;
-    scene.load("sdmc:/3ds/SMG-3DS/game/ObjectData/BroadBeanPlanetB.arc", "broadbeanplanetb.bdl");
+    if (scene.init()) scene.loadStage(DataRoot, "EggStarGalaxy", 1);
     aptHookCookie hook;
     aptHook(&hook, aptCallback, nullptr);
     u64 previousTime = osGetTime();

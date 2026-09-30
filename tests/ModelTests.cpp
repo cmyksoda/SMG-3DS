@@ -1,3 +1,4 @@
+#include <smg/Mesh.hpp>
 #include <smg/Model.hpp>
 #include <cmath>
 #include <cstdio>
@@ -192,6 +193,7 @@ void models() {
     child.twoJoints = true;
     check(load(fixture(child).data, model, 4096, error), "two-joint model decoded");
     check(model.joints.size() == 2 && model.joints[1].parent == 0, "joint hierarchy from INF1");
+    check(!model.skinned, "rigid joints are not skinning");
     // A quarter turn about Y sends local +X to -Z before the child's translation.
     const auto& moved = model.vertices[0].position;
     check(near(moved[0], 10) && near(moved[1], -1) && near(moved[2], 1), "rigid vertices use their joint's bind matrix");
@@ -199,6 +201,7 @@ void models() {
     skinned.envelope = true;
     check(load(fixture(skinned).data, model, 4096, error), "enveloped model decoded");
     check(near(model.vertices[0].position[0], 4.5f) && near(model.vertices[0].position[2], 0.5f), "envelope weights blend joint matrices");
+    check(model.skinned, "enveloped models are marked skinned");
 
     for (std::size_t n = 0; n < f.data.size(); ++n)
         check(!smg::loadModel({f.data.data(), n}, model, 4096, error), "truncated model rejected");
@@ -301,9 +304,39 @@ void textures() {
 }
 } // namespace
 
+void meshes() {
+    smg::Model model;
+    std::string error;
+    check(load(fixture().data, model, 4096, error), "quad for packing");
+    auto mesh = smg::packMesh(model);
+    check(mesh.vertices.size() == 4 && mesh.indices.size() == 6 && mesh.shapes.size() == 1, "strip corners are shared");
+    check(mesh.vertices[mesh.indices[0]].position[0] == -1 && mesh.indices[3] == mesh.indices[2] && mesh.indices[4] == mesh.indices[1], "indices keep triangle order");
+    check(near(mesh.radius, std::sqrt(2.0f)), "bounding sphere");
+    check(mesh.vertices[0].color[3] == 255 && mesh.vertices[0].normal[1] == 127, "colors and normals as bytes");
+
+    // Enough distinct triangles to overflow 16-bit indices must split into another draw.
+    smg::Model big;
+    big.shapes.push_back({0, 0, 0, 0});
+    for (unsigned i = 0; i < 70000; ++i) {
+        smg::ModelVertex v;
+        v.position[0] = static_cast<float>(i);
+        big.vertices.push_back(v);
+    }
+    big.vertices.resize(69999);
+    big.shapes[0].count = big.vertices.size();
+    mesh = smg::packMesh(big);
+    bool fits = mesh.shapes.size() == 2;
+    for (const auto& shape : mesh.shapes) {
+        const std::size_t next = &shape == &mesh.shapes.back() ? mesh.vertices.size() : (&shape)[1].firstVertex;
+        fits &= next - shape.firstVertex <= 65536 && shape.indexCount % 3 == 0;
+    }
+    check(fits && mesh.indices.size() == 69999, "large shapes split at whole triangles");
+}
+
 int runModelTests() {
     models();
     textures();
+    meshes();
     std::printf("%u J3D model/texture checks passed\n", checks);
     return 0;
 }

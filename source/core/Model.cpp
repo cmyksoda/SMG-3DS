@@ -388,7 +388,7 @@ bool readJoints(const Sections& s, Model& model, std::string& error) {
     return true;
 }
 
-bool drawMatrices(const Sections& s, const Model& model, std::vector<Mtx34>& result, std::string& error) {
+bool drawMatrices(const Sections& s, const Model& model, std::vector<Mtx34>& result, bool& skinned, std::string& error) {
     const auto& drw = s.drw;
     const auto& evp = s.evp;
     const unsigned count = drw.u16(8);
@@ -417,6 +417,7 @@ bool drawMatrices(const Sections& s, const Model& model, std::vector<Mtx34>& res
             continue;
         }
         if (index >= envelopes) return fail(error, "Invalid J3D envelope index");
+        skinned = true;
         Mtx34 sum{};
         const unsigned mix = evp.u8(evp.u32(12) + index);
         for (unsigned k = 0; k < mix; ++k) {
@@ -631,7 +632,7 @@ bool loadModel(Bytes source, Model& output, std::size_t decodedBudget, std::stri
     std::array<Format, 21> formats{};
     std::vector<Mtx34> draw;
     if (!readTextures(s.tex, model, remaining, error) || !readMaterials(s.mat, model, error) ||
-        !readJoints(s, model, error) || !drawMatrices(s, model, draw, error) ||
+        !readJoints(s, model, error) || !drawMatrices(s, model, draw, model.skinned, error) ||
         !readVertexFormats(s.vtx, formats, error) || !readShapes(s, formats, draw, model, remaining, error))
         return false;
     if (!valid || model.vertices.empty()) return fail(error, "Invalid or empty J3D model");

@@ -1,25 +1,83 @@
-.fvec projection[4], modelView[4], materialColor
-.constf constants(0.0, 1.0, 0.0, 0.0)
+; GX color channel 0 with one directional light, and three texgens for the combiner's units.
+.fvec projection[4], modelView[4]
+.fvec materialColor, ambientColor, lightDirection, lightColor, colorSelect
+.fvec texgen0[3], texgen1[3], texgen2[3]
+.constf constants(0.0, 1.0, 0.5, 0.00392156862)
+.constf scales(0.00787401574, 0.0, 0.0, 0.0)
 .out outpos position
 .out outcolor color
-.out outuv texcoord0
-.alias position v0
-.alias color v2
-.alias uv v3
+.out outtc0 texcoord0
+.out outtc1 texcoord1
+.out outtc2 texcoord2
+.alias inpos v0
+.alias inuv v1
+.alias inclr v2
+.alias innrm v3
 
 .proc main
-    mov r0.xyz, position
+    mov r0.xyz, inpos
     mov r0.w, constants.y
     dp4 r1.x, modelView[0], r0
     dp4 r1.y, modelView[1], r0
     dp4 r1.z, modelView[2], r0
-    dp4 r1.w, modelView[3], r0
+    mov r1.w, constants.y
     dp4 outpos.x, projection[0], r1
     dp4 outpos.y, projection[1], r1
     dp4 outpos.z, projection[2], r1
     dp4 outpos.w, projection[3], r1
-    mul outcolor, materialColor, color
-    mov outuv.xy, uv
-    mov outuv.zw, constants.xx
+
+    ; View-space unit normal
+    mul r2.xyz, scales.xxx, innrm.xyz
+    mov r2.w, constants.x
+    dp4 r3.x, modelView[0], r2
+    dp4 r3.y, modelView[1], r2
+    dp4 r3.z, modelView[2], r2
+    dp3 r4.x, r3.xyz, r3.xyz
+    rsq r4.x, r4.x
+    mul r3.xyz, r3.xyz, r4.xxx
+
+    ; Channel colors come from the register or the vertex, as colorSelect says
+    mul r5, constants.wwww, inclr
+    add r6, -materialColor, r5
+    mul r6, colorSelect.xxxw, r6
+    add r6, materialColor, r6
+    add r7, -ambientColor, r5
+    mul r7, colorSelect.yyyy, r7
+    add r7, ambientColor, r7
+
+    ; lit = min(ambient + max(n.l, 0) * light, 1), used when colorSelect.z enables lighting
+    dp3 r8.x, lightDirection.xyz, r3.xyz
+    max r8.x, constants.x, r8.x
+    mul r9, lightColor, r8.xxxx
+    add r9, r7, r9
+    min r9, constants.yyyy, r9
+    add r9, -constants.yyyy, r9
+    mov r12, constants.yyyy
+    mad r9, r9, colorSelect.zzzz, r12
+    mov r9.w, constants.y
+    mul outcolor, r6, r9
+
+    ; Sphere-map coordinates stand in for GX's normal-driven environment texgens
+    mul r10.xy, constants.zz, r3.xy
+    add r10.xy, constants.zz, r10.xy
+
+    mul r11.xy, texgen0[2].xx, inuv.xy
+    mad r11.xy, inuv.zw, texgen0[2].yy, r11.xy
+    mad r11.xy, r10.xy, texgen0[2].zz, r11.xy
+    mov r11.z, constants.y
+    dp3 outtc0.x, texgen0[0].xyz, r11.xyz
+    dp3 outtc0.y, texgen0[1].xyz, r11.xyz
+
+    mul r11.xy, texgen1[2].xx, inuv.xy
+    mad r11.xy, inuv.zw, texgen1[2].yy, r11.xy
+    mad r11.xy, r10.xy, texgen1[2].zz, r11.xy
+    dp3 outtc1.x, texgen1[0].xyz, r11.xyz
+    dp3 outtc1.y, texgen1[1].xyz, r11.xyz
+
+    mul r11.xy, texgen2[2].xx, inuv.xy
+    mad r11.xy, inuv.zw, texgen2[2].yy, r11.xy
+    mad r11.xy, r10.xy, texgen2[2].zz, r11.xy
+    dp3 outtc2.x, texgen2[0].xyz, r11.xyz
+    dp3 outtc2.y, texgen2[1].xyz, r11.xyz
     end
 .end
