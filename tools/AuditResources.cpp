@@ -1,6 +1,7 @@
 #include <smg/Archive.hpp>
 #include <smg/Bcsv.hpp>
 #include <smg/Combiner.hpp>
+#include <smg/Kcl.hpp>
 #include <smg/Model.hpp>
 #include <smg/Scene.hpp>
 #include <smg/Stage.hpp>
@@ -8,6 +9,8 @@
 #include <Game/Gravity/GravityInfo.hpp>
 #include <Game/Gravity/PlanetGravity.hpp>
 #include <Game/Gravity/PlanetGravityManager.hpp>
+#include <Game/Camera/CameraPolygonCodeUtil.hpp>
+#include <Game/Map/KCollision.hpp>
 #include <Game/Scene/SceneObjHolder.hpp>
 #include <algorithm>
 #include <cctype>
@@ -16,6 +19,7 @@
 #include <cstring>
 #include <filesystem>
 #include <map>
+#include <random>
 #include <set>
 #include <string>
 #include <vector>
@@ -193,10 +197,157 @@ int auditGravity(const fs::path& root) {
     return errors + failed == 0 ? 0 : 1;
 }
 
+// Nearest front-face hit along the segment o + d t, t in [0, 1], over every enabled triangle.
+float bruteForce(const KCollisionServer& server, const TVec3f& o, const TVec3f& d, int& which) {
+    float best = 2;
+    which = -1;
+    for (int i = 0; i < server.getTriangleNum(); ++i) {
+        const KC_PrismData* prism = server.getPrismData(i);
+        if (prism->mHeight <= 0) continue;
+        const TVec3f a = server.getPos(prism, 0), b = server.getPos(prism, 1), c = server.getPos(prism, 2);
+        if (!std::isfinite(b.x + b.y + b.z + c.x + c.y + c.z)) continue;
+        const TVec3f& n = *server.getFaceNormal(prism);
+        if (n.dot(d) >= 0 || n.dot(o - a) <= 0) continue;
+        const TVec3f e1 = b - a, e2 = c - a;
+        TVec3f p;
+        p.cross(d, e2);
+        const float det = e1.dot(p);
+        if (std::fabs(det) < 1e-12f) continue;
+        const TVec3f q0 = o - a;
+        const float u = q0.dot(p) / det;
+        TVec3f q;
+        q.cross(q0, e1);
+        const float v = d.dot(q) / det, t = e2.dot(q) / det;
+        if (u < 0 || v < 0 || u + v > 1 || t < 0 || t > 1 || t >= best) continue;
+        best = t, which = i;
+    }
+    return best;
+}
+
+// How far inside its triangle a point in the plane is, by the prism's own edge normals.
+float inset(const KCollisionServer& server, const KC_PrismData* prism, const TVec3f& point) {
+    const TVec3f rel = point - server.getPos(prism, 0);
+    return std::min({-rel.dot(*server.getEdgeNormal1(prism)), -rel.dot(*server.getEdgeNormal2(prism)),
+                     prism->mHeight - rel.dot(*server.getEdgeNormal3(prism))});
+}
+
+// Whether the octree lists a triangle in the block holding a point, as the game's walk would find it.
+bool listed(const KCollisionServer& server, const TVec3f& point, int triangle) {
+    KCollisionServer::V3u cell;
+    server.objectSpaceToLocalSpace(&cell, point);
+    if (!server.isInsideMinMaxInLocalSpace(cell)) return false;
+    s32 shift;
+    const u16* list = reinterpret_cast<const u16*>(server.searchBlock(&shift, cell.x, cell.y, cell.z));
+    while (*++list) if (*list == triangle + 1) return true;
+    return false;
+}
+
+// Every KCL on the disc through the original KCollisionServer, rays checked against brute force.
+int auditCollision(const fs::path& root) {
+    std::vector<fs::path> archives;
+    for (const auto& entry : fs::recursive_directory_iterator(root))
+        if (entry.is_regular_file() && extension(entry.path().string(), ".arc")) archives.push_back(entry.path());
+    std::sort(archives.begin(), archives.end());
+    std::size_t files = 0, triangles = 0, failed = 0, noAttributes = 0, badAttributes = 0, rays = 0, hits = 0, edges = 0,
+                wrong = 0, disabled = 0, cameraCodes = 0, unlisted = 0, firstBlock = 0;
+    for (const auto& path : archives) {
+        std::vector<std::uint8_t> storage;
+        std::vector<smg::ArchiveEntry> entries;
+        std::string error;
+        if (!smg::readArchive(path.c_str(), storage, entries, 64u << 20, error)) continue;
+        for (const auto& entry : entries) {
+            if (!extension(entry.path, ".kcl")) continue;
+            ++files;
+            const std::string label = path.filename().string() + " :: " + entry.path;
+            smg::Kcl kcl;
+            if (!kcl.load({storage.data() + entry.offset, entry.size}, error)) {
+                std::fprintf(stderr, "KCL %s: %s\n", label.c_str(), error.c_str());
+                ++failed;
+                continue;
+            }
+            triangles += kcl.triangles();
+            const std::string pa = entry.path.substr(0, entry.path.size() - 3) + "pa";
+            smg::Bcsv attributes;
+            const auto table = std::find_if(entries.begin(), entries.end(), [&](const smg::ArchiveEntry& e) { return e.path == pa; });
+            if (table == entries.end() || !attributes.load({storage.data() + table->offset, table->size}, error)) {
+                ++noAttributes;
+                std::fprintf(stderr, "PA %s: no attribute table\n", label.c_str());
+            }
+            // As CollisionParts::init sets up each part's server.
+            smg::NativeScene scene;
+            KCollisionServer server;
+            server.init(kcl.data(), attributes.info().mData);
+            MR::initCameraCodeCollection(label.c_str(), 0);
+            if (!server.calcFarthestVertexDistance() && table != entries.end()) {
+                ++badAttributes;
+                std::fprintf(stderr, "PA %s: a triangle names a missing attribute row\n", label.c_str());
+            }
+            MR::termCameraCodeCollection();
+            cameraCodes += scene.cameraCodes().back().codes.size();
+            for (int i = 0; i < server.getTriangleNum(); ++i) disabled += server.getPrismData(i)->mHeight <= 0;
+
+            TVec3f lo(1e30f, 1e30f, 1e30f), hi(-1e30f, -1e30f, -1e30f);
+            for (int i = 0; i < server.getTriangleNum(); ++i) {
+                for (int k = 0; k < 3; ++k) {
+                    const TVec3f p = server.getPos(server.getPrismData(i), k);
+                    lo.set(std::min(lo.x, p.x), std::min(lo.y, p.y), std::min(lo.z, p.z));
+                    hi.set(std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z));
+                }
+            }
+            std::mt19937 rng(static_cast<unsigned>(files));
+            std::uniform_real_distribution<float> unit(0, 1);
+            const auto inside = [&](float grow) {
+                const TVec3f size = hi - lo;
+                return TVec3f(lo.x - grow * size.x + unit(rng) * size.x * (1 + 2 * grow),
+                              lo.y - grow * size.y + unit(rng) * size.y * (1 + 2 * grow),
+                              lo.z - grow * size.z + unit(rng) * size.z * (1 + 2 * grow));
+            };
+            for (int ray = 0; ray < 48; ++ray, ++rays) {
+                const TVec3f from = inside(0.3f), to = inside(0);
+                const TVec3f d = to - from;
+                f32 fraction = 2;
+                u8 flag = 0;
+                const KC_PrismData* prism = server.checkArrow(from, d, &fraction, &flag, nullptr, nullptr, 0);
+                int expected = -1;
+                const float brute = bruteForce(server, from, d, expected);
+                const float length = d.length();
+                if (!prism && expected < 0) continue;
+                if (prism && expected >= 0 && std::fabs(fraction - brute) * length <= 0.05f) { ++hits; continue; }
+                // KCHitArrow keeps hits up to 0.01 outside an edge; brute force does not.
+                const KC_PrismData* near = prism ? prism : server.getPrismData(expected);
+                const float t = prism ? fraction : brute;
+                if (inset(server, near, from + d * t) > -0.05f && inset(server, near, from + d * t) < 0.05f) { ++edges; continue; }
+                if (prism && expected >= 0 && fraction < brute && inset(server, prism, from + d * fraction) > -0.02f) { ++edges; continue; }
+                // Nintendo's octrees leave some triangles out of blocks they barely touch; the game misses them too.
+                if (expected >= 0 && (!prism || brute < fraction) && !listed(server, from + d * brute, expected)) { ++unlisted; continue; }
+                // checkArrow stops at the first block with any hit, even one far past that block.
+                if (prism && expected >= 0 && brute < fraction) {
+                    bool early = false;
+                    for (float t = 0; t < brute && !early; t += 4 / length) early = listed(server, from + d * t, server.toIndex(prism));
+                    if (early) { ++firstBlock; continue; }
+                }
+                ++wrong;
+                std::fprintf(stderr, "RAY %s: server %s at %.5f, brute force %s at %.5f\n", label.c_str(), prism ? "hit" : "missed",
+                             prism ? fraction : 0.0f, expected >= 0 ? "hit" : "missed", expected >= 0 ? brute : 0.0f);
+            }
+            delete server.mapInfo;
+        }
+    }
+    std::printf("%zu KCL files, %zu loaded, %zu triangles (%zu disabled as degenerate)\n", files, files - failed, triangles, disabled);
+    std::printf("%zu without an attribute table, %zu naming missing rows; %zu camera codes collected\n", noAttributes,
+                badAttributes, cameraCodes);
+    std::printf("%zu rays: %zu hits agree with brute force, %zu differ only at an edge, %zu meet a triangle the disc's "
+                "octree does not list there, %zu stop at an earlier block's farther hit, %zu disagree\n", rays, hits, edges,
+                unlisted, firstBlock, wrong);
+    // Missing attributes are the disc's own (CollisionParts::init ignores the result); only the port can fail here.
+    return failed + wrong == 0 ? 0 : 1;
+}
+
 int main(int argc, char** argv) {
     if (argc == 3 && !std::strcmp(argv[2], "--gravity")) return auditGravity(argv[1]);
+    if (argc == 3 && !std::strcmp(argv[2], "--collision")) return auditCollision(argv[1]);
     const bool models = argc == 3 && !std::strcmp(argv[2], "--models");
-    if (argc != 2 && !models) { std::fprintf(stderr,"Usage: resource_audit EXTRACTED_FILES_DIRECTORY [--models|--gravity]\n"); return 2; }
+    if (argc != 2 && !models) { std::fprintf(stderr,"Usage: resource_audit EXTRACTED_FILES_DIRECTORY [--models|--gravity|--collision]\n"); return 2; }
     std::error_code ec;
     const fs::path root(argv[1]);
     if (!fs::is_directory(root, ec)) { std::fprintf(stderr,"Not a readable directory\n"); return 2; }
