@@ -31,7 +31,9 @@ typedef volatile f64 vf64;
 #define ATTRIBUTE_PACKED __attribute__((packed))
 #define ATTRIBUTE_WEAK __attribute__((weak))
 #define ALWAYS_INLINE __attribute__((always_inline))
-#define NO_INLINE __attribute__((noinline))
+// Empty for GCC, as upstream's own types.h has it: Metrowerks takes it after a definition's declarator,
+// where GCC refuses attributes, and it only steered code generation for matching.
+#define NO_INLINE
 #define AT_ADDRESS(x)
 #define __REGISTER
 #ifndef TRUE
