@@ -29,17 +29,25 @@ completion does not make those interfaces portable to ARM11/PICA200.
   assignment, dot products, square roots, and Hermite interpolation. Scalar vector/quaternion
   helpers preserve in-place calls. The original trig tables run with a GCC declaration fix
   and an explicit endpoint lookup instead of indexing beyond an array into its next member.
-- Two native render targets display the touchscreen interface and a platform diagnostic.
-- Stylus gesture ownership prevents UI presses from generating shots, and allows
-  aiming across 50%-transparent buttons. Touch coordinates cover the entire upper screen.
+- Two native render targets display the stage preview and the bottom-screen controls.
+  `Settings` holds the remappable Switch-style layout and pointer options; `MotionTracker`
+  drives the pointer from the gyro in player space. Stylus gesture ownership prevents UI
+  presses from generating shots and allows aiming across 50%-transparent buttons.
 - Yaz0 decompression and RARC indexing work independently of host endianness and alignment.
   The bootstrap probes the original star-bit layout archive and the Good Egg scenario table
   if they are present on the SD card.
-- A static J3D reader decodes rigid single-joint indexed geometry and CMPR textures.
-  The Good Egg BroadBeanPlanetB model yields 1,484 triangles and three textures.
-  A native PICA200 preview renderer now builds; visual verification is pending.
-  Its shader uses the first texture, vertex/material color, and basic UV transforms.
-  Full TEV materials, lighting, skinning, and stage placement are not implemented.
+- The J3D reader loads every BMD/BDL on the disc: joint hierarchies, envelope skinning
+  baked into the bind pose, per-packet matrix slots, two UV sets, all GX texture formats
+  with their palettes, and the complete MAT3 material state.
+- `compileTev` translates each material's TEV program into at most six PICA200 combiner
+  stages and three texture units, reporting when and why it has to approximate. Host and
+  on-ARM tests compare it against reference GX and PICA evaluators.
+- `loadStage` resolves a galaxy's scenario, zones and layers into world-space placements.
+  The renderer streams those models in one per frame, packs them into indexed 36-byte
+  vertices and native texture formats, and draws them with the translated combiners, a GX
+  color channel with one directional light, three texgens, blending, alpha test and depth
+  modes. Skinned models are skipped until animation exists. This is a stage preview with a
+  free camera, not gameplay: no actor, collision or camera code from the game runs yet.
 
 The WPad pointer, accelerometer, swing, and rumble device members are not installed yet.
 Do not compile callers that dereference them until their native implementations exist.
@@ -59,10 +67,12 @@ borrows its owner's sample storage rather than allocating the Wii's 120-sample I
    collision, effects, layouts, and audio readers;
    direct casts of Wii bytes to ARM structures are insufficient. Handle the game's Shift-JIS
    names and text encodings deliberately.
-3. **PICA200 renderer.** Establish a static original BMD scene with correct indexed attributes,
-   transforms, depth, and textures. Translate J3D materials/TEV state, skinning, display lists,
-   camera projection, particles, and postprocessing. Measure conversion/storage tradeoffs
-   with real game scenes before choosing simplifications.
+3. **PICA200 renderer.** The static stage path exists. Still missing: the zones' own light
+   tables (a fixed light stands in), GX's second color channel, projection texgens (they
+   fall back to sphere maps), mipmaps, BTK/BRK/BPK material animation, billboards, runtime
+   skinning, fog, particles and postprocessing. The 827 approximated TEV programs are listed
+   by `resource_audit --models`; the largest groups clamp between two combiner ops (411) or
+   need the incoming previous value twice, which the combiner buffer could hold (271).
 4. **Original scene and actor execution.** Bring up the original `NameObj`/`LiveActor` scheduler,
    gravity, collision, stage placement, Mario, animation, and camera using the real resources.
    Integrate the input boundary into `GamePadUtil`/`WPad`, including explicit digital spin input.
@@ -122,6 +132,10 @@ repacking unaligned fields; regression tests cover packed offsets and odd record
 The four remaining `.arc` files are U8-format Wii HOME Menu resources, currently unsupported.
 `resource_audit` reports them and returns failure rather than counting them as validated.
 
+All 1,758 BMD/BDL models load under ASan and UBSan (5,053,844 triangles), and 6,953 of their
+7,780 materials translate to the combiner exactly. Good Egg scenario 1 places 296 objects
+across 12 zones; the preview draws 56 rigid models in 172 placements.
+
 The portable math tests check tolerances and conventions, not bit-identical Gekko rounding.
-The previous native validation app passed 1,269 checks in Azahar. The newly added model
-tests pass on the host but have not yet run on emulated ARM. No physical console has been tested.
+The native validation app passes 1,054 math, 37 WPad, 179 BCSV, 1,043 J3D model/texture and
+4,203 TEV combiner checks on emulated ARM in Azahar. No physical console has been tested.

@@ -2,12 +2,12 @@
 
 A native Nintendo 3DS port project based on [SMGCommunity/Petari](https://github.com/SMGCommunity/Petari).
 
-**Status: platform bring-up. The current executable does not run Super Mario Galaxy gameplay.**
+**Status: renderer bring-up. The current executable previews Galaxy stages; it does not run gameplay.**
 It builds for ARM11 using devkitARM, libctru, Citro3D, and Citro2D. Eleven Petari
 source files provide the running state machine, original button/stick handling, field hashing,
 level-table lookup, and trigonometric tables. Nine compile unchanged; JMapInfo and the
 trigonometric table source have adaptations applied to generated copies outside the checkout.
-The Wii renderer, Mario/actor simulation, levels, audio, saves, and game menus still need integration.
+Mario/actor simulation, collision, animation, audio, saves, and game menus still need integration.
 The target is the New Nintendo 3DS and New 2DS family.
 
 ## Controls
@@ -47,9 +47,11 @@ layout. Settings are saved to `sdmc:/3ds/SMG-3DS/settings.ini`; buttons are rema
 editing its `bind.` lines, for example `bind.shoot=ZR+R`. The bottom screen's corner
 buttons reset the camera and recenter the pointer, and it lists the current bindings.
 
-The current build previews the static Good Egg model from `ObjectData/BroadBeanPlanetB.arc`
-on the top screen; the C-Stick and D-pad orbit it and the camera button resets the view.
-None of these inputs reach Mario, the camera, or star bits in a running stage yet.
+The current build streams in Good Egg's first scenario as a stage preview: every rigid model
+its layers place, drawn with the game's own materials translated to the 3DS combiner. Fly
+with the Circle Pad, look with the C-Stick or D-pad, rise with A, sink with ZL, hold X to
+go faster, and press L to return to the start view. None of these inputs reach Mario, the
+camera, or star bits in a running stage yet.
 Original game icons load from the SD card once imported; until then the screens use text
 labels and a plain reticle. The diagnostic build exits with Start + Select.
 
