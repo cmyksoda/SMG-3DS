@@ -207,21 +207,30 @@ struct Compiler {
 
         // GX saturates once at the end; a separate op after a sum that passed 1 sees it clipped.
         const auto overflows = [](const Op& op) { return op.func == CombineFunc::Add || op.func == CombineFunc::MultiplyAdd; };
-        auto& last = ops.back();
+        // A rewrite is exact only if the op it reshapes saw unclipped inputs.
+        const auto whole = [&] { return ops.size() == 1 || !overflows(ops[ops.size() - 2]); };
+        const Arg half = constant(0.5f);
         if (bias == 1) {
             // d - x + 1/2 is d + (1 - x) - 1/2, one signed add without clamping in between.
-            if (last.func == CombineFunc::Replace) last = {CombineFunc::Add, {last.args[0], constant(0.5f)}};
+            Op& last = ops.back();
+            if (last.func == CombineFunc::Replace) last = {CombineFunc::Add, {last.args[0], half}};
             else if (last.func == CombineFunc::Subtract) last = {CombineFunc::AddSigned, {last.args[0], invert(last.args[1])}};
             else {
                 if (last.func == CombineFunc::AddSigned) approximate("clamp between ops");
-                ops.push_back({CombineFunc::Add, {temp, constant(0.5f)}});
+                ops.push_back({CombineFunc::Add, {temp, half}});
             }
         } else if (bias == 2) {
+            Op& last = ops.back();
             if (last.func == CombineFunc::Add) last.func = CombineFunc::AddSigned;
             else if (last.func == CombineFunc::Replace) last = {CombineFunc::AddSigned, {last.args[0], kind(Arg::Zero)}};
-            else {
+            else if (last.func == CombineFunc::MultiplyAdd && ops.size() == 1) {
+                // pq + d - 1/2 as a product, then a signed add.
+                const Arg d = last.args[2];
+                last = {CombineFunc::Modulate, {last.args[0], last.args[1]}};
+                ops.push_back({CombineFunc::AddSigned, {temp, d}});
+            } else {
                 if (overflows(last)) approximate("clamp between ops");
-                ops.push_back({CombineFunc::Subtract, {temp, constant(0.5f)}});
+                ops.push_back({CombineFunc::Subtract, {temp, half}});
             }
         } else if (bias == 3) {
             approximate("compare bias");
@@ -229,8 +238,20 @@ struct Compiler {
         if (scale == 1 || scale == 2) {
             ops.back().scale = scale == 1 ? 2 : 4;
         } else if (scale == 3) {
-            if (overflows(ops.back()) || ops.back().func == CombineFunc::AddSigned) approximate("clamp between ops");
-            ops.push_back({CombineFunc::Modulate, {temp, constant(0.5f)}});
+            // Halving a sum is interpolating its two terms halfway, with nothing clipped between.
+            Op last = ops.back();
+            if (last.func == CombineFunc::Add && whole()) {
+                ops.back() = {CombineFunc::Interpolate, {last.args[0], last.args[1], half}};
+            } else if (last.func == CombineFunc::MultiplyAdd && ops.size() == 1) {
+                ops.back() = {CombineFunc::Modulate, {last.args[0], last.args[1]}};
+                ops.push_back({CombineFunc::Interpolate, {temp, last.args[2], half}});
+            } else if (last.func == CombineFunc::AddSigned && whole()) {
+                ops.back() = {CombineFunc::Interpolate, {last.args[0], last.args[1], half}};
+                ops.push_back({CombineFunc::Subtract, {temp, constant(0.25f)}});
+            } else {
+                if (overflows(last) || last.func == CombineFunc::AddSigned) approximate("clamp between ops");
+                ops.push_back({CombineFunc::Modulate, {temp, half}});
+            }
         }
         return ops;
     }
