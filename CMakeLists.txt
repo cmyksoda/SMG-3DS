@@ -31,6 +31,7 @@ add_library(petari_core STATIC
   source/compat/GameRandom.cpp
   source/compat/Heap.cpp
   source/compat/Os.cpp
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/RVL_SDK/gd/GDBase.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/MathUtil.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/MtxUtil.cpp"
   "${PETARI}/src/JSystem/JMath/random.cpp"
@@ -160,8 +161,7 @@ add_library(petari_scene STATIC
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/ActorSensorUtilCore.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/ActorMovementUtilCore.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/MapUtilCore.cpp"
-  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/LiveActor/ShadowRequests.cpp"
-  "${CMAKE_CURRENT_BINARY_DIR}/petari/RVL_SDK/gd/GDBase.cpp")
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/LiveActor/ShadowRequests.cpp")
 target_link_libraries(petari_scene PUBLIC petari_gravity)
 if(NOT NINTENDO_3DS)
   # UBSan's vptr check needs the type info of every class LiveActor calls through; its model and sound classes
