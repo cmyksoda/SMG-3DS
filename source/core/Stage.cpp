@@ -108,15 +108,20 @@ bool loadStage(const std::string& root, const std::string& galaxy, int scenario,
     constexpr Transform identity{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
     place(map, galaxy, maskOf(galaxy), identity, stage.objects);
 
-    Bcsv start;
+    // Entering from the galaxy map starts at the galaxy's MarioNo 0, searched through its active layers in order.
     std::string ignored;
-    if (map.table("jmp/start/common/startinfo", start, ignored) && start.info().getNumEntries() > 0) {
+    for (const auto& layer : layers(maskOf(galaxy))) {
+        Bcsv start;
+        if (!map.table(("jmp/start/" + layer + "/startinfo").c_str(), start, ignored)) continue;
+        const JMapInfoIter entrance = start.info().findElement<s32>("MarioNo", 0, 0);
+        if (entrance == start.info().end()) continue;
         for (int i = 0; i < 3; ++i) {
             const char position[]{'p', 'o', 's', '_', static_cast<char>('x' + i), 0};
             const char direction[]{'d', 'i', 'r', '_', static_cast<char>('x' + i), 0};
-            stage.start[i] = field(start.info(), 0, position, 0);
-            stage.startRotation[i] = field(start.info(), 0, direction, 0);
+            stage.start[i] = field(start.info(), entrance.mIndex, position, 0);
+            stage.startRotation[i] = field(start.info(), entrance.mIndex, direction, 0);
         }
+        break;
     }
 
     // Zones are placed by the galaxy's own layers, then their contents by each zone's mask.
