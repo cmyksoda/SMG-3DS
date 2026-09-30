@@ -135,6 +135,10 @@ adapt("include/Game/Util/MathUtil.hpp", "include/Game/Util/MathUtil.hpp", [
     ("        return __fabsf(x);", "        return std::fabs(x);", 1),
     ("        return __abs(x);", "        return x < 0 ? -x : x;", 1),
     ("        return __fabs(x);", "        return std::fabs(x);", 1),
+    # The Wii's estimates, computed exactly; non-positive input passes through as it does there.
+    ("#else\n    f32 frsqrte(f32);\n    f32 fastSqrtf(f32);\n#endif",
+     "#else\n    inline f32 frsqrte(f32 x) { return 1.0f / std::sqrt(x); }\n"
+     "    inline f32 fastSqrtf(f32 x) { return x > 0.0f ? std::sqrt(x) : x; }\n#endif", 1),
     ("inline void clampMax(f32* pValue, f32 max) NO_INLINE {", "NO_INLINE inline void clampMax(f32* pValue, f32 max) {", 1),
     # Only GXColor is used; the whole GX header defines the Wii's hardware FIFO in every user.
     ("#include <revolution/gx.h>", "#include <revolution/gx/GXStruct.h>", 1),

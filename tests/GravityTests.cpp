@@ -41,10 +41,33 @@ void pointGravity() {
     point.updateMtx(moved);
     check(point.calcGravity(&pull, TVec3f(100.0f, 0.0f, 2000.0f)) && vec(pull, 0, 0, -1), "zone matrix moves the center");
 }
+// Parallel gravity reports its base distance, so the default 2000 gives exactly unit strength.
+void parallelGravity() {
+    ParallelGravity plane;
+    plane.setPlane(TVec3f(0.0f, 1.0f, 0.0f), TVec3f(0.0f, 0.0f, 0.0f));
+    plane.updateIdentityMtx();
+    TVec3f pull;
+    check(plane.calcGravity(&pull, TVec3f(123.0f, 456.0f, -789.0f)) && vec(pull, 0, -1, 0), "uniform unit pull along the plane");
+    plane.mRange = 1000.0f;
+    check(plane.calcGravity(&pull, TVec3f(0.0f, 900.0f, 0.0f)), "inside the range sphere");
+    check(!plane.calcGravity(&pull, TVec3f(0.0f, 1100.0f, 0.0f)), "outside the range sphere");
+    plane.mRange = -1.0f;
+    plane.setBaseDistance(1000.0f);
+    check(plane.calcGravity(&pull, TVec3f(0.0f, 5.0f, 0.0f)) && vec(pull, 0, -4, 0), "a shorter base distance pulls harder");
+
+    TPos3f quarterTurn;
+    quarterTurn.identity();
+    quarterTurn.mMtx[0][0] = 0.0f; quarterTurn.mMtx[0][1] = -1.0f;
+    quarterTurn.mMtx[1][0] = 1.0f; quarterTurn.mMtx[1][1] = 0.0f;
+    plane.setBaseDistance(2000.0f);
+    plane.updateMtx(quarterTurn);
+    check(plane.calcGravity(&pull, TVec3f(0.0f, 0.0f, 0.0f)) && vec(pull, 1, 0, 0), "zone rotation turns the plane");
+}
 } // namespace
 
 int runGravityTests() {
     pointGravity();
+    parallelGravity();
     std::printf("%u original gravity checks passed\n", checks);
     return 0;
 }
