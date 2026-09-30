@@ -4,6 +4,15 @@ from pathlib import Path
 import sys
 
 root, output = map(Path, sys.argv[1:])
+produced = set()  # every generated file this run writes; the rest of `output` is stale and removed at the end
+
+
+def emit(destination, text):
+    produced.add(destination.resolve())
+    if not destination.exists() or destination.read_text() != text:
+        destination.write_text(text)
+
+
 source = root / "src/Game/Util/JMapInfo.cpp"
 destination = output / "Game/Util/JMapInfo.cpp"
 text = source.read_text()
@@ -23,8 +32,7 @@ for before, after in fixes:
     text = text.replace(before, after)
 destination.parent.mkdir(parents=True, exist_ok=True)
 text = "// Adapted from Petari: switch/goto scope fixes for GCC, and tables turned native as they attach.\n" + text
-if not destination.exists() or destination.read_text() != text:
-    destination.write_text(text)
+emit(destination, text)
 
 
 def definition(text, relative, first):
@@ -41,37 +49,9 @@ def definition(text, relative, first):
 
 
 # Definitions the port owns natively, left out of the originals' copies so the whole-game library never defines
-# them twice: (reason, first lines) per source.
-NATIVE_SCENE = "the native scene's (source/compat/Scene.cpp, Area.cpp, Actor.cpp)"
+# them twice: (reason, first lines) per source. The native scene's stand-ins (library smg_native_scene) are never
+# linked with the whole game, which keeps its own scene functions.
 NATIVE = {
-    "src/Game/Util/SceneUtil.cpp": (NATIVE_SCENE, [
-        "    bool isPlacementLocalStage() {", "    s32 getPlacedZoneId(const JMapInfoIter& rIter) {",
-        "    const TPos3f* getZonePlacementMtx(const JMapInfoIter& rIter) {",
-        "    void getRailInfo(JMapInfoIter* pRailIter, const JMapInfo** ppPointInfo, const JMapInfoIter& rIter) {",
-        "    s32 getZoneNum() {", "    const char* getZoneNameFromZoneId(s32 zoneId) {", "    s32 getCurrentPlacementZoneId() {",
-        "    bool isInitializeStatePlacementSomething() {"]),
-    "src/Game/Scene/SceneObjHolder.cpp": (NATIVE_SCENE, [
-        "NameObj* SceneObjHolder::newEachObj(int id) {", "    SceneObjHolder* getSceneObjHolder() {", "    bool isExistSceneObj(int id) {"]),
-    "src/Game/Map/LightFunction.cpp": (NATIVE_SCENE, [
-        "s32 LightFunction::createLightDataParser(JMapInfo** pOut) {", "s32 LightFunction::createZoneDataParser(const char* pZone, JMapInfo** pOut) {",
-        "const char* LightFunction::getDefaultAreaLightName() {", "void LightFunction::registerLightAreaHolder(LightAreaHolder* pHolder) {",
-        "bool LightFunction::tryFindNewAreaLightID(const TVec3f& rPos, ZoneLightID* pId) {"]),
-    "src/Game/Util/ObjUtil.cpp": (NATIVE_SCENE, [
-        "void MR::listenNameObjStageSwitchOnOffAppear(const NameObj* pObj, const StageSwitchCtrl* pSwitchCtrl, const MR::FunctorBase& rOnFunctor,"]),
-    "src/Game/Util/CameraUtil.cpp": (NATIVE_SCENE, [
-        "    f32 getAspect() {", "    f32 getFovy() {", "    f32 getFarZ() {", "    const TPos3f& getCameraViewMtx() {",
-        "    bool isSubjectiveCameraOnForObjClipping() {"]),
-    "src/Game/Camera/CameraPolygonCodeUtil.cpp": (NATIVE_SCENE, [
-        "    void initCameraCodeCollection(const char* pName, s32 code) {", "    void registerCameraCode(u32 code) {",
-        "    void termCameraCodeCollection() {"]),
-    "src/Game/NameObj/NameObjExecuteHolder.cpp": (NATIVE_SCENE, [
-        "    void registerNameObjToExecuteHolder(NameObj* pObj, int movementType, int calcAnimType, int drawBufferType, int drawType) {",
-        "    void connectToSceneTemporarily(NameObj* pObj) {", "    void disconnectToSceneTemporarily(NameObj* pObj) {",
-        "    void connectToDrawTemporarily(NameObj* pObj) {", "    void disconnectToDrawTemporarily(NameObj* pObj) {"]),
-    "src/Game/Scene/SceneNameObjMovementController.cpp": (NATIVE_SCENE, ["    void notifyRequestNameObjMovementOnOff() {"]),
-    "src/Game/Util/AreaObjUtil.cpp": (NATIVE_SCENE, ["    AreaObjMgr* getAreaObjManager(const char* pMgrName) {"]),
-    "src/Game/AreaObj/AreaObjFollower.cpp": (NATIVE_SCENE, ["    bool addBaseMatrixFollowerAreaObj(AreaObj* pObj, const JMapInfoIter& rIter) {"]),
-    "src/Game/Map/SleepControllerHolder.cpp": (NATIVE_SCENE, ["    void addSleepControl(AreaObj* pObj, const JMapInfoIter& rIter) {"]),
     # Plain new and delete also serve allocations made before the game's heaps exist, and memory outside them.
     "src/JSystem/JKernel/JKRHeap.cpp": ("the port's (source/compat/GameHeap.cpp)", [
         "void* operator new(size_t size) {", "void* operator new[](size_t size) {", "void operator delete(void* pData) {",
@@ -149,8 +129,7 @@ def adapt(relative, target, replacements, drop=(), reason="", cases=()):
     destination = output / target
     destination.parent.mkdir(parents=True, exist_ok=True)
     text = "// Generated Petari adaptation; see tools/prepare-petari.py.\n" + text
-    if not destination.exists() or destination.read_text() != text:
-        destination.write_text(text)
+    emit(destination, text)
 
 
 def extract(relative, target, prologue, first_lines, epilogue="", fixes=(), rest_fixes=()):
@@ -177,8 +156,7 @@ def extract(relative, target, prologue, first_lines, epilogue="", fixes=(), rest
             + prologue + "\n" + "\n\n".join(bodies) + "\n" + epilogue)
     destination = output / target
     destination.parent.mkdir(parents=True, exist_ok=True)
-    if not destination.exists() or destination.read_text() != text:
-        destination.write_text(text)
+    emit(destination, text)
 
 
 adapt("libs/JSystem/include/JSystem/JMath/JMath.hpp", "include/JSystem/JMath/JMath.hpp", [
@@ -827,8 +805,7 @@ for included, present in [
     alias = output / "include" / included
     alias.parent.mkdir(parents=True, exist_ok=True)
     alias_text = f'// Generated Petari adaptation: Metrowerks found {present} under this case.\n#include "{present}"\n'
-    if not alias.exists() or alias.read_text() != alias_text:
-        alias.write_text(alias_text)
+    emit(alias, alias_text)
 # Comparisons of a bool or a pointer-holding u32 with nullptr, which Metrowerks took as with 0.
 adapt("src/Game/Player/Mario.cpp", "Game/Player/Mario.cpp", [
     ("if (MR::normalizeOrZero(&front) == nullptr) {", "if (!MR::normalizeOrZero(&front)) {", 1),
@@ -1108,8 +1085,7 @@ for relative_source, relative_output in [
     destination = output / "include" / relative_output
     destination.parent.mkdir(parents=True, exist_ok=True)
     text = "// Adapted from Petari: include only the types required by these declarations.\n" + text
-    if not destination.exists() or destination.read_text() != text:
-        destination.write_text(text)
+    emit(destination, text)
 
 source = root / "include/Game/Util/JMapInfo.hpp"
 destination = output / "include/Game/Util/JMapInfo.hpp"
@@ -1127,8 +1103,7 @@ for before, after in fixes:
     text = text.replace(before, after)
 destination.parent.mkdir(parents=True, exist_ok=True)
 text = "// Adapted from Petari: minimal type include and standard C++ inline/return declarations.\n" + text
-if not destination.exists() or destination.read_text() != text:
-    destination.write_text(text)
+emit(destination, text)
 
 # Nerves live in anonymous namespaces as often as named ones, where GCC refuses a weak definition; an inline one
 # is still a single instance wherever the name is shared, as Metrowerks' weak one was.
@@ -1828,8 +1803,7 @@ for relative, firsts in extracted.items():
     text = "// Generated Petari adaptation; see tools/prepare-petari.py.\n" + text.removeprefix("// Generated Petari adaptation; see tools/prepare-petari.py.\n")
     destination = output / target
     destination.parent.mkdir(parents=True, exist_ok=True)
-    if not destination.exists() or destination.read_text() != text:
-        destination.write_text(text)
+    emit(destination, text)
 for relative in NATIVE:
     if relative not in written and relative not in extracted:
         adapt(relative, relative[len("src/"):], [])
@@ -1939,3 +1913,9 @@ adapt("src/Game/System/ResourceHolder.cpp", "Game/System/ResourceHolder.cpp", [
     ('                snprintf(path, 128, "%s/%s", pPath, finder->mName);',
      '                snprintf(path, 128, "%s/%s", pPath ? pPath : "", finder->mName);', 1),
 ])
+
+# A copy this script no longer writes would still be preferred over upstream's file by the build (and a stale
+# header over upstream's by the compiler), so it goes; clean the build directories after this removes a header.
+for stale in sorted(path for path in output.rglob("*") if path.is_file() and path.resolve() not in produced):
+    stale.unlink()
+    print(f"prepare-petari: removed {stale.relative_to(output)}, which it no longer generates")

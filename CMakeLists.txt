@@ -122,7 +122,6 @@ add_library(petari_anim STATIC "${PETARI}/src/Game/Animation/XanimeCore.cpp")
 target_link_libraries(petari_anim PUBLIC petari_j3d)
 
 add_library(petari_scene STATIC
-  source/compat/Scene.cpp
   "${PETARI}/src/Game/NameObj/NameObj.cpp"
   "${PETARI}/src/Game/NameObj/NameObjRegister.cpp"
   "${PETARI}/src/Game/NameObj/NameObjGroup.cpp"
@@ -134,7 +133,6 @@ add_library(petari_scene STATIC
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Scene/SceneObjHolderMethods.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Gravity/PlanetGravityManager.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Gravity/GravityInfo.cpp"
-  source/compat/GlobalGravity.cpp
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Gravity/GravityCreator.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/GravityUtil.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/JMapUtil.cpp"
@@ -148,19 +146,16 @@ add_library(petari_scene STATIC
   "${PETARI}/src/Game/Map/StageSwitch.cpp"
   "${PETARI}/src/Game/Map/SleepController.cpp"
   "${PETARI}/src/Game/Util/JMapIdInfo.cpp"
-  source/compat/Light.cpp
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Map/LightDataHolder.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Map/LightZoneDataHolder.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Map/LightFunctionData.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/ObjUtilCsv.cpp"
-  source/compat/Area.cpp
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/FollowIdCheck.cpp"
   "${PETARI}/src/Game/Util/JMapLinkInfo.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/AreaObj/AreaForm.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/AreaObj/AreaObj.cpp"
   "${PETARI}/src/Game/AreaObj/LightArea.cpp"
   "${PETARI}/src/Game/AreaObj/LightAreaHolder.cpp"
-  source/compat/Actor.cpp
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/LiveActor/LiveActor.cpp"
   "${PETARI}/src/Game/LiveActor/LiveActorFlag.cpp"
   "${PETARI}/src/Game/LiveActor/HitSensor.cpp"
@@ -187,9 +182,15 @@ add_library(petari_scene STATIC
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/MapUtilCore.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/LiveActor/ShadowRequests.cpp")
 target_link_libraries(petari_scene PUBLIC petari_gravity petari_game_boundaries)
+# The native scene (source/compat/Scene.cpp and its kin) answers what the game's scene system would, for the native
+# app, the validation app and the host tests. The whole-game boot runs the game's own scene system instead, so it
+# never links these; as objects they link ahead of the archives whose originals call them.
+add_library(smg_native_scene OBJECT source/compat/Scene.cpp source/compat/GlobalGravity.cpp source/compat/Light.cpp source/compat/Area.cpp source/compat/Actor.cpp)
+target_link_libraries(smg_native_scene PUBLIC petari_scene)
+target_include_directories(smg_native_scene PRIVATE include)
 # Metrowerks stored a constant that does not fit, such as -1 in a table of u32, as its bit pattern; so does GCC
 # once the narrowing is not an error.
-foreach(library petari_core petari_gravity petari_j3d petari_anim petari_scene)
+foreach(library petari_core petari_gravity petari_j3d petari_anim petari_scene smg_native_scene)
   target_compile_options(${library} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wno-narrowing>)
 endforeach()
 if(NOT NINTENDO_3DS)
@@ -268,7 +269,7 @@ if(NINTENDO_3DS)
   set_target_properties(SMG-3DS PROPERTIES SUFFIX ".elf")
   target_include_directories(SMG-3DS PRIVATE "${DEVKITPRO}/libctru/include" "${CMAKE_CURRENT_BINARY_DIR}")
   target_link_directories(SMG-3DS PRIVATE "${DEVKITPRO}/libctru/lib")
-  target_link_libraries(SMG-3DS PRIVATE smg_native_pad smg_pica smg_platform citro2d citro3d ctru m)
+  target_link_libraries(SMG-3DS PRIVATE smg_native_scene smg_native_pad smg_pica smg_platform citro2d citro3d ctru m)
   target_compile_options(SMG-3DS PRIVATE -Wall -Wextra -Werror)
   target_link_options(SMG-3DS PRIVATE "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/SMG-3DS.map")
   add_custom_command(TARGET SMG-3DS POST_BUILD
@@ -292,7 +293,7 @@ if(NINTENDO_3DS)
       list(APPEND PETARI_BUILT_ELSEWHERE "${source}")
     endforeach()
   endforeach()
-  set(PETARI_GAME_SOURCES source/compat/Sdk.cpp source/compat/OsThreads.cpp source/compat/OsMemory.cpp source/compat/GameHeap.cpp source/compat/Dvd.cpp source/compat/Video.cpp source/compat/OsReset.cpp source/compat/GxRender.cpp source/compat/SystemConfig.cpp source/compat/Wpad.cpp source/compat/NativeResources.cpp source/compat/GxFifo.cpp source/compat/Nwc24.cpp source/compat/WiiAudio.cpp source/compat/Nw4rDb.cpp source/compat/DolTables.cpp source/compat/Kpad.cpp
+  set(PETARI_GAME_SOURCES source/compat/Sdk.cpp source/compat/GameScene.cpp source/compat/OsThreads.cpp source/compat/OsMemory.cpp source/compat/GameHeap.cpp source/compat/Dvd.cpp source/compat/Video.cpp source/compat/OsReset.cpp source/compat/GxRender.cpp source/compat/SystemConfig.cpp source/compat/Wpad.cpp source/compat/NativeResources.cpp source/compat/GxFifo.cpp source/compat/Nwc24.cpp source/compat/WiiAudio.cpp source/compat/Nw4rDb.cpp source/compat/DolTables.cpp source/compat/Kpad.cpp
     "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/LiveActor/RailRiderCamera.cpp"
     "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/LiveActor/LiveActorSound.cpp")
   foreach(source ${PETARI_GAME_CANDIDATES})
@@ -362,7 +363,7 @@ if(NINTENDO_3DS)
     set_target_properties(native_validation PROPERTIES SUFFIX ".elf")
     target_compile_definitions(native_validation PRIVATE SMG_TEST_RUNNER)
     target_link_directories(native_validation PRIVATE "${DEVKITPRO}/libctru/lib")
-    target_link_libraries(native_validation PRIVATE smg_native_pad smg_platform petari_gravity petari_scene petari_j3d msl_wide citro2d citro3d ctru m)
+    target_link_libraries(native_validation PRIVATE smg_native_scene smg_native_pad smg_platform petari_gravity petari_scene petari_j3d msl_wide citro2d citro3d ctru m)
     target_compile_options(native_validation PRIVATE -Wall -Wextra -Werror)
     add_custom_command(TARGET native_validation POST_BUILD
       COMMAND "${DEVKITPRO}/tools/bin/3dsxtool" "$<TARGET_FILE:native_validation>"
@@ -371,44 +372,44 @@ if(NINTENDO_3DS)
 else()
   enable_testing()
   add_executable(input_tests tests/InputTests.cpp)
-  target_link_libraries(input_tests PRIVATE smg_platform)
+  target_link_libraries(input_tests PRIVATE smg_native_scene smg_platform)
   target_compile_options(input_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME input_and_petari_core COMMAND input_tests)
   add_executable(archive_tests tests/ArchiveTests.cpp)
-  target_link_libraries(archive_tests PRIVATE smg_platform)
+  target_link_libraries(archive_tests PRIVATE smg_native_scene smg_platform)
   target_compile_options(archive_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME archive_formats COMMAND archive_tests)
   add_executable(archive_tool tools/ArchiveTool.cpp)
-  target_link_libraries(archive_tool PRIVATE smg_platform)
+  target_link_libraries(archive_tool PRIVATE smg_native_scene smg_platform)
   add_executable(bcsv_tool tools/BcsvTool.cpp)
-  target_link_libraries(bcsv_tool PRIVATE smg_platform)
+  target_link_libraries(bcsv_tool PRIVATE smg_native_scene smg_platform)
   add_executable(model_tool tools/ModelTool.cpp)
-  target_link_libraries(model_tool PRIVATE smg_platform)
+  target_link_libraries(model_tool PRIVATE smg_native_scene smg_platform)
   add_executable(stage_tool tools/StageTool.cpp)
-  target_link_libraries(stage_tool PRIVATE smg_platform)
+  target_link_libraries(stage_tool PRIVATE smg_native_scene smg_platform)
   add_executable(gravity_tool tools/GravityTool.cpp)
-  target_link_libraries(gravity_tool PRIVATE smg_platform)
+  target_link_libraries(gravity_tool PRIVATE smg_native_scene smg_platform)
   target_compile_options(gravity_tool PRIVATE -Wall -Wextra -Werror)
   add_executable(resource_audit tools/AuditResources.cpp tools/AuditLayouts.cpp tools/AuditAudio.cpp)
-  target_link_libraries(resource_audit PRIVATE smg_platform)
+  target_link_libraries(resource_audit PRIVATE smg_native_scene smg_platform)
   target_compile_options(resource_audit PRIVATE -Wall -Wextra -Werror)
   add_executable(bcsv_tests tests/BcsvTests.cpp)
-  target_link_libraries(bcsv_tests PRIVATE smg_platform)
+  target_link_libraries(bcsv_tests PRIVATE smg_native_scene smg_platform)
   add_test(NAME original_jmap_bcsv COMMAND bcsv_tests)
   add_executable(math_tests tests/MathTests.cpp)
-  target_link_libraries(math_tests PRIVATE smg_platform)
+  target_link_libraries(math_tests PRIVATE smg_native_scene smg_platform)
   target_compile_options(math_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME portable_math COMMAND math_tests)
   add_executable(pad_tests tests/PadTests.cpp)
-  target_link_libraries(pad_tests PRIVATE smg_native_pad)
+  target_link_libraries(pad_tests PRIVATE smg_native_scene smg_native_pad)
   target_compile_options(pad_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME original_wpad_input COMMAND pad_tests)
   add_executable(model_tests tests/ModelTests.cpp)
-  target_link_libraries(model_tests PRIVATE smg_platform)
+  target_link_libraries(model_tests PRIVATE smg_native_scene smg_platform)
   target_compile_options(model_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME j3d_models COMMAND model_tests)
   add_executable(etc1_tests tests/Etc1Tests.cpp)
-  target_link_libraries(etc1_tests PRIVATE smg_platform)
+  target_link_libraries(etc1_tests PRIVATE smg_native_scene smg_platform)
   target_compile_options(etc1_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME etc1_textures COMMAND etc1_tests)
   add_executable(gravity_tests tests/GravityTests.cpp)
@@ -416,59 +417,59 @@ else()
   target_compile_options(gravity_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME original_gravity COMMAND gravity_tests)
   add_executable(nameobj_tests tests/NameObjTests.cpp)
-  target_link_libraries(nameobj_tests PRIVATE petari_scene)
+  target_link_libraries(nameobj_tests PRIVATE smg_native_scene petari_scene)
   target_compile_options(nameobj_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME original_nameobj COMMAND nameobj_tests)
   add_executable(scene_tests tests/SceneTests.cpp)
-  target_link_libraries(scene_tests PRIVATE smg_platform)
+  target_link_libraries(scene_tests PRIVATE smg_native_scene smg_platform)
   target_compile_options(scene_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME original_scene_gravity COMMAND scene_tests)
   add_executable(collision_tests tests/CollisionTests.cpp)
-  target_link_libraries(collision_tests PRIVATE smg_platform)
+  target_link_libraries(collision_tests PRIVATE smg_native_scene smg_platform)
   target_compile_options(collision_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME original_collision COMMAND collision_tests)
   add_executable(animation_tests tests/AnimationTests.cpp)
-  target_link_libraries(animation_tests PRIVATE smg_platform)
+  target_link_libraries(animation_tests PRIVATE smg_native_scene smg_platform)
   target_compile_options(animation_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME j3d_animation COMMAND animation_tests)
   add_executable(actor_tests tests/ActorTests.cpp)
-  target_link_libraries(actor_tests PRIVATE smg_platform)
+  target_link_libraries(actor_tests PRIVATE smg_native_scene smg_platform)
   target_compile_options(actor_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME original_actor COMMAND actor_tests)
   add_executable(j3d_transform_tests tests/J3DTransformTests.cpp tests/J3DSkeletonTests.cpp)
-  target_link_libraries(j3d_transform_tests PRIVATE smg_platform)
+  target_link_libraries(j3d_transform_tests PRIVATE smg_native_scene smg_platform)
   target_compile_options(j3d_transform_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME j3d_transforms COMMAND j3d_transform_tests)
   add_executable(gx_command_tests tests/GxCommandTests.cpp)
-  target_link_libraries(gx_command_tests PRIVATE smg_platform)
+  target_link_libraries(gx_command_tests PRIVATE smg_native_scene smg_platform)
   target_compile_options(gx_command_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME gx_commands COMMAND gx_command_tests)
   add_executable(bmg_tests tests/BmgTests.cpp)
-  target_link_libraries(bmg_tests PRIVATE smg_platform)
+  target_link_libraries(bmg_tests PRIVATE smg_native_scene smg_platform)
   target_compile_options(bmg_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME bmg_text COMMAND bmg_tests)
   add_executable(audio_data_tests tests/AudioDataTests.cpp)
-  target_link_libraries(audio_data_tests PRIVATE smg_platform)
+  target_link_libraries(audio_data_tests PRIVATE smg_native_scene smg_platform)
   target_compile_options(audio_data_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME audio_data COMMAND audio_data_tests)
   add_executable(wii_dsp_tests tests/WiiDspTests.cpp)
-  target_link_libraries(wii_dsp_tests PRIVATE smg_platform)
+  target_link_libraries(wii_dsp_tests PRIVATE smg_native_scene smg_platform)
   target_compile_options(wii_dsp_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME wii_dsp COMMAND wii_dsp_tests)
   add_executable(gx_draw_tests tests/GxDrawTests.cpp)
-  target_link_libraries(gx_draw_tests PRIVATE smg_platform)
+  target_link_libraries(gx_draw_tests PRIVATE smg_native_scene smg_platform)
   target_compile_options(gx_draw_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME gx_draw COMMAND gx_draw_tests)
   add_executable(layout_tests tests/LayoutTests.cpp)
-  target_link_libraries(layout_tests PRIVATE smg_platform)
+  target_link_libraries(layout_tests PRIVATE smg_native_scene smg_platform)
   target_compile_options(layout_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME layout_family COMMAND layout_tests)
   add_executable(color_tests tests/ColorTests.cpp)
-  target_link_libraries(color_tests PRIVATE smg_platform)
+  target_link_libraries(color_tests PRIVATE smg_native_scene smg_platform)
   target_compile_options(color_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME colour_packing COMMAND color_tests)
   add_executable(combiner_tests tests/CombinerTests.cpp)
-  target_link_libraries(combiner_tests PRIVATE smg_platform)
+  target_link_libraries(combiner_tests PRIVATE smg_native_scene smg_platform)
   target_compile_options(combiner_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME tev_combiner COMMAND combiner_tests)
 endif()
