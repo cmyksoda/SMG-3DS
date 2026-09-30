@@ -2,6 +2,7 @@
 // See compat/smg/NativeResources.hpp.
 #include <JSystem/JKernel/JKRArchive.hpp>
 #include <smg/Bmg.hpp>
+#include <smg/FreeStore.hpp>
 #include <smg/Layout.hpp>
 #include <smg/NativeResources.hpp>
 #include <cstdio>
@@ -45,6 +46,7 @@ void smgNativeRarc(void* archive) {
 }
 
 void smgNativeLayoutFile(const char* name, void* data, u32 size) {
+    const smg::PortMemory memory;
     const char* dot = std::strrchr(name, '.');
     const char* (*turn)(std::uint8_t*, std::size_t) = nullptr;
     if (dot && !strcasecmp(dot, ".brlyt")) turn = smg::nativeBrlyt;
@@ -58,6 +60,7 @@ void smgNativeLayoutFile(const char* name, void* data, u32 size) {
 }
 
 void smgNativeFont(void* brfnt) {
+    const smg::PortMemory memory;
     auto* bytes = static_cast<std::uint8_t*>(brfnt);
     if (bytes == nullptr || std::memcmp(bytes, "RFNT", 4) != 0) return;  // already native, or not a font (ResFont says so)
     const u32 size = u32(bytes[8]) << 24 | u32(bytes[9]) << 16 | u32(bytes[10]) << 8 | bytes[11];
@@ -68,6 +71,7 @@ void smgNativeFont(void* brfnt) {
 }
 
 void smgNativeBmg(void* bmg, u32 size) {
+    const smg::PortMemory memory;
     if (const char* why = smg::nativeBmg(static_cast<std::uint8_t*>(bmg), size)) {
         std::fprintf(stderr, "A BMG message file %s\n", why);
         std::abort();

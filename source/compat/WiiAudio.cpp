@@ -2,6 +2,7 @@
 // (smg::WiiDsp) behind its mailboxes; the AI's DMA plays each buffer the game hands it through the 3DS's own DSP
 // (NDSP) and interrupts as each one starts, so JAudio2's audio thread paces itself as on the Wii.
 #include <3ds.h>
+#include <smg/FreeStore.hpp>
 #include <smg/WiiDsp.hpp>
 #include <revolution/ai.h>
 #include <revolution/dsp.h>
@@ -30,6 +31,7 @@ RecursiveLock sDspLock;
 // Each call finishes with the DSP, then raises what it asked for, so JAudio2's handler never runs inside it.
 template <typename Call>
 auto withDsp(Call call) {
+    const smg::PortMemory memory;
     RecursiveLock_Lock(&sDspLock);
     auto result = call();
     const bool raise = sRaiseDsp;

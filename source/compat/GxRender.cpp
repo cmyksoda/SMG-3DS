@@ -4,6 +4,7 @@
 #include <3ds.h>
 #include <citro3d.h>
 #include <GxShader.hpp>
+#include <smg/FreeStore.hpp>
 #include <smg/GxDraw.hpp>
 #include <smg/GxRender.hpp>
 #include <smg/Pica.hpp>
@@ -174,8 +175,12 @@ Renderer& renderer() {
 } // namespace
 
 void gxRenderPrimitive(const GxCommandProcessor& gpu, std::uint8_t kind, std::uint8_t format, std::uint16_t count, const std::uint8_t* vertices) {
+    const PortMemory memory;
     renderer().draw(gpu, kind, format, count, vertices);
 }
 
-void gxRenderCopy(const GxCommandProcessor& gpu, std::uint32_t command) { renderer().copy(gpu, command); }
+void gxRenderCopy(const GxCommandProcessor& gpu, std::uint32_t command) {
+    const PortMemory memory;
+    renderer().copy(gpu, command);
+}
 } // namespace smg
