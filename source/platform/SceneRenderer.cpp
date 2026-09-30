@@ -318,7 +318,7 @@ std::string describeLanding(const StageCollision& collision, const Stage& stage,
     auto* manager = MR::getSceneObj<PlanetGravityManager>(SceneObj_PlanetGravityManager);
     if (!manager->calcTotalGravityVector(&pull, nullptr, TVec3f(at[0], at[1], at[2]), GRAVITY_TYPE_NORMAL, 0)) return "";
     StageCollision::Hit hit;
-    if (!collision.strikeLine(TVec3f(at[0], at[1], at[2]), pull * 100000.0f, hit)) return "falls onto no collision";
+    if (!collision.land(TVec3f(at[0], at[1], at[2]), pull, hit)) return "falls onto no collision";
     char text[128];
     std::snprintf(text, sizeof text, "lands on %s %.1f below, %s floor", stage.objects[hit.object].name.c_str(), hit.distance,
                   hit.floor);

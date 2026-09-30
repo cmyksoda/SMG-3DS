@@ -270,7 +270,11 @@ Garden) is the only kind not placed. 63 rows use switch A, 15 switch B, 11 `SW_S
 a follower. Every scenario has gravity at Mario's start except twelve hidden-star scenarios
 (`IsHidden`), which place no MarioNo 0 entrance of their own; `Stage::entrance` says so instead
 of starting at the origin. Another 67 rows place actors with gravity of their own (the reverse
-and quarter-roll gravity rooms, gravity lights); they wait for `LiveActor`.
+and quarter-roll gravity rooms, gravity lights); they wait for `LiveActor`. The audit then follows
+each start's pull onto the placed models' collision, from 100 units back along it (a start may sit
+on or just under the surface): 116 of the 124 scenarios with an entrance land, 69 within 50 units
+below, 47 on a surface up to 50 units above the start point (most within 10). The eight that meet
+none start in the observatory dome, whose parts choose their collision by story state, or on a ship.
 
 `resource_audit --collision` repacks all 1,016 KCL files on the disc (677,800 triangles, 424 left out
 by the game as degenerate), sets each up as `CollisionParts::init` does, and casts 48 rays through each

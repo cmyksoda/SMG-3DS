@@ -131,7 +131,7 @@ int main(int argc, char** argv) {
     std::printf("Collision: %zu parts, %zu triangles from the placed models' own KCL files\n", collision.parts(),
                 collision.triangles());
     smg::StageCollision::Hit hit;
-    if (collision.strikeLine(at, pull * 100000.0f, hit)) {
+    if (collision.land(at, pull, hit)) {
         const auto& object = stage.objects[hit.object];
         std::printf("Falling along it lands on %s's collision (%s) after %.1f units, at (%.1f, %.1f, %.1f), face normal "
                     "(%.3f, %.3f, %.3f), floor code %s.\n", object.name.c_str(), object.zone.c_str(), hit.distance,

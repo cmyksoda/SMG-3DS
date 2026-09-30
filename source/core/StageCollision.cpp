@@ -128,4 +128,11 @@ bool StageCollision::strikeLine(const TVec3f& from, const TVec3f& segment, Hit& 
     }
     return found;
 }
+bool StageCollision::land(const TVec3f& at, const TVec3f& pull, Hit& hit) const {
+    constexpr float Back = 100, Reach = 100000;
+    TVec3f direction(pull);
+    if (direction.normalize() == 0 || !strikeLine(at - direction * Back, direction * (Back + Reach), hit)) return false;
+    hit.distance -= Back;
+    return true;
+}
 } // namespace smg

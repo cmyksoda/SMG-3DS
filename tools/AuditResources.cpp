@@ -5,6 +5,7 @@
 #include <smg/Model.hpp>
 #include <smg/Scene.hpp>
 #include <smg/Stage.hpp>
+#include <smg/StageCollision.hpp>
 #include <smg/StageGravity.hpp>
 #include <Game/Gravity/GravityInfo.hpp>
 #include <Game/Gravity/PlanetGravity.hpp>
@@ -102,7 +103,8 @@ int auditGravity(const fs::path& root) {
     std::sort(galaxies.begin(), galaxies.end());
     std::size_t scenarios = 0, failed = 0, placedTotal = 0, startState = 0, sampled = 0;
     std::map<std::string, std::size_t> placed, skipped;
-    std::vector<std::string> noStartGravity, withSkipped, noEntrance;
+    std::vector<std::string> noStartGravity, withSkipped, noEntrance, noLanding, farLandings;
+    std::map<std::string, std::size_t> landings, floors;
     for (const auto& galaxy : galaxies) {
         std::vector<std::uint8_t> storage;
         std::vector<smg::ArchiveEntry> entries;
@@ -180,6 +182,26 @@ int auditGravity(const fs::path& root) {
             }
             if (!stage.entrance) noEntrance.push_back(label);
             else if (!manager->calcTotalGravityVector(&pull, &info, start, GRAVITY_TYPE_NORMAL, 0)) noStartGravity.push_back(label);
+            else {
+                // Follow the start's pull onto the placed models' own collision.
+                smg::StageCollision collision;
+                smg::StageCollision::Hit hit;
+                if (!collision.load(root.string(), stage, error)) {
+                    std::fprintf(stderr, "COLLISION %s: %s\n", label.c_str(), error.c_str());
+                    ++errors;
+                } else if (!collision.land(start, pull, hit)) {
+                    noLanding.push_back(label);
+                } else {
+                    ++landings[hit.distance < -1 ? "1 to 100 units above the start" : hit.distance < 0 ? "within 1 unit above the start"
+                               : hit.distance < 50 ? "under 50 units below" : hit.distance < 500 ? "50 to 500 units below"
+                               : "500 units or more below"];
+                    if (hit.distance < -1)
+                        std::fprintf(stderr, "ABOVE %s: %s %.1f units above the start, normal (%.2f %.2f %.2f)\n", label.c_str(),
+                                     stage.objects[hit.object].name.c_str(), -hit.distance, hit.normal.x, hit.normal.y, hit.normal.z);
+                    ++floors[hit.floor];
+                    if (hit.distance >= 500) farLandings.push_back(label + " " + stage.objects[hit.object].name);
+                }
+            }
         }
     }
     std::printf("\n%zu galaxies, %zu scenarios, %zu failed to place\n", galaxies.size(), scenarios, failed);
@@ -193,6 +215,13 @@ int auditGravity(const fs::path& root) {
     for (const auto& label : noEntrance) std::printf(" [%s]", label.c_str());
     std::printf("\n%zu scenarios have no gravity at Mario's start:", noStartGravity.size());
     for (const auto& label : noStartGravity) std::printf(" [%s]", label.c_str());
+    std::printf("\nFollowing the start's pull onto the placed models' collision:\n");
+    for (const auto& [range, count] : landings) std::printf("%6zu  land %s\n", count, range.c_str());
+    for (const auto& [floor, count] : floors) std::printf("%6zu  on a %s floor\n", count, floor.c_str());
+    std::printf("%zu land far below:", farLandings.size());
+    for (const auto& label : farLandings) std::printf(" [%s]", label.c_str());
+    std::printf("\n%zu meet no collision:", noLanding.size());
+    for (const auto& label : noLanding) std::printf(" [%s]", label.c_str());
     std::printf("\n");
     return errors + failed == 0 ? 0 : 1;
 }

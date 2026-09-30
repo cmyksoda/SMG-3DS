@@ -43,6 +43,9 @@ public:
     };
     // The nearest face met along from + segment, front faces only.
     bool strikeLine(const TVec3f& from, const TVec3f& segment, Hit& hit) const;
+    // Follows a pull from a point to the ground under it. The ray starts 100 units back, as a body standing
+    // there would, so a start on or just inside the surface still finds it; distance is from the point.
+    bool land(const TVec3f& at, const TVec3f& pull, Hit& hit) const;
     std::size_t parts() const { return parts_.size(); }
     std::size_t triangles() const;
 
