@@ -106,15 +106,7 @@ void THPGXYuv2RgbSetup() { unported("THPGXYuv2RgbSetup"); }
 void WENCGetEncodeData() { unported("WENCGetEncodeData"); }
 // WPAD
 void WPADCanSendStreamData() { unported("WPADCanSendStreamData"); }
-void WPADControlMotor() { unported("WPADControlMotor"); }
-void WPADControlSpeaker() { unported("WPADControlSpeaker"); }
-void WPADDisconnect() { unported("WPADDisconnect"); }
-void WPADGetInfoAsync() { unported("WPADGetInfoAsync"); }
-void WPADGetSpeakerVolume() { unported("WPADGetSpeakerVolume"); }
-void WPADIsSpeakerEnabled() { unported("WPADIsSpeakerEnabled"); }
-void WPADProbe() { unported("WPADProbe"); }
 void WPADSendStreamData() { unported("WPADSendStreamData"); }
-void WPADSetAutoSleepTime() { unported("WPADSetAutoSleepTime"); }
 // __DSP_boot_task
 void __DSP_boot_task() { unported("__DSP_boot_task"); }
 }
