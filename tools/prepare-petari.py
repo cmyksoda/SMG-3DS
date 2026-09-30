@@ -76,11 +76,10 @@ NATIVE = {
         "WPadReadDataInfo::WPadReadDataInfo() : mStatusArray(), mValidStatusCount() {",
         "KPADStatus* WPadReadDataInfo::getKPadStatus(u32 index) const {", "u32 WPadReadDataInfo::getValidStatusCount() const {",
         "    WPad* getWPad(s32 channel) {"]),
-    # Replacing the global allocator hands every allocation to a JKRHeap, which the port does not set up yet.
-    "src/JSystem/JKernel/JKRHeap.cpp": ("the port allocates from the free store (source/compat/Heap.cpp)", [
-        "void* operator new(size_t size) {", "void* operator new(size_t size, int align) {", "void* operator new(size_t size, JKRHeap* pHeap, int align) {",
-        "void* operator new[](size_t size) {", "void* operator new[](size_t size, int align) {",
-        "void* operator new[](size_t size, JKRHeap* pHeap, int align) {", "void operator delete(void* pData) {", "void operator delete[](void* pData) {"]),
+    # Plain new and delete also serve allocations made before the game's heaps exist, and memory outside them.
+    "src/JSystem/JKernel/JKRHeap.cpp": ("the port's (source/compat/GameHeap.cpp)", [
+        "void* operator new(size_t size) {", "void* operator new[](size_t size) {", "void operator delete(void* pData) {",
+        "void operator delete[](void* pData) {"]),
 }
 written = {}  # source -> (target, text) for each adapted copy, which remainders build on
 extracted = {}  # source -> first lines copied into extracts
@@ -1245,9 +1244,10 @@ adapt("src/Game/System/GameEventFlagChecker.cpp", "Game/System/GameEventFlagChec
 adapt("src/Game/Animation/XanimeResource.cpp", "Game/Animation/XanimeResource.cpp", [], cases=["    case 1:"])
 adapt("src/Game/Ride/SurfRay.cpp", "Game/Ride/SurfRay.cpp", [], cases=["    case 11:"])
 
-# The Wii's boot; the port starts in source/platform/Main.cpp.
-adapt("src/Game/System/GameSystem.cpp", "Game/System/GameSystem.cpp", [], drop=["void main(void) {"],
-      reason="the Wii's boot; the port starts in source/platform/Main.cpp")
+# The Wii's entry point, kept whole under a name the port's own main can call (source/probe/MarioProbe.cpp).
+adapt("src/Game/System/GameSystem.cpp", "Game/System/GameSystem.cpp", [
+    ("void main(void) {\n    OSInitFastCast();", "void smgGameMain() {\n    OSInitFastCast();", 1),
+])
 
 # Metrowerks formed a pointer to member from the bare or unqualified name.
 adapt("src/Game/System/ResourceHolderManager.cpp", "Game/System/ResourceHolderManager.cpp", [
@@ -1352,10 +1352,6 @@ for relative, anchor, include in [
     ("libs/JSystem/include/JSystem/J2DGraph/J2DPane.hpp", '#include "JSystem/JSupport/JSUList.hpp"', "<revolution/gx/GXEnum.h>"),
 ]:
     adapt(relative, relative[relative.index("include/"):], [(anchor, f"{anchor}\n#include {include}", 1)])
-# Metrowerks' size_t is u32's unsigned long; the toolchains' own size_t is what operator new takes.
-adapt("src/JSystem/JKernel/JKRHeap.cpp", "JSystem/JKernel/JKRHeap.cpp", [
-    ("void* operator new(u32 size", "void* operator new(size_t size", 3), ("void* operator new[](u32 size", "void* operator new[](size_t size", 3),
-])
 adapt("src/JSystem/JKernel/JKRMemArchive.cpp", "JSystem/JKernel/JKRMemArchive.cpp", [], cases=["    case JKR_COMPRESSION_SZS:"])
 # The callback's argument carries a pointer (JAUSeqDataBlockMgr passes a link), which a 64-bit host cannot fit in u32.
 adapt("libs/JSystem/include/JSystem/JAudio2/JASResArcLoader.hpp", "include/JSystem/JAudio2/JASResArcLoader.hpp", [
@@ -1470,7 +1466,30 @@ adapt("src/JSystem/JMath/JMath.cpp", "JSystem/JMath/JMath.cpp", [
      "    dst->x = (b->x - a->x) * t + a->x;\n    dst->y = (b->y - a->y) * t + a->y;\n    dst->z = (b->z - a->z) * t + a->z;\n#endif", 1),
 ])
 
+# The GPU FIFO's register writes go through the one loud write point, as GXVert.h's do.
+adapt("libs/RVL_SDK/include/revolution/gx/GXRegs.h", "include/revolution/gx/GXRegs.h", [
+    (f"#define GX_WRITE_{kind}({arg}) gxfifo.{field} = ({cast})({arg})", f"#define GX_WRITE_{kind}({arg}) (GXWGFifoWrite(), (void)({arg}))", 1)
+    for kind, arg, field, cast in [("U8", "ub", "u8", "u8"), ("U16", "us", "u16", "u16"), ("S16", "us", "s16", "u16"),
+                                   ("U32", "ui", "u32", "u32"), ("F32", "f", "f32", "f32")]
+] + [("#define MEM_PE_REQCOUNTH_IDX", "void GXWGFifoWrite(void) __attribute__((noreturn));\n\n#define MEM_PE_REQCOUNTH_IDX", 1)])
+# JKRAram.hpp declared JKRDecomp's inline helper as an ordinary function, which Metrowerks then emitted somewhere.
+adapt("libs/JSystem/include/JSystem/JKernel/JKRAram.hpp", "include/JSystem/JKernel/JKRAram.hpp", [
+    ("u32 JKRDecompExpandSize(u8*);", '#include "JSystem/JKernel/JKRDecomp.hpp"', 1),
+])
+# DspBoot hands the Wii's audio DSP its microcode at cached-mirror addresses (0x80000000 up), which no 3DS
+# image can hold; the port's stop for it is in source/compat/WiiAudio.cpp.
+adapt("src/JSystem/JAudio2/dsptask.cpp", "JSystem/JAudio2/dsptask.cpp", [], drop=["void DspBoot(void (*pCallback)(void*)) {"],
+      reason="the Wii's audio DSP (source/compat/WiiAudio.cpp)")
+# Metrowerks' size_t is u32's unsigned long; the toolchains' own size_t is what operator new takes. The Wii's
+# boot info sits at the start of MEM1; the port's is in source/compat/OsMemory.cpp.
+adapt("src/JSystem/JKernel/JKRHeap.cpp", "JSystem/JKernel/JKRHeap.cpp", [
+    ("void* operator new(u32 size", "void* operator new(size_t size", 3), ("void* operator new[](u32 size", "void* operator new[](size_t size", 3),
+    ("    OSBootInfo* code = (OSBootInfo*)OSPhysicalToCached(0);", "    OSBootInfo* code = smgBootInfo();", 1),
+    ("bool JKRHeap::initArena(char** memory, u32* size, int maxHeaps) {",
+     'extern "C" OSBootInfo* smgBootInfo();\n\nbool JKRHeap::initArena(char** memory, u32* size, int maxHeaps) {', 1),
+])
 
+# Last: everything above may adapt a file these build on.
 # The rest of each file the scene libraries take extracts from, for the whole-game library: the same copy the
 # build would use otherwise, less what the extracts already define.
 for relative, firsts in extracted.items():

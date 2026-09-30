@@ -29,7 +29,6 @@ add_library(petari_core STATIC
   source/compat/StringUtil.cpp
   source/compat/Math.cpp
   source/compat/GameRandom.cpp
-  source/compat/Heap.cpp
   source/compat/Os.cpp
   "${CMAKE_CURRENT_BINARY_DIR}/petari/RVL_SDK/gd/GDBase.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/MathUtil.cpp"
@@ -93,7 +92,7 @@ add_library(petari_j3d STATIC
 target_link_libraries(petari_j3d PUBLIC petari_core petari_game_boundaries)
 # Loud stops for game classes the whole-game library builds for real. As a library linked after the scene and
 # J3D libraries, a program takes a stop only when nothing earlier defines the entry point.
-add_library(petari_game_boundaries STATIC source/compat/GameBoundaries.cpp)
+add_library(petari_game_boundaries STATIC source/compat/GameBoundaries.cpp source/compat/Heap.cpp)
 # The stops construct members the scene library defines; the two static libraries link each other.
 target_link_libraries(petari_game_boundaries PUBLIC petari_scene)
 if(NOT NINTENDO_3DS)
@@ -271,7 +270,7 @@ if(NINTENDO_3DS)
       list(APPEND PETARI_BUILT_ELSEWHERE "${source}")
     endforeach()
   endforeach()
-  set(PETARI_GAME_SOURCES source/compat/Sdk.cpp source/compat/Nw4rDb.cpp source/compat/DolTables.cpp
+  set(PETARI_GAME_SOURCES source/compat/Sdk.cpp source/compat/OsThreads.cpp source/compat/OsMemory.cpp source/compat/GameHeap.cpp source/compat/Dvd.cpp source/compat/Video.cpp source/compat/SystemConfig.cpp source/compat/Wpad.cpp source/compat/WiiAudio.cpp source/compat/Nw4rDb.cpp source/compat/DolTables.cpp
     "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/LiveActor/RailRiderCamera.cpp"
     "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/LiveActor/LiveActorSound.cpp")
   foreach(source ${PETARI_GAME_CANDIDATES})
@@ -283,6 +282,11 @@ if(NINTENDO_3DS)
       list(APPEND PETARI_GAME_SOURCES "${PETARI}/src/${source}")
     endif()
   endforeach()
+  # SDK libraries that are software through and through, built from their own C sources: the stand-in for the
+  # GameCube's ARAM in MEM2 (RVL "Dummy ARAM").
+  set(PETARI_SDK_SOURCES "${PETARI}/src/RVL_SDK/aralt/aralt.c")
+  list(APPEND PETARI_GAME_SOURCES ${PETARI_SDK_SOURCES})
+  set_source_files_properties(${PETARI_SDK_SOURCES} PROPERTIES LANGUAGE CXX)
   add_library(petari_game STATIC ${PETARI_GAME_SOURCES})
   target_link_libraries(petari_game PUBLIC petari_scene petari_anim)
   target_include_directories(petari_game PRIVATE include)

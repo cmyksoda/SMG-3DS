@@ -1,8 +1,6 @@
-// A bring-up app: the game's own MarioActor, made in the native scene, runs until it reaches something the port
-// does not have yet. Each stop names itself in the emulator's log (see docs/PORTING.md, "Road to Mario").
+// A bring-up app: the game's own boot (GameSystem.cpp's main) runs until it reaches something the port does not
+// have yet. Each stop names itself in the emulator's log (see docs/PORTING.md, "Road to Mario").
 #include <3ds.h>
-#include <smg/Scene.hpp>
-#include <Game/Player/MarioActor.hpp>
 #include <cstdio>
 
 // The game's static initializers run before main; stderr has to reach the emulator's log before any of them.
@@ -11,23 +9,19 @@ __attribute__((constructor(101))) static void logFromTheStart() {
     std::fprintf(stderr, "mario-probe: static initialization begins\n");
 }
 
+void smgGameMain();
+
 int main() {
     std::fprintf(stderr, "mario-probe: main\n");
     gfxInitDefault();
     consoleInit(GFX_TOP, nullptr);
-    std::printf("MarioActor bring-up\n\n");
-    std::fprintf(stderr, "mario-probe: constructing MarioActor\n");
-    smg::NativeScene scene;
-    auto* mario = new MarioActor("Mario");
-    std::fprintf(stderr, "mario-probe: MarioActor constructed at %p\n", static_cast<void*>(mario));
-    std::printf("MarioActor constructed.\nSTART exits.\n");
-    while (aptMainLoop()) {
-        hidScanInput();
-        if (hidKeysDown() & KEY_START) break;
-        gfxFlushBuffers();
-        gfxSwapBuffers();
-        gspWaitForVBlank();
-    }
+    // consoleInit takes stderr for the screen too; stops belong in the log, which outlives the app.
+    consoleDebugInit(debugDevice_SVC);
+    std::printf("SMG boot bring-up\n");
+    std::fprintf(stderr, "mario-probe: application memory %lu KiB, %lu KiB free\n", osGetMemRegionSize(MEMREGION_APPLICATION) / 1024,
+                 osGetMemRegionFree(MEMREGION_APPLICATION) / 1024);
+    std::fprintf(stderr, "mario-probe: entering the game's main\n");
+    smgGameMain();
     gfxExit();
     return 0;
 }

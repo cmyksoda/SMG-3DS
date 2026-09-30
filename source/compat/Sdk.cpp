@@ -12,6 +12,13 @@ namespace {
 } // namespace
 
 extern "C" {
+// AI
+void AIInit() { unported("AIInit"); }
+void AIInitDMA() { unported("AIInitDMA"); }
+void AIRegisterDMACallback() { unported("AIRegisterDMACallback"); }
+void AISetDSPSampleRate() { unported("AISetDSPSampleRate"); }
+void AIStartDMA() { unported("AIStartDMA"); }
+void AIStopDMA() { unported("AIStopDMA"); }
 // ARC
 void ARCChangeDir() { unported("ARCChangeDir"); }
 void ARCClose() { unported("ARCClose"); }
@@ -23,19 +30,13 @@ void ARCGetStartAddrInMem() { unported("ARCGetStartAddrInMem"); }
 void ARCInitHandle() { unported("ARCInitHandle"); }
 void ARCOpenDir() { unported("ARCOpenDir"); }
 void ARCReadDir() { unported("ARCReadDir"); }
-// DVD
-void DVDCancel() { unported("DVDCancel"); }
-void DVDCheckDiskAsync() { unported("DVDCheckDiskAsync"); }
-void DVDClose() { unported("DVDClose"); }
-void DVDCloseDir() { unported("DVDCloseDir"); }
-void DVDConvertPathToEntrynum() { unported("DVDConvertPathToEntrynum"); }
-void DVDFastOpen() { unported("DVDFastOpen"); }
-void DVDGetCommandBlockStatus() { unported("DVDGetCommandBlockStatus"); }
-void DVDOpen() { unported("DVDOpen"); }
-void DVDOpenDir() { unported("DVDOpenDir"); }
-void DVDReadAsyncPrio() { unported("DVDReadAsyncPrio"); }
-void DVDReadDir() { unported("DVDReadDir"); }
-void DVDReadPrio() { unported("DVDReadPrio"); }
+// DSP
+void DSPAssertInt() { unported("DSPAssertInt"); }
+void DSPCheckMailFromDSP() { unported("DSPCheckMailFromDSP"); }
+void DSPCheckMailToDSP() { unported("DSPCheckMailToDSP"); }
+void DSPInit() { unported("DSPInit"); }
+void DSPReadMailFromDSP() { unported("DSPReadMailFromDSP"); }
+void DSPSendMailToDSP() { unported("DSPSendMailToDSP"); }
 // GD
 void GDSetAlphaCompare() { unported("GDSetAlphaCompare"); }
 void GDSetBlendMode() { unported("GDSetBlendMode"); }
@@ -60,21 +61,28 @@ void GDSetTexImgPtr() { unported("GDSetTexImgPtr"); }
 void GDSetTexLookupMode() { unported("GDSetTexLookupMode"); }
 void GDSetZMode() { unported("GDSetZMode"); }
 // GX
+void GXAbortFrame() { unported("GXAbortFrame"); }
 void GXBegin() { unported("GXBegin"); }
 void GXClearVtxDesc() { unported("GXClearVtxDesc"); }
+void GXCopyDisp() { unported("GXCopyDisp"); }
 void GXCopyTex() { unported("GXCopyTex"); }
 void GXDisableBreakPt() { unported("GXDisableBreakPt"); }
 void GXDrawDone() { unported("GXDrawDone"); }
+void GXEnableBreakPt() { unported("GXEnableBreakPt"); }
 void GXEnableTexOffsets() { unported("GXEnableTexOffsets"); }
 void GXFlush() { unported("GXFlush"); }
 void GXGetCPUFifo() { unported("GXGetCPUFifo"); }
 void GXGetFifoPtrs() { unported("GXGetFifoPtrs"); }
+void GXGetGPStatus() { unported("GXGetGPStatus"); }
+void GXGetNumXfbLines() { unported("GXGetNumXfbLines"); }
 void GXGetProjectionv() { unported("GXGetProjectionv"); }
 void GXGetTexBufferSize() { unported("GXGetTexBufferSize"); }
 void GXGetTexObjAll() { unported("GXGetTexObjAll"); }
 void GXGetTexObjLODAll() { unported("GXGetTexObjLODAll"); }
 void GXGetTexObjTlut() { unported("GXGetTexObjTlut"); }
 void GXGetViewportv() { unported("GXGetViewportv"); }
+void GXGetYScaleFactor() { unported("GXGetYScaleFactor"); }
+void GXInit() { unported("GXInit"); }
 void GXInitLightAttn() { unported("GXInitLightAttn"); }
 void GXInitLightColor() { unported("GXInitLightColor"); }
 void GXInitLightDir() { unported("GXInitLightDir"); }
@@ -97,8 +105,16 @@ void GXPeekZ() { unported("GXPeekZ"); }
 void GXPixModeSync() { unported("GXPixModeSync"); }
 void GXPokeAlphaRead() { unported("GXPokeAlphaRead"); }
 void GXProject() { unported("GXProject"); }
+void GXReadXfRasMetric() { unported("GXReadXfRasMetric"); }
+void GXSetCopyClamp() { unported("GXSetCopyClamp"); }
 void GXSetCopyClear() { unported("GXSetCopyClear"); }
 void GXSetCopyFilter() { unported("GXSetCopyFilter"); }
+void GXSetDispCopyDst() { unported("GXSetDispCopyDst"); }
+void GXSetDispCopyGamma() { unported("GXSetDispCopyGamma"); }
+void GXSetDispCopySrc() { unported("GXSetDispCopySrc"); }
+void GXSetDispCopyYScale() { unported("GXSetDispCopyYScale"); }
+void GXSetDrawDone() { unported("GXSetDrawDone"); }
+void GXSetDrawDoneCallback() { unported("GXSetDrawDoneCallback"); }
 void GXSetDrawSync() { unported("GXSetDrawSync"); }
 void GXSetDrawSyncCallback() { unported("GXSetDrawSyncCallback"); }
 void GXSetDstAlpha() { unported("GXSetDstAlpha"); }
@@ -119,8 +135,13 @@ void GXSetZScaleOffset() { unported("GXSetZScaleOffset"); }
 void GXSetZTexture() { unported("GXSetZTexture"); }
 void GXTexModeSync() { unported("GXTexModeSync"); }
 // KPAD
+void KPADInit() { unported("KPADInit"); }
 void KPADRead() { unported("KPADRead"); }
 void KPADReset() { unported("KPADReset"); }
+void KPADSetDistParam() { unported("KPADSetDistParam"); }
+void KPADSetHoriParam() { unported("KPADSetHoriParam"); }
+void KPADSetPosParam() { unported("KPADSetPosParam"); }
+void KPADSetSensorHeight() { unported("KPADSetSensorHeight"); }
 // LC
 void LCDisable() { unported("LCDisable"); }
 void LCEnable() { unported("LCEnable"); }
@@ -128,43 +149,51 @@ void LCEnable() { unported("LCEnable"); }
 void MEMAllocFromAllocator() { unported("MEMAllocFromAllocator"); }
 void MEMFreeToAllocator() { unported("MEMFreeToAllocator"); }
 // NAND
+void NANDCheck() { unported("NANDCheck"); }
+void NANDClose() { unported("NANDClose"); }
+void NANDCreate() { unported("NANDCreate"); }
+void NANDDelete() { unported("NANDDelete"); }
 void NANDGetHomeDir() { unported("NANDGetHomeDir"); }
+void NANDGetLength() { unported("NANDGetLength"); }
 void NANDInitBanner() { unported("NANDInitBanner"); }
+void NANDMove() { unported("NANDMove"); }
+void NANDOpen() { unported("NANDOpen"); }
+void NANDRead() { unported("NANDRead"); }
+void NANDWrite() { unported("NANDWrite"); }
 // NWC24
 void NWC24CloseLib() { unported("NWC24CloseLib"); }
+void NWC24CommitMsg() { unported("NWC24CommitMsg"); }
 void NWC24GetErrorCode() { unported("NWC24GetErrorCode"); }
+void NWC24GetMsgSize() { unported("NWC24GetMsgSize"); }
+void NWC24GetMyUserId() { unported("NWC24GetMyUserId"); }
+void NWC24InitMsgObj() { unported("NWC24InitMsgObj"); }
 void NWC24OpenLib() { unported("NWC24OpenLib"); }
+void NWC24SetMsgAltName() { unported("NWC24SetMsgAltName"); }
+void NWC24SetMsgAttached() { unported("NWC24SetMsgAttached"); }
+void NWC24SetMsgLedPattern() { unported("NWC24SetMsgLedPattern"); }
+void NWC24SetMsgMBDelay() { unported("NWC24SetMsgMBDelay"); }
+void NWC24SetMsgMBNoReply() { unported("NWC24SetMsgMBNoReply"); }
+void NWC24SetMsgTag() { unported("NWC24SetMsgTag"); }
+void NWC24SetMsgText() { unported("NWC24SetMsgText"); }
+void NWC24SetMsgToId() { unported("NWC24SetMsgToId"); }
 // OS
-void OSCancelAlarm() { unported("OSCancelAlarm"); }
-void OSCancelThread() { unported("OSCancelThread"); }
-void OSDetachThread() { unported("OSDetachThread"); }
-void OSGetArenaHi() { unported("OSGetArenaHi"); }
+void OSCreateAlarm() { unported("OSCreateAlarm"); }
+void OSFillFPUContext() { unported("OSFillFPUContext"); }
 void OSGetCurrentContext() { unported("OSGetCurrentContext"); }
-void OSGetCurrentThread() { unported("OSGetCurrentThread"); }
+void OSGetResetButtonState() { unported("OSGetResetButtonState"); }
 void OSGetStackPointer() { unported("OSGetStackPointer"); }
-void OSGetTime() { unported("OSGetTime"); }
-void OSInitMessageQueue() { unported("OSInitMessageQueue"); }
-void OSInitMutex() { unported("OSInitMutex"); }
-void OSIsThreadSuspended() { unported("OSIsThreadSuspended"); }
-void OSIsThreadTerminated() { unported("OSIsThreadTerminated"); }
-void OSJamMessage() { unported("OSJamMessage"); }
-void OSJoinThread() { unported("OSJoinThread"); }
-void OSLockMutex() { unported("OSLockMutex"); }
+void OSGetThreadPriority() { unported("OSGetThreadPriority"); }
+void OSInitThreadQueue() { unported("OSInitThreadQueue"); }
+void OSProtectRange() { unported("OSProtectRange"); }
 void OSRebootSystem() { unported("OSRebootSystem"); }
-void OSReceiveMessage() { unported("OSReceiveMessage"); }
 void OSRestart() { unported("OSRestart"); }
-void OSResumeThread() { unported("OSResumeThread"); }
 void OSReturnToMenu() { unported("OSReturnToMenu"); }
-void OSSendMessage() { unported("OSSendMessage"); }
+void OSSetAlarm() { unported("OSSetAlarm"); }
+void OSSetPeriodicAlarm() { unported("OSSetPeriodicAlarm"); }
+void OSSetPowerCallback() { unported("OSSetPowerCallback"); }
+void OSSetThreadPriority() { unported("OSSetThreadPriority"); }
 void OSShutdownSystem() { unported("OSShutdownSystem"); }
-void OSSleepTicks() { unported("OSSleepTicks"); }
-void OSSuspendThread() { unported("OSSuspendThread"); }
-void OSTicksToCalendarTime() { unported("OSTicksToCalendarTime"); }
-void OSUnlockMutex() { unported("OSUnlockMutex"); }
-void OSYieldThread() { unported("OSYieldThread"); }
-// PPC
-void PPCMfmsr() { unported("PPCMfmsr"); }
-void PPCMtmsr() { unported("PPCMtmsr"); }
+void OSSleepThread() { unported("OSSleepThread"); }
 // RFL
 void RFLDrawOpa() { unported("RFLDrawOpa"); }
 void RFLDrawOpaCore() { unported("RFLDrawOpaCore"); }
@@ -185,9 +214,14 @@ void RFLMakeIcon() { unported("RFLMakeIcon"); }
 void RFLSearchOfficialData() { unported("RFLSearchOfficialData"); }
 void RFLSetExpression() { unported("RFLSetExpression"); }
 void RFLSetMtx() { unported("RFLSetMtx"); }
-// SC
-void SCGetAspectRatio() { unported("SCGetAspectRatio"); }
-void SCGetSoundMode() { unported("SCGetSoundMode"); }
+// RSO
+void RSOFindExportSymbolAddr() { unported("RSOFindExportSymbolAddr"); }
+void RSOGetJumpCodeSize() { unported("RSOGetJumpCodeSize"); }
+void RSOIsImportSymbolResolvedAll() { unported("RSOIsImportSymbolResolvedAll"); }
+void RSOLinkJump() { unported("RSOLinkJump"); }
+void RSOLinkList() { unported("RSOLinkList"); }
+void RSOListInit() { unported("RSOListInit"); }
+void RSOMakeJumpCode() { unported("RSOMakeJumpCode"); }
 // THP
 void THPAudioDecode() { unported("THPAudioDecode"); }
 void THPInit() { unported("THPInit"); }
@@ -200,25 +234,24 @@ void THPGXYuv2RgbSetup() { unported("THPGXYuv2RgbSetup"); }
 // TPL
 void TPLBind() { unported("TPLBind"); }
 void TPLGet() { unported("TPLGet"); }
-// VI
-void VIConfigure() { unported("VIConfigure"); }
-void VIFlush() { unported("VIFlush"); }
-void VIGetCurrentFrameBuffer() { unported("VIGetCurrentFrameBuffer"); }
-void VIGetRetraceCount() { unported("VIGetRetraceCount"); }
-void VIGetTvFormat() { unported("VIGetTvFormat"); }
-void VISetBlack() { unported("VISetBlack"); }
-void VISetNextFrameBuffer() { unported("VISetNextFrameBuffer"); }
-void VISetPostRetraceCallback() { unported("VISetPostRetraceCallback"); }
-void VISetPreRetraceCallback() { unported("VISetPreRetraceCallback"); }
-void VIWaitForRetrace() { unported("VIWaitForRetrace"); }
+// VF
+void VFInitEx() { unported("VFInitEx"); }
+// WENC
+void WENCGetEncodeData() { unported("WENCGetEncodeData"); }
 // WPAD
+void WPADCanSendStreamData() { unported("WPADCanSendStreamData"); }
 void WPADControlMotor() { unported("WPADControlMotor"); }
 void WPADControlSpeaker() { unported("WPADControlSpeaker"); }
+void WPADDisconnect() { unported("WPADDisconnect"); }
 void WPADGetInfoAsync() { unported("WPADGetInfoAsync"); }
+void WPADGetSensorBarPosition() { unported("WPADGetSensorBarPosition"); }
 void WPADGetSpeakerVolume() { unported("WPADGetSpeakerVolume"); }
 void WPADIsSpeakerEnabled() { unported("WPADIsSpeakerEnabled"); }
 void WPADProbe() { unported("WPADProbe"); }
+void WPADSendStreamData() { unported("WPADSendStreamData"); }
 void WPADSetAutoSleepTime() { unported("WPADSetAutoSleepTime"); }
 void WPADSetConnectCallback() { unported("WPADSetConnectCallback"); }
 void WPADSetExtensionCallback() { unported("WPADSetExtensionCallback"); }
+// __DSP_boot_task
+void __DSP_boot_task() { unported("__DSP_boot_task"); }
 }

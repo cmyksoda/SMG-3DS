@@ -12,6 +12,8 @@
 
 // The Wii's bus clock, which the SDK reads from low memory; OSGetTime's ticks run at a quarter of it.
 u32 __OSBusClock = 243000000;
+// Which floating-point exceptions trap; the 3DS's VFP traps none, whatever is set here.
+u32 __OSFpscrEnableBits = 0;
 
 void DCFlushRange(void*, u32) {}
 void DCStoreRange(void*, u32) {}
@@ -70,3 +72,27 @@ void OSPanic(const char* file, int line, const char* format, ...) {
 }
 
 void PPCHalt() { std::abort(); }
+
+// Each SDK library announces its version at boot; the SDK prints the line, as here.
+void OSRegisterVersion(const char* version) { OSReport("%s\n", version); }
+
+// The game's handlers for CPU exceptions (JUTException's crash screen), kept per exception as the SDK keeps them.
+// A fault on the 3DS is reported by the 3DS itself, so none of these is called.
+#include <revolution/os/OSError.h>
+namespace {
+OSErrorHandler sErrorHandlers[OS_ERROR_MAX] = {};
+} // namespace
+OSErrorHandler OSSetErrorHandler(OSError error, OSErrorHandler handler) {
+    if (error >= OS_ERROR_MAX) return nullptr;
+    const OSErrorHandler previous = sErrorHandlers[error];
+    sErrorHandlers[error] = handler;
+    return previous;
+}
+
+// The PowerPC's machine state register, which JUTException reads and writes to arm floating-point exceptions.
+// It holds a Wii game's usual value (interrupts, FPU, translation on); the 3DS's CPU takes no direction from it.
+namespace {
+u32 sMachineState = 0x0000B032;
+} // namespace
+u32 PPCMfmsr() { return sMachineState; }
+void PPCMtmsr(u32 state) { sMachineState = state; }
