@@ -42,6 +42,12 @@ completion does not make those interfaces portable to ARM11/PICA200.
 - `compileTev` translates each material's TEV program into at most six PICA200 combiner
   stages and three texture units, reporting when and why it has to approximate. Host and
   on-ARM tests compare it against reference GX and PICA evaluators.
+- The original `MathUtil`, `MtxUtil` and nine gravity shapes (point, parallel, cube, disk,
+  disk torus, cone, segment, wire and the `PlanetGravity` base) compile for ARM from
+  generated copies that include only what each file uses. Three helpers whose only bodies
+  were paired-single assembly, and `fastSqrtf`/`frsqrte`, have scalar bodies; the SDK matrix
+  and quaternion routines they call have portable implementations. `MR::getRandom` reads a
+  natively held `TRandom_fast_` seeded as `GameSystemObjHolder` seeds it.
 - `loadStage` resolves a galaxy's scenario, zones and layers into world-space placements.
   The renderer streams those models in one per frame, packs them into indexed 36-byte
   vertices and native texture formats, and draws them with the translated combiners, a GX
@@ -70,10 +76,15 @@ borrows its owner's sample storage rather than allocating the Wii's 120-sample I
 3. **PICA200 renderer.** The static stage path exists. Still missing: the zones' own light
    tables (a fixed light stands in), GX's second color channel, projection texgens (they
    fall back to sphere maps), mipmaps, BTK/BRK/BPK material animation, billboards, runtime
-   skinning, fog, particles and postprocessing. The 827 approximated TEV programs are listed
-   by `resource_audit --models`; the largest groups clamp between two combiner ops (411) or
-   need the incoming previous value twice, which the combiner buffer could hold (271).
-4. **Original scene and actor execution.** Bring up the original `NameObj`/`LiveActor` scheduler,
+   skinning, fog, particles and postprocessing. `resource_audit --models` lists the 254
+   approximated TEV programs by reason; most need more than two distinct constants (181).
+   Stage loading happens one model per frame on the main thread, so input is sluggish while
+   a galaxy streams in; a loader thread would fix that. Good Egg leaves ~14 MB of linear
+   memory in Azahar, so larger galaxies may need compressed (ETC1) textures.
+4. **Original scene and actor execution.** Placed gravity needs `GravityCreator`, whose
+   `MR::registerGravity` reaches `PlanetGravityManager` - a `NameObj` owned by the scene
+   object holder - so `NameObj` and the scene holder come before real stage gravity.
+   Then bring up the original `NameObj`/`LiveActor` scheduler,
    gravity, collision, stage placement, Mario, animation, and camera using the real resources.
    Integrate the input boundary into `GamePadUtil`/`WPad`, including explicit digital spin input.
    Skip the Wii pointer's multi-frame loss-of-IR delay: stylus lift must hide it immediately.
@@ -137,5 +148,6 @@ All 1,758 BMD/BDL models load under ASan and UBSan (5,053,844 triangles), and 6,
 across 12 zones; the preview draws 56 rigid models in 172 placements.
 
 The portable math tests check tolerances and conventions, not bit-identical Gekko rounding.
-The native validation app passes 1,054 math, 37 WPad, 179 BCSV, 1,043 J3D model/texture and
-4,203 TEV combiner checks on emulated ARM in Azahar. No physical console has been tested.
+The native validation app passes 1,069 math, 37 WPad, 179 BCSV, 1,043 J3D model/texture,
+4,404 TEV combiner and 14 original gravity checks on emulated ARM in Azahar. Of the disc's
+7,780 materials, 7,526 translate to the combiner exactly. No physical console has been tested.
