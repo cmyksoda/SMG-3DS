@@ -57,13 +57,37 @@ def msl_binders(text):
     return text
 
 
-def adapt(relative, target, replacements, drop=(), reason=""):
-    """Copy a file with exact replacements; `drop` leaves out whole definitions, found by first line, for `reason`."""
+def scoped_case(text, relative, label):
+    """Metrowerks let a case's declarations reach past the next label; braces give the case its own scope. `label`
+    is the label's whole line, or (line, which) when the same line opens cases in several switches."""
+    label, which = label if isinstance(label, tuple) else (label, 0)
+    line = label + "\n"
+    if text.count(line) <= which:
+        raise SystemExit(f"Upstream changed; review {relative}: {label!r}")
+    start = -1
+    for _ in range(which + 1):
+        start = text.index(line, start + 1)
+    body = start + len(line)
+    indent = len(label) - len(label.lstrip())
+    end = body
+    while True:  # the case runs to the next line indented no deeper than its label: a label or the switch's brace
+        following = text[end:text.index("\n", end) + 1]
+        if following.strip() and len(following) - len(following.lstrip()) <= indent:
+            break
+        end += len(following)
+    return text[:body - 1] + " {\n" + text[body:end] + " " * indent + "}\n" + text[end:]
+
+
+def adapt(relative, target, replacements, drop=(), reason="", cases=()):
+    """Copy a file with exact replacements; `drop` leaves out whole definitions, found by first line, for `reason`;
+    `cases` gives case labels their own scope (scoped_case)."""
     text = (root / relative).read_text()
     for before, after, expected in replacements:
         if text.count(before) != expected:
             raise SystemExit(f"Upstream changed; review {relative}: {before!r}")
         text = text.replace(before, after)
+    for label in cases:
+        text = scoped_case(text, relative, label)
     text = msl_binders(text)
     for first in drop:
         start, end = definition(text, relative, first)
@@ -1004,11 +1028,234 @@ adapt("include/Game/LiveActor/ShadowVolumeDrawer.hpp", "include/Game/LiveActor/S
     ("    virtual void loadModelDrawMtx() const override;\n    virtual void drawShape() const override;",
      "    virtual void loadModelDrawMtx() const;\n    virtual void drawShape() const;", 1),
 ])
-for relative in ["Game/AreaObj/AreaObjContainer.cpp", "Game/Screen/GalaxyMap.cpp", "Game/Demo/DemoExecutor.cpp",
+for relative in ["Game/AreaObj/AreaObjContainer.cpp", "Game/Demo/DemoExecutor.cpp",
                  "Game/Effect/MultiEmitter.cpp", "Game/LiveActor/EffectKeeper.cpp", "Game/LiveActor/LiveActorGroupArray.cpp",
                  "Game/MapObj/ElectricBall.cpp", "Game/MapObj/GeneralMapParts.cpp", "Game/Scene/MultiSceneEffectKeeper.cpp"]:
     adapt("src/" + relative, relative, [])
 # MSL's headers declared the narrow string functions along with the rest; the standard <cstring> does.
 adapt("src/Game/Util/StringUtil.cpp", "Game/Util/StringUtil.cpp", [
     ("#include <cstdio>\n#include <wstring.h>", "#include <cstdio>\n#include <cstring>\n#include <wstring.h>", 1),
+])
+
+TALK_STATE_NULLS = [
+        ('    _14 = nullptr;\n', '    _14 = 0;\n', 1),
+        ('    _10 = nullptr;\n', '    _10 = 0;\n', 1),
+        ('    if (_1C != nullptr) {\n', '    if (_1C != 0) {\n', 1),
+    ]
+# Metrowerks took nullptr wherever 0 or false fit: a count, a flag, a u32 argument, a bool compared.
+for relative, replacements in [
+    ("Game/AudioLib/AudParams.cpp", [
+        ('    const int aramAddr = nullptr;\n', '    const int aramAddr = 0;\n', 1),
+    ]),
+    ("Game/Boss/BossKameckStateBattle.cpp", [
+        ('    if (mBattlePattarn->_10 == nullptr) {\n', '    if (mBattlePattarn->_10 == false) {\n', 1),
+    ]),
+    ("Game/Demo/DemoCameraFunction.cpp", [
+        ('            return nullptr;\n', '            return false;\n', 1),
+    ]),
+    ("Game/Demo/DemoDirector.cpp", [
+        ('    startDemo(DemoStartRequestUtil::getDemoStarter(info), info.mDemoName, info.mFrameType == nullptr, info._24);\n', '    startDemo(DemoStartRequestUtil::getDemoStarter(info), info.mDemoName, info.mFrameType == 0, info._24);\n', 1),
+    ]),
+    ("Game/Enemy/BallBeamer.cpp", [
+        ('    initModelManagerWithAnm("BallBeamer", nullptr, nullptr);\n', '    initModelManagerWithAnm("BallBeamer", nullptr, false);\n', 1),
+        ('    initEffectKeeper(3, nullptr, nullptr);\n', '    initEffectKeeper(3, nullptr, false);\n', 1),
+        ('    initSound(2, nullptr);\n', '    initSound(2, false);\n', 1),
+    ]),
+    ("Game/Enemy/BegomanBase.cpp", [
+        ('    if (MR::getWaterAreaObj(&info, mPosition) != nullptr) {\n', '    if (MR::getWaterAreaObj(&info, mPosition) != false) {\n', 1),
+    ]),
+    ("Game/Enemy/HammerHeadPackun.cpp", [
+        ('    return jmap->mData ? jmap->mData->mNumEntries : nullptr;\n', '    return jmap->mData ? jmap->mData->mNumEntries : 0;\n', 1),
+    ]),
+    ("Game/Enemy/Mogucchi.cpp", [
+        ('    MR::calcGravityVector(this, MR::getRailPos(this), &mRailGravity, nullptr, nullptr);\n', '    MR::calcGravityVector(this, MR::getRailPos(this), &mRailGravity, nullptr, 0);\n', 1),
+    ]),
+    ("Game/Enemy/OtaRock.cpp", [
+        ('      mThrowCocoNutCounter(nullptr), mWaitFrame(0), _A4(), _D4(0.0f, 0.0f, 1.0f), mAnimScaleController(nullptr) {\n', '      mThrowCocoNutCounter(0), mWaitFrame(0), _A4(), _D4(0.0f, 0.0f, 1.0f), mAnimScaleController(nullptr) {\n', 1),
+    ]),
+    ("Game/MapObj/CrystalCage.cpp", [
+        ('        MR::setBinderOffsetVec(this, &_110, nullptr);\n', '        MR::setBinderOffsetVec(this, &_110, false);\n', 1),
+    ]),
+    ("Game/MapObj/LavaFloater.cpp", [
+        ('    initEffectKeeper(nullptr, nullptr, false);\n', '    initEffectKeeper(0, nullptr, false);\n', 1),
+    ]),
+    ("Game/MapObj/MarioLauncherAttractor.cpp", [
+        ('    initModelManagerWithAnm("MarioLauncherAttractor", nullptr, nullptr);\n', '    initModelManagerWithAnm("MarioLauncherAttractor", nullptr, false);\n', 1),
+    ]),
+    ("Game/Map/WaterPlant.cpp", [
+        ('    mPlantATex = new JUTTexture(MR::loadTexFromArc("WaterPlant.arc", "WaterPlantA.bti"), nullptr);\n', '    mPlantATex = new JUTTexture(MR::loadTexFromArc("WaterPlant.arc", "WaterPlantA.bti"), 0);\n', 1),
+        ('    mPlantBTex = new JUTTexture(MR::loadTexFromArc("WaterPlant.arc", "WaterPlantB.bti"), nullptr);\n', '    mPlantBTex = new JUTTexture(MR::loadTexFromArc("WaterPlant.arc", "WaterPlantB.bti"), 0);\n', 1),
+        ('    mPlantCTex = new JUTTexture(MR::loadTexFromArc("WaterPlant.arc", "WaterPlantC.bti"), nullptr);\n', '    mPlantCTex = new JUTTexture(MR::loadTexFromArc("WaterPlant.arc", "WaterPlantC.bti"), 0);\n', 1),
+        ('    mPlantDTex = new JUTTexture(MR::loadTexFromArc("WaterPlant.arc", "WaterPlantD.bti"), nullptr);\n', '    mPlantDTex = new JUTTexture(MR::loadTexFromArc("WaterPlant.arc", "WaterPlantD.bti"), 0);\n', 1),
+    ]),
+    ("Game/NPC/Syati.cpp", [
+        ('    initEffectKeeper(1, nullptr, nullptr);\n', '    initEffectKeeper(1, nullptr, false);\n', 1),
+    ]),
+    ("Game/NPC/TalkMessageCtrl.cpp", [
+        ('        if (mEventFunc->operator()(nodeEvent->mUnknown) == nullptr) {\n', '        if (mEventFunc->operator()(nodeEvent->mUnknown) == false) {\n', 1),
+        ('        if (mAnimeFunc->operator()(nodeEvent->mUnknown) == nullptr) {\n', '        if (mAnimeFunc->operator()(nodeEvent->mUnknown) == false) {\n', 1),
+        ('        if (mKillFunc->operator()(nodeEvent->mUnknown) == nullptr) {\n', '        if (mKillFunc->operator()(nodeEvent->mUnknown) == false) {\n', 1),
+    ]),
+    ("Game/NWC24/NWC24Messenger.cpp", [
+        ('        if (selectTask() == nullptr) {\n', '        if (selectTask() == false) {\n', 1),
+        ('            if (selectTask() != nullptr) {\n', '            if (selectTask() != false) {\n', 1),
+    ]),
+    ("Game/Screen/GalaxyMapSelectButton.cpp", [
+        ('    return mPaneCtrl->mIsSelected != nullptr && mPaneCtrl->isDecidedWait();\n', '    return mPaneCtrl->mIsSelected != false && mPaneCtrl->isDecidedWait();\n', 1),
+    ]),
+    ("Game/Screen/OdhConverter.cpp", [
+        ('    u32 getOdhImageSize() {\n        if (!isExistSceneObj(SceneObj_OdhConverter)) {\n            return nullptr;\n', '    u32 getOdhImageSize() {\n        if (!isExistSceneObj(SceneObj_OdhConverter)) {\n            return 0;\n', 1),
+    ]),
+    ("Game/Screen/PaneEffectKeeper.cpp", [
+        ('    if (mHost->getLayoutManager()->isExistPaneMtxRef(pName1) == nullptr) {\n', '    if (mHost->getLayoutManager()->isExistPaneMtxRef(pName1) == false) {\n', 1),
+    ]),
+    ("Game/Screen/SubMeterLayout.cpp", [
+        ('    MR::startAnim(this, "Appear", nullptr);\n', '    MR::startAnim(this, "Appear", 0);\n', 1),
+    ]),
+    ("Game/System/FileLoader.cpp", [
+        ('    mRequestedFileCount = nullptr;\n', '    mRequestedFileCount = 0;\n', 1),
+    ]),
+    ("Game/System/GameSystemStationedArchiveLoader.cpp", [
+        ('        napa->alloc(0x10000, nullptr);\n', '        napa->alloc(0x10000, 0);\n', 1),
+        ('        gddr->alloc(0x10000, nullptr);\n', '        gddr->alloc(0x10000, 0);\n', 1),
+    ]),
+    ("Game/System/StorySequenceExecutor.cpp", [
+        ('    case 12:\n        if (tryNextDemoInfo() != nullptr) {\n', '    case 12:\n        if (tryNextDemoInfo() != false) {\n', 1),
+        ('    case 13:\n        if (tryNextDemoInfo() != nullptr) {\n', '    case 13:\n        if (tryNextDemoInfo() != false) {\n', 1),
+    ]),
+    ("Game/Util/CameraUtil.cpp", [
+        ('        GXSetProjection(::getCameraContext()->mProjection, (GXProjectionType) nullptr);\n', '        GXSetProjection(::getCameraContext()->mProjection, (GXProjectionType) 0);\n', 1),
+    ]),
+]:
+    adapt("src/" + relative, relative, replacements)
+
+# Headers that found GX, matrix and DVD types through a Wii include chain the port's lighter headers cut short.
+for relative, anchor, include in [
+    ("include/Game/Screen/BloomEffect.hpp", '#include "Game/Screen/ImageEffectBase.hpp"', "<revolution/mtx.h>"),
+    ("include/Game/Map/OceanSphere.hpp", '#include "Game/LiveActor/LiveActor.hpp"', "<revolution/gx/GXStruct.h>"),
+    ("include/Game/Screen/StarPointerCommandStream.hpp", '#include "Game/Screen/LayoutActor.hpp"', "<revolution/gx/GXStruct.h>"),
+    ("include/Game/Screen/ScreenAlphaCapture.hpp", '#include "Game/NameObj/NameObj.hpp"', "<revolution/gx/GXEnum.h>"),
+    ("include/Game/Screen/GalaxyMapController.hpp", '#include "Game/Screen/LayoutActor.hpp"', "<revolution/gx/GXStruct.h>"),
+    ("include/Game/System/GameSystemResetAndPowerProcess.hpp", '#include "Game/Screen/LayoutActor.hpp"', "<revolution/dvd.h>"),
+    ("libs/JSystem/include/JSystem/JParticle/JPAEmitter.hpp", "#include <revolution/types.h>", "<revolution/gx/GXStruct.h>"),
+]:
+    adapt(relative, relative[relative.index("include/"):],
+          [(anchor, f"{anchor}\n#include {include}", 1)])
+
+# nw4r's child lists find each pane from its link at the link's real offset, which the upstream fallback set to 0.
+adapt("libs/nw4r/include/nw4r/lyt/pane.h", "include/nw4r/lyt/pane.h", [
+    ("#ifdef __MWERKS__\n        typedef ut::LinkList< Pane, offsetof(detail::PaneBase, mLink) > PaneList;\n#else\n"
+     "        typedef ut::LinkList< Pane, 0 > PaneList;\n#endif",
+     "        typedef ut::LinkList< Pane, offsetof(detail::PaneBase, mLink) > PaneList;", 1),
+])
+adapt("src/Game/Util/LayoutUtil.cpp", "Game/Util/LayoutUtil.cpp", [
+    ("template const nw4r::lyt::Pane* nw4r::ut::LinkList< nw4r::lyt::Pane, 4 >::ConstIterator::operator->() const;",
+     "template const nw4r::lyt::Pane* nw4r::lyt::PaneList::ConstIterator::operator->() const;", 1),
+    ("template nw4r::lyt::PaneList::Iterator nw4r::ut::LinkList< nw4r::lyt::Pane, 4 >::Iterator::operator++(int);",
+     "template nw4r::lyt::PaneList::Iterator nw4r::lyt::PaneList::Iterator::operator++(int);", 1),
+])
+
+adapt("src/Game/AreaObj/ChangeBgmCube.cpp", "Game/AreaObj/ChangeBgmCube.cpp", [], cases=["        case 0:", "        case 1:"])
+adapt("src/Game/System/GameEventFlagChecker.cpp", "Game/System/GameEventFlagChecker.cpp", [], cases=[
+    "    case GameEventFlag::Type_GalaxyOpenStar:", "    case GameEventFlag::Type_EventFlag:",
+    "    case GameEventFlag::Type_StarPiece:", "    case GameEventFlag::Type_EventValueIsZero:"])
+adapt("src/Game/Animation/XanimeResource.cpp", "Game/Animation/XanimeResource.cpp", [], cases=["    case 1:"])
+adapt("src/Game/Ride/SurfRay.cpp", "Game/Ride/SurfRay.cpp", [], cases=["    case 11:"])
+
+# The Wii's boot; the port starts in source/platform/Main.cpp.
+adapt("src/Game/System/GameSystem.cpp", "Game/System/GameSystem.cpp", [], drop=["void main(void) {"],
+      reason="the Wii's boot; the port starts in source/platform/Main.cpp")
+
+# Metrowerks formed a pointer to member from the bare or unqualified name.
+adapt("src/Game/System/ResourceHolderManager.cpp", "Game/System/ResourceHolderManager.cpp", [
+    ("SingletonHolder< ResourceHolderManager >::get(), createResourceHolder,",
+     "SingletonHolder< ResourceHolderManager >::get(), &ResourceHolderManager::createResourceHolder,", 1),
+    ("SingletonHolder< ResourceHolderManager >::get(), createLayoutHolder,",
+     "SingletonHolder< ResourceHolderManager >::get(), &ResourceHolderManager::createLayoutHolder,", 1),
+])
+adapt("src/Game/Screen/GalaxyMapController.cpp", "Game/Screen/GalaxyMapController.cpp", [
+    ("MR::Functor(this, GalaxyMapController::capture)", "MR::Functor(this, &GalaxyMapController::capture)", 1),
+])
+adapt("src/Game/NPC/NPCActor.cpp", "Game/NPC/NPCActor.cpp", [
+    ("MR::createJointDelegatorWithNullChildFunc(this, &calcJointScale, rCaps._70)",
+     "MR::createJointDelegatorWithNullChildFunc(this, &NPCActor::calcJointScale, rCaps._70)", 1),
+])
+# Tested as a bare member function name, Metrowerks checked the pointer to member (__ptmf_test), which is never
+# null: the condition always holds. Spelled out so GCC keeps that.
+adapt("src/Game/MapObj/MapPartsRailPosture.cpp", "Game/MapObj/MapPartsRailPosture.cpp", [
+    ("if (mMovePosture == 1 || isPostureTypeRailDirRailUseShadowGravity) {",
+     "if (mMovePosture == 1 || &MapPartsRailPosture::isPostureTypeRailDirRailUseShadowGravity != nullptr) {", 1),
+])
+adapt("src/Game/MapObj/Sandstorm.cpp", "Game/MapObj/Sandstorm.cpp", [
+    ("        if (isSunakazeKun) {", "        if (&Sandstorm::isSunakazeKun != nullptr) {", 1),
+])
+adapt("src/Game/Util/DemoUtil.cpp", "Game/Util/DemoUtil.cpp", [
+    ("    LiveActor* getTalkingActor() {\n        if (isExistSceneObj(SceneObj_TalkDirector) == false) {\n            return false;",
+     "    LiveActor* getTalkingActor() {\n        if (isExistSceneObj(SceneObj_TalkDirector) == false) {\n            return nullptr;", 1),
+])
+adapt("src/Game/Util/BezierSurface.cpp", "Game/Util/BezierSurface.cpp", [
+    ("#include <revolution/gx/GXVert.h>", "#include <revolution/gx/GXGeometry.h>\n#include <revolution/gx/GXVert.h>", 1),
+])
+adapt("src/Game/MapObj/MapPartsBreaker.cpp", "Game/MapObj/MapPartsBreaker.cpp", [
+    ("f32 TVec2f::squared(const TVec2f& rOther) const {", "template <>\nf32 TVec2f::squared(const TVec2f& rOther) const {", 1),
+])
+# A pointer to a temporary, read straight away by the caller: a local static holds the same value past the return.
+adapt("include/Game/MapObj/MorphItemObjNeo.hpp", "include/Game/MapObj/MorphItemObjNeo.hpp", [
+    ("        return &(TVec3f(0.0f, 200.0f, 0.0f));", "        static TVec3f offset(0.0f, 200.0f, 0.0f);\n        return &offset;", 2),
+    ("        return &TVec3f(0.0f, 580.0f, 0.0f);", "        static TVec3f offset(0.0f, 580.0f, 0.0f);\n        return &offset;", 1),
+])
+adapt("src/Game/Effect/EffectObjGravityDust.cpp", "Game/Effect/EffectObjGravityDust.cpp", [
+    ("    return &(TVec3f(0.0f, 500.0f * mScale.y, 0.0f));",
+     "    static TVec3f offset;\n    offset.set(0.0f, 500.0f * mScale.y, 0.0f);\n    return &offset;", 1),
+])
+adapt("src/Game/MapObj/PlantGroup.cpp", "Game/MapObj/PlantGroup.cpp", [
+    ("        const TVec3f* pUp = &(rGravity * 100.0f);", "        const TVec3f up = rGravity * 100.0f;\n        const TVec3f* pUp = &up;", 1),
+    ("        const TVec3f* pRay = &(rGravity * ::sCheckLineLength);",
+     "        const TVec3f ray = rGravity * ::sCheckLineLength;\n        const TVec3f* pRay = &ray;", 1),
+])
+adapt("src/Game/NPC/TalkState.cpp", "Game/NPC/TalkState.cpp", TALK_STATE_NULLS + [
+    ("f64 absolute = __fabs(camZ.dot(up));", "f64 absolute = std::fabs(camZ.dot(up));", 1),
+])
+adapt("src/Game/Boss/DinoPackunTailNode.cpp", "Game/Boss/DinoPackunTailNode.cpp", [
+    # MSL's <cmath> M_PI is a float.
+    ("MR::turnQuatXDirRad(&v24, v24, v23, M_PI);", "MR::turnQuatXDirRad(&v24, v24, v23, 3.14159265358979323846f);", 1),
+])
+adapt("src/Game/System/DrawBuffer.cpp", "Game/System/DrawBuffer.cpp", [
+    # MSL declared strcasecmp in <cstring>; newlib and glibc do in <strings.h>.
+    ("#include <cstring>", "#include <cstring>\n#include <strings.h>", 1),
+])
+# Our JMapInfo declares getValue returning plain bool (GCC ignores the const Metrowerks kept on it).
+for relative, types in [("Game/LiveActor/DynamicJointCtrl.cpp", ["f32"]), ("Game/Demo/DemoActionKeeper.cpp", ["s32", "const char*"]),
+                        ("Game/System/ScenarioDataParser.cpp", ["s32"])]:
+    adapt("src/" + relative, relative, [(f"template const bool JMapInfo::getValue< {t} >", f"template bool JMapInfo::getValue< {t} >", 1)
+                                        for t in types])
+adapt("src/Game/Screen/THPSimplePlayerWrapper.cpp", "Game/Screen/THPSimplePlayerWrapper.cpp", [
+    ("#include <cstring>", "#include <cstring>\n#include <revolution/sc.h>", 1),
+])
+adapt("src/Game/Screen/ReplaceTagProcessor.cpp", "Game/Screen/ReplaceTagProcessor.cpp", [
+    # MSL's va_list was a one-element array of its register-save struct; va_copy copies any toolchain's.
+    ("        *copy = *args;\n", "        va_copy(copy, args);\n", 2),
+])
+adapt("src/Game/Scene/IntermissionScene.cpp", "Game/Scene/IntermissionScene.cpp", [
+    ("    va_end();\n", "    va_end(list);\n", 1),
+])
+adapt("src/Game/System/MainLoopFramework.cpp", "Game/System/MainLoopFramework.cpp", [
+    ("C_MTXOrtho(proj, 0f, efbHeight, 0f, fbWidth, 0f, 1f);", "C_MTXOrtho(proj, 0.0f, efbHeight, 0.0f, fbWidth, 0.0f, 1.0f);", 1),
+    ("GXSetViewport(0f, 0f, fbWidth, efbHeight, 0f, 1f);", "GXSetViewport(0.0f, 0.0f, fbWidth, efbHeight, 0.0f, 1.0f);", 1),
+    ("    if (mCombinationRatio > 1f) {\n        mCombinationRatio = 1f;", "    if (mCombinationRatio > 1.0f) {\n        mCombinationRatio = 1.0f;", 1),
+])
+# An explicit specialization has to come before the code that uses the member; Metrowerks took it after.
+galaxy_map_destructors = "".join(f"template <>\ninline MR::Vector< MR::AssignableArray< {icon}* > >::~Vector() {{\n}}\n\n"
+                                 for icon in ["GalaxyMapIcon", "GalaxyMapCometIcon", "GalaxyMapDomeIcon", "GalaxyMapTicoIcon"])
+adapt("src/Game/Screen/GalaxyMap.cpp", "Game/Screen/GalaxyMap.cpp", [
+    (galaxy_map_destructors, "", 1),
+    ("GalaxyMap::GalaxyMap()\n", galaxy_map_destructors + "GalaxyMap::GalaxyMap()\n", 1),
+])
+demo_ring_buffer = (root / "src/Game/Demo/DemoStartRequestHolder.cpp").read_text()
+demo_ring_buffer = demo_ring_buffer[demo_ring_buffer.index("template <>\nMR::FixedRingBuffer< const DemoStartInfo*, 16 >::iterator::iterator("):]
+# push_back steps its iterator, so the iterator's operator++ goes first.
+constructor, push_back, increment = ["template <>\n" + part for part in demo_ring_buffer.split("template <>\n")[1:]]
+adapt("src/Game/Demo/DemoStartRequestHolder.cpp", "Game/Demo/DemoStartRequestHolder.cpp", [
+    (demo_ring_buffer, "", 1),
+    ("DemoStartInfo::DemoStartInfo() {\n", increment.rstrip("\n") + "\n\n" + constructor + push_back + "DemoStartInfo::DemoStartInfo() {\n", 1),
 ])
