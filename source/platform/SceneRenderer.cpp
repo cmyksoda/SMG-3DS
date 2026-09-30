@@ -581,7 +581,11 @@ void SceneRenderer::update(const InputFrame& input, float seconds) {
     const float rise = static_cast<float>(input.jump.held) - input.crouch.held;
     for (int i = 0; i < 3; ++i)
         position_[i] += (forward[i] * input.moveY + right[i] * input.moveX) * speed + (i == 1 ? rise * speed : 0);
-    if (gravity_) gravityHere_ = describeGravity(*gravity_, stage_, position_);
+    if (gravity_) {
+        // The scene's movement, as the game runs it each frame: switch and sleep state follow here.
+        gravity_->movement();
+        gravityHere_ = describeGravity(*gravity_, stage_, position_);
+    }
 }
 
 void SceneRenderer::drawInstance(const Instance& instance, const C3D_Mtx& view, bool translucent, const Material*& current) {
