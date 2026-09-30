@@ -1,5 +1,6 @@
 #include <smg/Model.hpp>
 #include <cstdio>
+#include <array>
 #include <cstring>
 
 namespace {
@@ -12,6 +13,16 @@ void printMaterial(const smg::ModelMaterial& m) {
         m.channels[0].lighting, m.channels[0].materialSource, m.channels[0].ambientSource, m.channels[0].lightMask,
         m.alphaTest.compare0, m.alphaTest.reference0, m.alphaTest.op, m.alphaTest.compare1, m.alphaTest.reference1,
         m.blend.type, m.blend.source, m.blend.destination, m.depth.enable, m.depth.function, m.depth.update);
+    const auto print = [](const char* label, const std::array<float, 4>* colors, unsigned count) {
+        std::printf("  %s", label);
+        for (unsigned i = 0; i < count; ++i)
+            std::printf(" (%.2f %.2f %.2f %.2f)", colors[i][0], colors[i][1], colors[i][2], colors[i][3]);
+        std::printf("\n");
+    };
+    print("material", m.materialColor, 2);
+    print("ambient", m.ambientColor, 2);
+    print("tev", m.tevColors, 4);
+    print("konst", m.konstColors, 4);
     for (unsigned i = 0; i < m.texGenCount; ++i)
         std::printf("  texgen %u: type %u src %u mtx %u\n", i, m.texGens[i].type, m.texGens[i].source, m.texGens[i].matrix);
     for (unsigned i = 0; i < m.tevStageCount; ++i) {

@@ -1,5 +1,6 @@
 #include <smg/Archive.hpp>
 #include <smg/Bcsv.hpp>
+#include <smg/Combiner.hpp>
 #include <smg/Model.hpp>
 #include <algorithm>
 #include <cctype>
@@ -32,8 +33,8 @@ int main(int argc, char** argv) {
     }
     if (ec) { std::fprintf(stderr,"Directory traversal: %s\n",ec.message().c_str()); return 2; }
     std::sort(archives.begin(), archives.end());
-    std::size_t tables=0, records=0, resources=0, errors=0, modelCount=0, triangles=0;
-    std::map<std::string, std::size_t> modelErrors;
+    std::size_t tables=0, records=0, resources=0, errors=0, modelCount=0, triangles=0, materials=0, exact=0;
+    std::map<std::string, std::size_t> modelErrors, approximations;
     for (const auto& path : archives) {
         std::vector<std::uint8_t> storage;
         std::vector<smg::ArchiveEntry> entries;
@@ -57,6 +58,12 @@ int main(int argc, char** argv) {
             smg::Model model;
             if (smg::loadModel({storage.data()+entry.offset,entry.size},model,256u*1024*1024,error)) {
                 triangles += model.vertices.size()/3;
+                for (const auto& material : model.materials) {
+                    ++materials;
+                    const auto program = smg::compileTev(material);
+                    if (program.exact) ++exact;
+                    else ++approximations[program.approximation];
+                }
                 continue;
             }
             std::fprintf(stderr,"MODEL %s :: %s: %s\n",path.c_str(),entry.path.c_str(),error.c_str());
@@ -69,6 +76,8 @@ int main(int argc, char** argv) {
         std::size_t failed = 0;
         for (const auto& [reason, count] : modelErrors) { std::printf("%6zu  %s\n", count, reason.c_str()); failed += count; }
         std::printf("%zu models, %zu loaded, %zu triangles\n", modelCount, modelCount - failed, triangles);
+        std::printf("%zu materials, %zu translated to the 3DS combiner exactly\n", materials, exact);
+        for (const auto& [reason, count] : approximations) std::printf("%6zu  approximated: %s\n", count, reason.c_str());
         errors += failed;
     }
     if (archives.empty()) { std::fprintf(stderr,"No archives found\n"); return 2; }
