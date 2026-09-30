@@ -1571,6 +1571,11 @@ adapt("src/Game/System/Overwrite.cpp", "Game/System/Overwrite.cpp", [
 adapt("src/Game/System/DrawSyncManager.cpp", "Game/System/DrawSyncManager.cpp", [
     ("        if (reinterpret_cast< u32 >(message) >= 0x80000000) {", "        if (reinterpret_cast< u32 >(message) > 0x10000) {", 1),
 ])
+# The Wii's MEM1 is writable wherever the program put this, and archives turn native in place as they mount; a 3dsx's
+# read-only data really is read-only.
+adapt("include/Game/System/ErrorArchive.hpp", "include/Game/System/ErrorArchive.hpp", [
+    ("const u8 cErrorArchive[] = {", "alignas(32) inline u8 cErrorArchive[] = {", 1),
+])
 # Colours packed into a u32 through memory read 0xRRGGBBAA on the Wii and byte-reversed on ARM; these pack and
 # unpack the value the Wii's way, so literals like 0xFF0000FF and u32s bound for the GPU keep their meaning.
 adapt("libs/nw4r/include/nw4r/ut/Color.h", "include/nw4r/ut/Color.h", [
