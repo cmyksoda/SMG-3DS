@@ -378,6 +378,46 @@ adapt("src/Game/Gravity/GravityCreator.cpp", "Game/Gravity/GravityCreator.cpp", 
     "PlanetGravity* WireGravityCreator::getGravity() {",
 ], reason="RailRider is not brought up")
 
+# Collision: the original KCollisionServer and attribute codes. CollisionParts, which owns a server per
+# placed part, takes a HitSensor whose host is a LiveActor, so it waits for actors.
+adapt("include/Game/Map/KCollision.hpp", "include/Game/Map/KCollision.hpp", [
+    ("#include <revolution.h>", "#include <revolution/types.h>", 1),
+    ("static bool isBinaryInitialized(const void*) NO_INLINE;", "static bool isBinaryInitialized(const void*);", 1),
+])
+adapt("include/Game/Camera/CameraPolygonCodeUtil.hpp", "include/Game/Camera/CameraPolygonCodeUtil.hpp", [
+    ("#include <revolution.h>", "#include <revolution/types.h>", 1),
+])
+adapt("src/Game/Map/KCollision.cpp", "Game/Map/KCollision.cpp", [
+    ('#include "Game/Map/CollisionDirector.hpp"\n', "", 1),
+    ('#include <algorithm>\n', '#include <algorithm>\n#include <cstdint>\n\n'
+     "// CollisionDirector's CollisionCode; answered by the native scene (source/compat/Scene.cpp) until the director runs.\n"
+     "CollisionCode* getSceneCollisionCode();\n", 1),
+    ("MR::getCollisionDirector()->mCode->getCameraID(iter)", "getSceneCollisionCode()->getCameraID(iter)", 1),
+    # Shifting by -1 is undefined in C++ (PowerPC's slw gave 0, then overwritten); a single block skips it.
+    ("    s32 offset = (((rZ >> blockWidthShift) << xyShift) | ((rY >> blockWidthShift) << xShift) | (rX >> blockWidthShift)) * 4;\n\n"
+     "    if (xyShift == -1 && xShift == -1) {\n        offset = 0;\n    }",
+     "    s32 offset = 0;\n\n"
+     "    if (xyShift != -1 || xShift != -1) {\n"
+     "        offset = (((rZ >> blockWidthShift) << xyShift) | ((rY >> blockWidthShift) << xShift) | (rX >> blockWidthShift)) * 4;\n"
+     "    }", 1),
+    # GCC rejects a goto past an initialized declaration; declare first, then assign.
+    ("    f32 distance = MR::sqrt(*pDist);", "    f32 distance;\n    distance = MR::sqrt(*pDist);", 1),
+    ("bool KCollisionServer::isBinaryInitialized(const void* pData) NO_INLINE {\n"
+     "    return reinterpret_cast< const s32* >(pData)[0] < 0;",
+     "bool KCollisionServer::isBinaryInitialized(const void* pData) {\n"
+     "    // Wii pointers have the top bit set and file offsets never do; anywhere, a pointer into the image\n"
+     "    // is no smaller than the image's own address, which no offset reaches.\n"
+     "    return reinterpret_cast< uintptr_t >(static_cast< const KCLFile* >(pData)->mPos) >= reinterpret_cast< uintptr_t >(pData);", 1),
+])
+adapt("src/Game/Map/CollisionCode.cpp", "Game/Map/CollisionCode.cpp", [
+    ('#include "Game/Map/HitInfo.hpp"', '#include "Game/Util/JMapInfo.hpp"', 1),
+], drop=[
+    "const char* CollisionCode::getFloorCodeString(const Triangle& rTriangle) {",
+    "const char* CollisionCode::getWallCodeString(const Triangle& rTriangle) {",
+    "const char* CollisionCode::getSoundCodeString(const Triangle& rTriangle) {",
+    "u32 CollisionCode::getCameraID(const Triangle& rTriangle) {",
+], reason="Triangle comes with CollisionParts, which waits for LiveActor")
+
 adapt("include/Game/System/WPadButton.hpp", "include/Game/System/WPadButton.hpp", [
     ("#include <revolution.h>", "#include <revolution/kpad.h>", 1),
 ])

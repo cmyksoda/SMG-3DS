@@ -1,9 +1,11 @@
 #pragma once
 #include <JSystem/JGeometry/TMatrix.hpp>
+#include <revolution/types.h>
 #include <string>
 #include <utility>
 #include <vector>
 
+class CollisionCode;
 class GravityCreator;
 class JMapInfo;
 class JMapInfoIter;
@@ -53,6 +55,19 @@ public:
     // Rows whose switches or followers are only honored as a scene starts: every switch off, nothing moved.
     const std::vector<std::string>& startStateGravities() const { return mStartStateGravities; }
 
+    // CollisionDirector's attribute codes, which KCollisionServer reads camera ids through.
+    CollisionCode& collisionCode() { return *mCollisionCode; }
+    // What CollisionParts hands CameraDirector while a part's collision initializes, kept until the camera runs.
+    struct CameraCodes {
+        std::string host;
+        s32 zone;
+        std::vector<u32> codes;
+    };
+    void beginCameraCodes(const char* host, s32 zone);
+    void addCameraCode(u32 code);
+    void endCameraCodes();
+    const std::vector<CameraCodes>& cameraCodes() const { return mCameraCodes; }
+
 private:
     NameObjHolder* mNameObjHolder;
     SceneObjHolder* mSceneObjHolder;
@@ -61,5 +76,8 @@ private:
     std::vector<std::pair<const JMapData*, int>> mZoneTables;
     std::vector<PlacedGravity> mGravities;
     std::vector<std::string> mSkippedGravities, mStartStateGravities;
+    CollisionCode* mCollisionCode;
+    std::vector<CameraCodes> mCameraCodes;
+    bool mCollectingCameraCodes = false;
 };
 } // namespace smg

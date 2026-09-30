@@ -1,5 +1,7 @@
 #include <smg/Scene.hpp>
+#include <Game/Camera/CameraPolygonCodeUtil.hpp>
 #include <Game/Gravity/PlanetGravityManager.hpp>
+#include <Game/Map/CollisionCode.hpp>
 #include <Game/NameObj/NameObjHolder.hpp>
 #include <Game/NameObj/NameObjRegister.hpp>
 #include <Game/Scene/SceneNameObjMovementController.hpp>
@@ -8,6 +10,7 @@
 #include <Game/Util/SceneUtil.hpp>
 #include <Game/Util/SingletonHolder.hpp>
 #include <Game/Util/SystemUtil.hpp>
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 
@@ -17,7 +20,8 @@ smg::NativeScene* sCurrent;
 
 namespace smg {
 // GameSystemSceneController's capacity.
-NativeScene::NativeScene() : mNameObjHolder(new NameObjHolder(0x1300)), mSceneObjHolder(new SceneObjHolder) {
+NativeScene::NativeScene()
+    : mNameObjHolder(new NameObjHolder(0x1300)), mSceneObjHolder(new SceneObjHolder), mCollisionCode(new CollisionCode) {
     if (sCurrent) {
         std::fputs("NativeScene: a scene is already running\n", stderr);
         std::abort();
@@ -34,6 +38,14 @@ NativeScene::~NativeScene() {
     for (const PlacedGravity& placed : mGravities) placed.destroy(placed.creator);
     for (int id = 0; id < SceneObj_NumMax; ++id) delete mSceneObjHolder->getObj(id);
     delete mSceneObjHolder;
+    for (CodeTable* table : {mCollisionCode->mFloorTable, mCollisionCode->mWallTable, mCollisionCode->mSoundTable,
+                             mCollisionCode->mCameraTable}) {
+        delete[] table->mHashTable;
+        delete[] table->mCodeTable;
+        delete[] table->mNameTable;
+        delete table;
+    }
+    delete mCollisionCode;
     SingletonHolder<NameObjRegister>::get()->setCurrentHolder(nullptr);
     delete mNameObjHolder;
     sCurrent = nullptr;
@@ -64,6 +76,24 @@ int NativeScene::zoneOf(const JMapInfoIter& row) const {
     std::abort();
 }
 
+void NativeScene::beginCameraCodes(const char* host, s32 zone) {
+    mCameraCodes.push_back({host, zone, {}});
+    mCollectingCameraCodes = true;
+}
+
+void NativeScene::addCameraCode(u32 code) {
+    if (!mCollectingCameraCodes) {
+        std::fputs("NativeScene: a camera code arrived outside a collection\n", stderr);
+        std::abort();
+    }
+    auto& codes = mCameraCodes.back().codes;
+    if (std::find(codes.begin(), codes.end(), code) == codes.end()) codes.push_back(code);
+}
+
+void NativeScene::endCameraCodes() {
+    mCollectingCameraCodes = false;
+}
+
 void NativeScene::movement() {
     if (mSyncRequested) {
         MR::syncWithFlagsAllSceneNameObj();
@@ -74,6 +104,10 @@ void NativeScene::movement() {
 
 NameObjHolder* getSceneNameObjHolder() {
     return &smg::NativeScene::current().nameObjHolder();
+}
+
+CollisionCode* getSceneCollisionCode() {
+    return &smg::NativeScene::current().collisionCode();
 }
 
 // The game makes about 120 kinds of scene object here; the port makes the ones it has brought up.
@@ -104,6 +138,19 @@ bool isPlacementLocalStage() {
 const TPos3f* getZonePlacementMtx(const JMapInfoIter& rIter) {
     const smg::NativeScene& scene = smg::NativeScene::current();
     return &scene.zonePlacement(scene.zoneOf(rIter));
+}
+
+// CameraDirector collects the camera codes of each part's collision; the native scene keeps them for it.
+void initCameraCodeCollection(const char* pName, s32 zone) {
+    smg::NativeScene::current().beginCameraCodes(pName, zone);
+}
+
+void registerCameraCode(u32 code) {
+    smg::NativeScene::current().addCameraCode(code);
+}
+
+void termCameraCodeCollection() {
+    smg::NativeScene::current().endCameraCodes();
 }
 
 // SceneNameObjMovementController's version asks for the same sync on its next movement().

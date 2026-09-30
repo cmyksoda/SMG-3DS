@@ -83,7 +83,10 @@ add_library(petari_scene STATIC
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Gravity/GravityCreator.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/GravityUtil.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/JMapUtil.cpp"
-  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/StringUtilCompare.cpp")
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/StringUtilCompare.cpp"
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Map/KCollision.cpp"
+  "${PETARI}/src/Game/Map/KCollisionPlus.cpp"
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Map/CollisionCode.cpp")
 target_link_libraries(petari_scene PUBLIC petari_gravity)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
   "${PETARI}/src/Game/NameObj/NameObjHolder.cpp" "${PETARI}/src/Game/Util/HashUtil.cpp"
@@ -96,12 +99,14 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
   "${PETARI}/src/Game/Util/ObjUtil.cpp" "${PETARI}/src/Game/Util/SystemUtil.cpp"
   "${PETARI}/include/Game/NameObj/NameObjHolder.hpp" "${PETARI}/include/Game/Util/ObjUtil.hpp"
   "${PETARI}/libs/JSystem/include/JSystem/JSupport/JSUList.hpp"
-  "${PETARI}/libs/JSystem/include/JSystem/JKernel/JKRHeap.hpp")
+  "${PETARI}/libs/JSystem/include/JSystem/JKernel/JKRHeap.hpp"
+  "${PETARI}/src/Game/Map/KCollision.cpp" "${PETARI}/include/Game/Map/KCollision.hpp"
+  "${PETARI}/src/Game/Map/CollisionCode.cpp" "${PETARI}/include/Game/Camera/CameraPolygonCodeUtil.hpp")
 
 add_library(smg_platform STATIC
   source/core/Input.cpp source/core/Motion.cpp source/core/Settings.cpp source/core/Session.cpp
   source/core/Archive.cpp source/core/Bcsv.cpp source/core/Model.cpp source/core/Texture.cpp source/core/Combiner.cpp
-  source/core/Stage.cpp source/core/StageGravity.cpp source/core/Mesh.cpp source/core/Etc1.cpp
+  source/core/Stage.cpp source/core/StageGravity.cpp source/core/Mesh.cpp source/core/Etc1.cpp source/core/Kcl.cpp
   source/compat/NativePad.cpp)
 target_include_directories(smg_platform PUBLIC include)
 target_link_libraries(smg_platform PUBLIC petari_scene)
@@ -134,7 +139,7 @@ if(NINTENDO_3DS)
   if(SMG_BUILD_VALIDATION)
     add_executable(native_validation tests/NativeTests.cpp tests/MathTests.cpp tests/PadTests.cpp tests/BcsvTests.cpp
       tests/ModelTests.cpp tests/CombinerTests.cpp tests/GravityTests.cpp tests/Etc1Tests.cpp tests/GpuTests.cpp
-      tests/NameObjTests.cpp tests/SceneTests.cpp)
+      tests/NameObjTests.cpp tests/SceneTests.cpp tests/CollisionTests.cpp)
     set_target_properties(native_validation PROPERTIES SUFFIX ".elf")
     target_compile_definitions(native_validation PRIVATE SMG_TEST_RUNNER)
     target_link_directories(native_validation PRIVATE "${DEVKITPRO}/libctru/lib")
@@ -199,6 +204,10 @@ else()
   target_link_libraries(scene_tests PRIVATE smg_platform)
   target_compile_options(scene_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME original_scene_gravity COMMAND scene_tests)
+  add_executable(collision_tests tests/CollisionTests.cpp)
+  target_link_libraries(collision_tests PRIVATE smg_platform)
+  target_compile_options(collision_tests PRIVATE -Wall -Wextra -Werror)
+  add_test(NAME original_collision COMMAND collision_tests)
   add_executable(combiner_tests tests/CombinerTests.cpp)
   target_link_libraries(combiner_tests PRIVATE smg_platform)
   target_compile_options(combiner_tests PRIVATE -Wall -Wextra -Werror)
