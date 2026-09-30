@@ -47,7 +47,8 @@ completion does not make those interfaces portable to ARM11/PICA200.
   generated copies that include only what each file uses. Three helpers whose only bodies
   were paired-single assembly, and `fastSqrtf`/`frsqrte`, have scalar bodies; the SDK matrix
   and quaternion routines they call have portable implementations. `MR::getRandom` reads a
-  natively held `TRandom_fast_` seeded as `GameSystemObjHolder` seeds it.
+  natively held `TRandom_fast_` seeded as `GameSystemObjHolder` seeds it. Point, parallel,
+  disk and segment gravity are under test; cube, cone, wire and torus compile but are not yet.
 - `loadStage` resolves a galaxy's scenario, zones and layers into world-space placements.
   The renderer streams those models in one per frame, packs them into indexed 36-byte
   vertices and native texture formats, and draws them with the translated combiners, a GX
@@ -78,9 +79,9 @@ borrows its owner's sample storage rather than allocating the Wii's 120-sample I
    fall back to sphere maps), mipmaps, BTK/BRK/BPK material animation, billboards, runtime
    skinning, fog, particles and postprocessing. `resource_audit --models` lists the 254
    approximated TEV programs by reason; most need more than two distinct constants (181).
-   Stage loading happens one model per frame on the main thread, so input is sluggish while
-   a galaxy streams in; a loader thread would fix that. Good Egg leaves ~14 MB of linear
-   memory in Azahar, so larger galaxies may need compressed (ETC1) textures.
+   A loader thread decodes models while the main thread uploads one per frame. CMPR
+   textures become ETC1/ETC1A4 (a GPU readback test confirms the block layout), leaving
+   19.4 MB of linear memory after Good Egg in Azahar; other formats stay uncompressed.
 4. **Original scene and actor execution.** Placed gravity needs `GravityCreator`, whose
    `MR::registerGravity` reaches `PlanetGravityManager` - a `NameObj` owned by the scene
    object holder - so `NameObj` and the scene holder come before real stage gravity.
@@ -172,5 +173,6 @@ across 12 zones; the preview draws 56 rigid models in 172 placements.
 
 The portable math tests check tolerances and conventions, not bit-identical Gekko rounding.
 The native validation app passes 1,069 math, 37 WPad, 179 BCSV, 1,043 J3D model/texture,
-4,404 TEV combiner and 14 original gravity checks on emulated ARM in Azahar. Of the disc's
+4,404 TEV combiner, 23 original gravity, 7 ETC1 and 8 GPU texture checks on emulated ARM
+in Azahar; the GPU checks compare the hardware's ETC1 decoding against ours. Of the disc's
 7,780 materials, 7,526 translate to the combiner exactly. No physical console has been tested.
