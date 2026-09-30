@@ -50,7 +50,12 @@ completion does not make those interfaces portable to ARM11/PICA200.
   whole signed value, a stage saturates only when its clamp bit is set, and the output is taken
   modulo 256. A third of the disc's materials read a signed register as d (Good Egg's start planet
   keep -0.5 in C0's alpha); a constant clamped to zero there turned whole planets white.
-  Range tracking marks programs where an unclamped value would need more than 0..1.
+  Range tracking marks programs where an unclamped value would need more than 0..1. When the last
+  stage's unclamped sum provably stays within one window of 256 steps without reaching the eleven-bit
+  limit, the wrap is folded into its constant d and the program stays exact. Mario's eyelid depends on
+  it: 1 + texA/4 + 1/2 wraps to 127 where the lid's texture is clear, just under its alpha test's 128,
+  so the eye shows through. A register whose value every input fixed can be read as a constant; that is
+  tried when reading the previous value is not exact, since it costs a constant slot.
 - The original `MathUtil`, `MtxUtil` and nine gravity shapes (point, parallel, cube, disk,
   disk torus, cone, segment, wire and the `PlanetGravity` base) compile for ARM from
   generated copies that include only what each file uses. Three helpers whose only bodies
@@ -176,10 +181,10 @@ borrows its owner's sample storage rather than allocating the Wii's 120-sample I
 3. **PICA200 renderer.** The static stage path exists. Still missing: point lights, GX's second
    color channel, projection texgens (they
    fall back to sphere maps), mipmaps, BTK and BPK animation and BRK playback over time, billboards, runtime
-   skinning, fog, particles and postprocessing. `resource_audit --models` lists the 831
-   approximated TEV programs by reason: an unclamped output or value outside 0..1 (370 and 156,
-   which the combiner saturates where GX would wrap or carry it) and more than two distinct
-   constants (210) lead.
+   skinning of placed models, fog, particles and postprocessing. `resource_audit --models` lists the 793
+   approximated TEV programs by reason: more than two distinct constants (314) and an unclamped
+   output or value outside 0..1 (228 and 156, which the combiner saturates where GX would wrap or
+   carry it) lead.
    A loader thread decodes models while the main thread uploads one per frame. CMPR
    textures become ETC1/ETC1A4 (a GPU readback test confirms the block layout), leaving
    19.4 MB of linear memory after Good Egg in Azahar; other formats stay uncompressed.
@@ -345,12 +350,12 @@ the walk stops at the first block with any hit although that hit lies beyond it.
 One file has no attribute table (`CocoTree`) and one triangle of `BigBigFly` names a missing row; the
 game ignores both.
 
-All 1,758 BMD/BDL models load under ASan and UBSan (5,053,844 triangles), and 6,949 of their
+All 1,758 BMD/BDL models load under ASan and UBSan (5,053,844 triangles), and 6,987 of their
 7,780 materials translate to the combiner exactly. Good Egg scenario 1 places 296 objects
 across 12 zones; the preview draws 56 rigid models in 172 placements.
 
 The portable math tests check tolerances and conventions, not bit-identical Gekko rounding.
 The native validation app passes 1,069 math, 37 WPad, 179 BCSV, 1,043 J3D model/texture,
-8,607 TEV combiner, 27 original gravity, 27 NameObj, 89 scene and gravity creator, 48 collision, 21 J3D animation, 7 ETC1 and 8 GPU texture checks on emulated ARM
+8,810 TEV combiner, 27 original gravity, 27 NameObj, 89 scene and gravity creator, 48 collision, 21 J3D animation, 7 ETC1 and 8 GPU texture checks on emulated ARM
 in Azahar; the GPU checks compare the hardware's ETC1 decoding against ours. Of the disc's
-7,780 materials, 6,949 translate to the combiner exactly. No physical console has been tested.
+7,780 materials, 6,987 translate to the combiner exactly. No physical console has been tested.

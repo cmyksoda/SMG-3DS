@@ -25,10 +25,11 @@ float konst(const smg::ModelMaterial& m, std::uint8_t select, int component) {
     return 1;
 }
 
-// Inputs a, b and c take a register's low eight bits.
+// Inputs a, b and c take a register's low eight bits, and so does the output: modulo 256 steps, kept
+// continuous so it compares with the combiner's unrounded arithmetic.
 float wrapByte(float v) {
     if (v >= 0 && v <= 1) return v;
-    return static_cast<float>(static_cast<int>(std::lround(v * 255)) & 255) / 255;
+    return v - 256 / 255.0f * std::floor(v * 255 / 256 + 1e-6f);
 }
 
 // The GX TEV as Dolphin models it: every stage computes d +/- lerp(a, b, c), then bias and scale; it
@@ -159,6 +160,10 @@ void dump(const smg::ModelMaterial& m, const smg::CombinerProgram& p, const Inpu
             int(s.alphaOperand[0]), int(s.alphaSource[1]), int(s.alphaOperand[1]), int(s.alphaSource[2]),
             int(s.alphaOperand[2]), s.alphaScale, s.constant[0], s.constant[1], s.constant[2], s.constant[3]);
     }
+    for (int r = 0; r < 4; ++r)
+        std::fprintf(stderr, "tev %d: %.3f %.3f %.3f %.3f\n", r, m.tevColors[r][0], m.tevColors[r][1], m.tevColors[r][2], m.tevColors[r][3]);
+    for (unsigned i = 0; i < m.tevStageCount; ++i)
+        std::fprintf(stderr, "clamp %u: %u %u, reg %u %u\n", i, m.stages[i].colorClamp, m.stages[i].alphaClamp, m.stages[i].colorReg, m.stages[i].alphaReg);
     const auto g = gx(m, in), q = pica(p, in);
     std::fprintf(stderr, "gx %.3f %.3f %.3f %.3f pica %.3f %.3f %.3f %.3f\n", g[0], g[1], g[2], g[3], q[0], q[1], q[2], q[3]);
 }
@@ -250,6 +255,47 @@ void diskGardenGrass(std::mt19937& rng) {
     lit.raster = {1, 1, 1, 1};
     const auto out = pica(program, lit);
     check(std::fabs(out[1] - 2 * 4 * (56 / 255.0f) * 0.3f) < 1e-3f && out[0] < 0.9f, "lit grass keeps its texture");
+}
+
+// Mario's EyeLid_v: the last alpha is 1 + texA/4 + 1/2, unclamped, which wraps to just under the alpha
+// test's 128 where the texture is clear, so the eye shows through the lid's hole.
+void marioEyeLid(std::mt19937& rng) {
+    smg::ModelMaterial m;
+    m.textures[0] = 0;
+    m.tevColors[0] = {0, 0, 0, -102 / 255.0f};
+    m.tevColors[1] = {0, 0, 0, 51 / 255.0f};
+    m.tevColors[2] = {1, 1, 1, 1};
+    m.konstColors[0] = {1, 1, 1, 10 / 255.0f};
+    m.tevStageCount = 3;
+    const std::uint8_t color[3][4]{{15, 2, 10, 2}, {15, 10, 1, 0}, {4, 8, 10, 0}};
+    const std::uint8_t alpha[3][4]{{4, 2, 5, 1}, {7, 6, 6, 7}, {7, 4, 6, 0}};
+    const std::uint8_t konst[3][2]{{0x0c, 0x05}, {0x07, 0x00}, {0x0c, 0x06}};
+    for (int i = 0; i < 3; ++i) {
+        auto& s = m.stages[i];
+        std::copy(color[i], color[i] + 4, s.colorIn);
+        std::copy(alpha[i], alpha[i] + 4, s.alphaIn);
+        s.channel = 4;
+        s.texMap = s.texCoord = 0;
+        s.konstColor = konst[i][0], s.konstAlpha = konst[i][1];
+    }
+    m.stages[0].alphaScale = 2;
+    m.stages[2].colorScale = 1;
+    m.stages[2].alphaBias = 1;
+    m.stages[2].alphaClamp = 0;
+    const auto program = smg::compileTev(m);
+    if (!program.exact) dump(m, program, randomInputs(rng));
+    check(program.exact, "the eyelid's wrapping alpha translates exactly");
+    for (int i = 0; i < 200; ++i) {
+        const auto in = randomInputs(rng);
+        if (!same(gx(m, in), pica(program, in))) dump(m, program, in);
+        check(same(gx(m, in), pica(program, in)), "the eyelid matches GX");
+    }
+    Inputs hole{};
+    hole.raster = {1, 1, 1, 1};
+    // GX's bias is 128 steps where this model adds half of 255, so the hardware's 127 shows here as 126.5.
+    check(pica(program, hole)[3] * 255 < 127.5f, "a clear texel wraps below the alpha test's 128");
+    hole.texture[0] = {1, 1, 1, 1};
+    check(pica(program, hole)[3] * 255 >= 128, "an opaque texel passes it");
 }
 
 // d + lerp(a, b, c) with the previous value as both d and c needs it after the first op.
@@ -344,6 +390,7 @@ int runCombinerTests() {
     std::mt19937 rng(1234);
     realMaterial(rng);
     diskGardenGrass(rng);
+    marioEyeLid(rng);
     previousTwice(rng);
     randomMaterials(rng);
     std::printf("%u TEV combiner checks passed\n", checks);

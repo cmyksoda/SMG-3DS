@@ -118,7 +118,10 @@ struct Compiler {
     // What each register can hold (color, alpha), signed as GX keeps it; unclamped stages can leave 0..1.
     Range ranges[4][2];
 
-    Compiler(const ModelMaterial& material, bool leadingStage) : m(material), leading(leadingStage) {
+    bool knownConstants;
+
+    Compiler(const ModelMaterial& material, bool leadingStage, bool known)
+        : m(material), leading(leadingStage), knownConstants(known) {
         registers[0] = m.tevColors[3];
         for (int i = 0; i < 3; ++i) registers[i + 1] = m.tevColors[i];
         for (int i = 0; i < 4; ++i) {
@@ -138,7 +141,12 @@ struct Compiler {
             if (!colorInput || alphaPart) return constant(value(r[3]));
             return constant(value(r[0]), value(r[1]), value(r[2]));
         }
-        if (!ranges[index][part].inUnit()) approximate("unclamped value");
+        const Range& known = ranges[index][part];
+        // A register whose value every input fixed is a constant, however the combiner has moved on.
+        if (knownConstants && known.lo == known.hi) {
+            return constant(d ? known.lo : wrapByte(known.lo));
+        }
+        if (!known.inUnit()) approximate("unclamped value");
         if (live[part] != index) approximate("overwritten register read");
         return kind(Arg::Prev, operand);
     }
@@ -471,13 +479,15 @@ struct Compiler {
     }
 
     // Bounds of what a stage leaves in its register: GX saturates only when the stage asks it to.
-    Range stageRange(const TevStage& s, bool alpha) {
+    Range stageRange(const TevStage& s, bool alpha, bool saturate = true) {
         const auto* in = alpha ? s.alphaIn : s.colorIn;
         const Range a = inputRange(s, in[0], alpha, false), b = inputRange(s, in[1], alpha, false);
-        const Range d = inputRange(s, in[3], alpha, true);
+        const Range c = inputRange(s, in[2], alpha, false), d = inputRange(s, in[3], alpha, true);
         const std::uint8_t op = alpha ? s.alphaOp : s.colorOp, bias = alpha ? s.alphaBias : s.colorBias;
         const std::uint8_t scale = alpha ? s.alphaScale : s.colorScale;
-        const Range lerp{std::min(a.lo, b.lo), std::max(a.hi, b.hi)};
+        // With c fixed the lerp weighs a and b by known amounts; otherwise it can land anywhere between them.
+        const Range lerp = c.lo == c.hi ? Range{a.lo * (1 - c.lo) + b.lo * c.lo, a.hi * (1 - c.lo) + b.hi * c.lo}
+                                        : Range{std::min(a.lo, b.lo), std::max(a.hi, b.hi)};
         Range out = op == 1 ? Range{d.lo - lerp.hi, d.hi - lerp.lo} : Range{d.lo + lerp.lo, d.hi + lerp.hi};
         if (op > 1 || bias == 3) {
             // Compare ops add c or nothing; they are approximated anyway, but later stages read the result.
@@ -487,9 +497,29 @@ struct Compiler {
             const float factor = scale == 1 ? 2 : scale == 2 ? 4 : scale == 3 ? 0.5f : 1;
             out = {(out.lo + shift) * factor, (out.hi + shift) * factor};
         }
+        if (!saturate) return out;
         const bool clamp = alpha ? s.alphaClamp : s.colorClamp;
         const float lo = clamp ? 0 : -1024 / 255.0f, hi = clamp ? 1 : 1023 / 255.0f;
         return {std::clamp(out.lo, lo, hi), std::clamp(out.hi, lo, hi)};
+    }
+
+    // The last stage's value is written out modulo 256. One that stays within a single window of 256 always
+    // loses the same amount, returned here (0 when nothing wraps or the window is not fixed).
+    static float wrapShift(const Range& r) {
+        if (r.inUnit()) return 0;
+        const int lo = static_cast<int>(std::floor(std::lround(r.lo * 255) / 256.0));
+        const int hi = static_cast<int>(std::floor(std::lround(r.hi * 255) / 256.0));
+        return lo == hi ? lo * 256 / 255.0f : 0;
+    }
+    // Takes the wrap off a constant d, which then carries it exactly; other inputs cannot.
+    static bool shiftConstant(Arg& d, float shift) {
+        if (d.kind == Arg::Zero || d.kind == Arg::One) {
+            d = constant((d.kind == Arg::One ? 1 : 0) - shift);
+            return true;
+        }
+        if (d.kind != Arg::Constant) return false;
+        for (float& v : d.value) v -= shift;
+        return true;
     }
 
     CombinerProgram run() {
@@ -499,12 +529,28 @@ struct Compiler {
         }
         for (unsigned i = 0; i < m.tevStageCount; ++i) {
             const auto& s = m.stages[i];
+            Range results[2]{stageRange(s, false), stageRange(s, true)};
+            float wraps[2]{0, 0};
+            // A sum that reached GX's eleven-bit limit saturated before it wrapped, which a shifted d cannot copy.
+            if (i + 1 == m.tevStageCount) {
+                for (int part = 0; part < 2; ++part) {
+                    const Range raw = stageRange(s, part == 1, false);
+                    if (raw.lo >= -1024 / 255.0f && raw.hi <= 1023 / 255.0f) wraps[part] = wrapShift(results[part]);
+                }
+            }
+            Arg d[2]{colorInput(s, s.colorIn[3], true), alphaInput(s, s.alphaIn[3], true)};
+            for (int part = 0; part < 2; ++part) {
+                // The output is scaled after d is added, so d moves by the shift over the scale.
+                const std::uint8_t scale = part ? s.alphaScale : s.colorScale;
+                const float factor = scale == 1 ? 2 : scale == 2 ? 4 : scale == 3 ? 0.5f : 1;
+                if (!wraps[part] || !shiftConstant(d[part], wraps[part] / factor)) continue;
+                results[part] = {results[part].lo - wraps[part], results[part].hi - wraps[part]};
+            }
             const auto colorOps = build(colorInput(s, s.colorIn[0]), colorInput(s, s.colorIn[1]), colorInput(s, s.colorIn[2]),
-                                        colorInput(s, s.colorIn[3], true), s.colorOp, s.colorBias, s.colorScale, false);
+                                        d[0], s.colorOp, s.colorBias, s.colorScale, false);
             const auto alphaOps = build(alphaInput(s, s.alphaIn[0]), alphaInput(s, s.alphaIn[1]), alphaInput(s, s.alphaIn[2]),
-                                        alphaInput(s, s.alphaIn[3], true), s.alphaOp, s.alphaBias, s.alphaScale, true);
+                                        d[1], s.alphaOp, s.alphaBias, s.alphaScale, true);
             emit(colorOps, alphaOps);
-            const Range results[2]{stageRange(s, false), stageRange(s, true)};
             // Only one previous value survives in the combiner; older register writes are lost.
             const std::uint8_t outputs[2]{static_cast<std::uint8_t>(s.colorReg & 3), static_cast<std::uint8_t>(s.alphaReg & 3)};
             for (int part = 0; part < 2; ++part) {
@@ -525,13 +571,23 @@ struct Compiler {
 };
 } // namespace
 
-CombinerProgram compileTev(const ModelMaterial& material) {
-    Compiler direct(material, false);
+namespace {
+CombinerProgram compile(const ModelMaterial& material, bool known) {
+    Compiler direct(material, false, known);
     const auto program = direct.run();
     if (program.exact || !direct.wantsLeading) return program;
     // Stage 0 cannot read the buffer color; spending a stage lets stage 1 read it instead.
     // A clamp between ops is a smaller error than a wrong constant.
-    const auto shifted = Compiler(material, true).run();
+    const auto shifted = Compiler(material, true, known).run();
     return shifted.exact || std::strcmp(shifted.approximation, "more than two constants") ? shifted : program;
+}
+} // namespace
+
+CombinerProgram compileTev(const ModelMaterial& material) {
+    // A register of known value read as a constant frees the previous value but takes a constant slot.
+    const auto previous = compile(material, false);
+    if (previous.exact) return previous;
+    const auto constants = compile(material, true);
+    return constants.exact ? constants : previous;
 }
 } // namespace smg
