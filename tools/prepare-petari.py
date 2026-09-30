@@ -1552,6 +1552,12 @@ adapt("libs/nw4r/include/nw4r/ut/Color.h", "include/nw4r/ut/Color.h", [
     ("            operator u32() const {\n                return ToU32ref();\n            }",
      "            operator u32() const {\n                return u32(r) << 24 | u32(g) << 16 | u32(b) << 8 | a;\n            }", 1),
 ])
+# A primitive's vertex count in a display list is the GPU's big-endian half, as the model file holds it.
+adapt("src/JSystem/J3DGraphBase/J3DShapeDraw.cpp", "JSystem/J3DGraphBase/J3DShapeDraw.cpp", [
+    ("        int vtxNum = *reinterpret_cast< u16* >(dl);", "        int vtxNum = dl[0] << 8 | dl[1];", 1),
+    ("        int vtxNum = *reinterpret_cast< u16* >(oldDL);", "        int vtxNum = oldDL[0] << 8 | oldDL[1];", 1),
+    ("        *reinterpret_cast< u16* >(newDL) = vtxNum;", "        newDL[0] = static_cast< u8 >(vtxNum >> 8);\n        newDL[1] = static_cast< u8 >(vtxNum);", 1),
+])
 # A TEV stage's two BP commands are its bytes as the Wii's word load read them: the register on top.
 adapt("libs/JSystem/include/JSystem/J3DGraphBase/J3DTevs.hpp", "include/JSystem/J3DGraphBase/J3DTevs.hpp", [
     ("        J3DGDWriteBPCmd(*(u32*)&field_0x0);\n        J3DGDWriteBPCmd(*(u32*)&field_0x4);",

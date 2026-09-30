@@ -1,3 +1,4 @@
+#include <JSystem/J3DGraphBase/J3DShapeDraw.hpp>
 #include <JSystem/J3DGraphBase/J3DTevs.hpp>
 #include <JSystem/JUtility/TColor.hpp>
 #include <nw4r/ut/Color.h>
@@ -45,12 +46,20 @@ void tevStage() {
     check(gpu->bp[0xC2] == 0x345678 && gpu->bp[0xC3] == 0x9ABCDE, "a TEV stage's BP commands name its registers, as on the Wii");
     delete gpu;
 }
+
+// A display list's vertex counts are the GPU's big-endian halves: a strip of 3 two-byte vertices, then a fan of 1.
+void vertexCounts() {
+    static const std::uint8_t list[] = {0x98, 0x00, 0x03, 1, 2, 3, 4, 5, 6, 0xA0, 0x00, 0x01, 7, 8, 0x00};
+    J3DShapeDraw draw(list, sizeof list);
+    check(draw.countVertex(2) == 4, "a display list's vertex counts read as the GPU reads them");
+}
 } // namespace
 
 int runColorTests() {
     packing();
     tevStage();
-    std::printf("%u colour and TEV word checks passed\n", checks);
+    vertexCounts();
+    std::printf("%u colour, TEV and display list word checks passed\n", checks);
     return 0;
 }
 
