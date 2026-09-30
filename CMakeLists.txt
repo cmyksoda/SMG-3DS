@@ -92,8 +92,15 @@ add_library(petari_scene STATIC
   "${PETARI}/src/Game/Map/RailPart.cpp"
   "${PETARI}/src/Game/Map/StageSwitch.cpp"
   "${PETARI}/src/Game/Map/SleepController.cpp"
-  "${PETARI}/src/Game/Util/JMapIdInfo.cpp")
+  "${PETARI}/src/Game/Util/JMapIdInfo.cpp"
+  source/compat/Light.cpp
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Map/LightDataHolder.cpp"
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Map/LightZoneDataHolder.cpp"
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Map/LightFunctionData.cpp"
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/ObjUtilCsv.cpp")
 target_link_libraries(petari_scene PUBLIC petari_gravity)
+# The native scene owns the light tables it is handed, so it sees their (header-only) type.
+target_include_directories(petari_scene PRIVATE include)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
   "${PETARI}/src/Game/NameObj/NameObjHolder.cpp" "${PETARI}/src/Game/Util/HashUtil.cpp"
   "${PETARI}/src/Game/NameObj/NameObjCategoryList.cpp" "${PETARI}/include/Game/NameObj/NameObjCategoryList.hpp"
@@ -109,12 +116,14 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
   "${PETARI}/src/Game/Map/KCollision.cpp" "${PETARI}/include/Game/Map/KCollision.hpp"
   "${PETARI}/src/Game/Map/CollisionCode.cpp" "${PETARI}/include/Game/Camera/CameraPolygonCodeUtil.hpp"
   "${PETARI}/src/Game/LiveActor/RailRider.cpp" "${PETARI}/include/Game/Map/StageSwitch.hpp"
-  "${PETARI}/include/Game/Util/JMapIdInfo.hpp")
+  "${PETARI}/include/Game/Util/JMapIdInfo.hpp" "${PETARI}/src/Game/Map/LightDataHolder.cpp"
+  "${PETARI}/src/Game/Map/LightZoneDataHolder.cpp" "${PETARI}/src/Game/Map/LightFunction.cpp"
+  "${PETARI}/include/Game/Map/LightDataHolder.hpp" "${PETARI}/include/Game/Map/LightZoneDataHolder.hpp")
 
 add_library(smg_platform STATIC
   source/core/Input.cpp source/core/Motion.cpp source/core/Settings.cpp source/core/Session.cpp
   source/core/Archive.cpp source/core/Bcsv.cpp source/core/Model.cpp source/core/Texture.cpp source/core/Combiner.cpp
-  source/core/Stage.cpp source/core/StageGravity.cpp source/core/Mesh.cpp source/core/Etc1.cpp source/core/Kcl.cpp source/core/StageCollision.cpp
+  source/core/Stage.cpp source/core/StageGravity.cpp source/core/Mesh.cpp source/core/Etc1.cpp source/core/Kcl.cpp source/core/StageCollision.cpp source/core/StageLight.cpp
   source/compat/NativePad.cpp)
 target_include_directories(smg_platform PUBLIC include)
 target_link_libraries(smg_platform PUBLIC petari_scene)

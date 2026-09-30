@@ -6,6 +6,7 @@
 #include <Game/Gravity/GravityInfo.hpp>
 #include <Game/Gravity/PlanetGravityManager.hpp>
 #include <Game/Gravity/PointGravity.hpp>
+#include <Game/Map/LightDataHolder.hpp>
 #include <Game/Map/StageSwitch.hpp>
 #include <Game/Util/JMapIdInfo.hpp>
 #include <Game/NameObj/NameObjHolder.hpp>
@@ -14,6 +15,7 @@
 #include <JSystem/JGadget/hashcode.hpp>
 #include <cmath>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <vector>
 #include <cstdint>
@@ -187,7 +189,7 @@ void creators(smg::NativeScene& scene) {
     identity.identity();
     TPos3f turned;
     MR::makeMtxTR(turned.toMtxPtr(), TVec3f(10000, 0, 0), TVec3f(0, 0, 90));
-    const int galaxy = scene.addZone(identity), zone = scene.addZone(turned);
+    const int galaxy = scene.addZone("TestGalaxy", identity), zone = scene.addZone("TurnedZone", turned);
 
     std::vector<Row> shapes(8), zoned(6);
     shapes[0].name = "GlobalCubeGravity";
@@ -326,6 +328,60 @@ void creators(smg::NativeScene& scene) {
     check(placed[10].gravity->mDistant == 1500, "a negative Distant keeps the size from the scale");
 }
 
+// LightData.bcsv with a first row (what an unknown name finds) and a named one, as the disc stores them.
+std::vector<std::uint8_t> lightData() {
+    std::vector<std::pair<const char*, unsigned>> fields{{"AreaLightName", 6}, {"Interpolate", 0}, {"Fix", 0}};
+    static const char* const names[]{"PlanetLight0ColorR", "PlanetLight0ColorG", "PlanetLight0ColorB", "PlanetLight0ColorA",
+        "PlanetLight0PosX", "PlanetLight0PosY", "PlanetLight0PosZ", "PlanetLight0FollowCamera", "PlanetLight1ColorR",
+        "PlanetLight1ColorG", "PlanetLight1ColorB", "PlanetLight1ColorA", "PlanetLight1PosX", "PlanetLight1PosY",
+        "PlanetLight1PosZ", "PlanetLight1FollowCamera", "PlanetAlpha2", "PlanetAmbientR", "PlanetAmbientG",
+        "PlanetAmbientB", "PlanetAmbientA"};
+    for (const char* name : names) fields.push_back({name, std::strstr(name, "Pos") ? 2u : 0u});
+    // Colors are stored as signed bytes: -1 is 255 and -128 is 128.
+    const auto row = [](std::uint32_t name, float x, std::int32_t red) {
+        return std::vector<std::uint32_t>{name, 30, 1, static_cast<std::uint32_t>(red), 0xffffffffu, 0xffffffffu, 0, bits(x), bits(0),
+                                          bits(0), 0, 100, 0xffffff96u, 0xffffffffu, 0, bits(0), bits(-1), bits(0), 1, 0xffffff80u, 64,
+                                          64, 64, 0xffffff80u};
+    };
+    return bigEndianTable(fields, {row(0, 1000, -1), row(6, 2000, 100)}, std::string("First\0Egg\0", 10));
+}
+
+std::vector<std::uint8_t> galaxyLights() {
+    return bigEndianTable({{"LightID", 0}, {"AreaLightName", 6}}, {{0xffffffffu, 0}, {3, 4}}, std::string("Egg\0Night\0", 10));
+}
+
+void lights() {
+    TPos3f identity;
+    identity.identity();
+    const auto dataBytes = lightData(), zoneBytes = galaxyLights();
+    for (const bool withTable : {true, false}) {
+        smg::NativeScene scene;
+        scene.addZone("TestGalaxy", identity);
+        scene.addZone("PlainZone", identity);
+        auto data = std::make_unique<smg::Bcsv>();
+        std::string error;
+        check(data->load({dataBytes.data(), dataBytes.size()}, error), "LightData.bcsv loads");
+        std::vector<std::pair<std::string, std::unique_ptr<smg::Bcsv>>> zones;
+        if (withTable) {
+            zones.emplace_back("lighttestgalaxy.bcsv", std::make_unique<smg::Bcsv>());
+            check(zones.back().second->load({zoneBytes.data(), zoneBytes.size()}, error), "the galaxy's light table loads");
+        }
+        scene.initLights(std::move(data), std::move(zones));
+        const AreaLightInfo* light = scene.defaultAreaLight();
+        if (!withTable) {
+            check(light && std::strcmp(light->mAreaLightName, "First") == 0, "without a table the first light stands in");
+            continue;
+        }
+        check(light && std::strcmp(light->mAreaLightName, "Egg") == 0, "LightID -1 in the galaxy's table names its default light");
+        const ActorLightInfo& planet = light->mPlanetLight;
+        check(planet.mInfo0.mColor.r == 100 && planet.mInfo0.mColor.g == 255 && planet.mInfo0.mColor.a == 0 &&
+              planet.mInfo0.mPos.x == 2000 && !planet.mInfo0.mIsFollowCamera, "the planet light's first light, bytes and all");
+        check(planet.mInfo1.mColor.g == 150 && planet.mInfo1.mPos.y == -1 && planet.mInfo1.mIsFollowCamera,
+              "its second light follows the camera");
+        check(planet.mAlpha2 == 128 && planet.mColor.r == 64 && planet.mColor.a == 128, "alpha light and ambient");
+    }
+}
+
 void sceneObjects() {
     check(!MR::isExistSceneObj(SceneObj_PlanetGravityManager), "no scene objects before a scene");
     smg::NativeScene scene;
@@ -340,6 +396,7 @@ void sceneObjects() {
 
 int runSceneTests() {
     sceneObjects();
+    lights();
     {
         // A new scene, so its manager holds only the gravities placed here.
         smg::NativeScene scene;

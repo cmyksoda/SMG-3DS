@@ -1,4 +1,5 @@
 #include <smg/Scene.hpp>
+#include <smg/Bcsv.hpp>
 #include <Game/Camera/CameraPolygonCodeUtil.hpp>
 #include <Game/Gravity/PlanetGravityManager.hpp>
 #include <Game/Map/CollisionCode.hpp>
@@ -40,6 +41,7 @@ NativeScene::NativeScene()
 NativeScene::~NativeScene() {
     // The game frees the whole scene heap at once; here each scene object goes by itself.
     for (const PlacedGravity& placed : mGravities) forgetGravity(placed);
+    forgetLights();
     // The zone switches, which the game leaves to the scene heap with the container.
     if (auto* switches = static_cast<StageSwitchContainer*>(mSceneObjHolder->getObj(SceneObj_StageSwitchContainer))) {
         for (int i = 0; i < switches->mSwitches.size(); ++i) delete switches->mSwitches[i].mSwitch;
@@ -68,8 +70,9 @@ NativeScene& NativeScene::current() {
     return *sCurrent;
 }
 
-int NativeScene::addZone(const TPos3f& placement) {
+int NativeScene::addZone(const std::string& name, const TPos3f& placement) {
     mZones.push_back(placement);
+    mZoneNames.push_back(name);
     return static_cast<int>(mZones.size()) - 1;
 }
 
@@ -181,6 +184,15 @@ void getRailInfo(JMapInfoIter* pRailIter, const JMapInfo** ppPointInfo, const JM
     }
     *pRailIter = JMapInfoIter(paths->paths, rail.mIndex);
     *ppPointInfo = paths->points[rail.mIndex];
+}
+
+// StageDataHolder's zone list: the galaxy is zone 0.
+s32 getZoneNum() {
+    return smg::NativeScene::current().zoneCount();
+}
+
+const char* getZoneNameFromZoneId(s32 zone) {
+    return smg::NativeScene::current().zoneName(zone).c_str();
 }
 
 // CameraDirector collects the camera codes of each part's collision; the native scene keeps them for it.

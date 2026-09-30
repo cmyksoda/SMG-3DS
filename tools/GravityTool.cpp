@@ -3,6 +3,8 @@
 #include <smg/Scene.hpp>
 #include <smg/StageCollision.hpp>
 #include <smg/StageGravity.hpp>
+#include <smg/StageLight.hpp>
+#include <Game/Map/LightDataHolder.hpp>
 #include <Game/Gravity/GravityInfo.hpp>
 #include <Game/Gravity/PlanetGravityManager.hpp>
 #include <Game/Scene/SceneObjHolder.hpp>
@@ -88,6 +90,20 @@ int main(int argc, char** argv) {
     if (!smg::placeStageGravity(argv[1], stage, scene, error)) {
         std::fprintf(stderr, "%s\n", error.c_str());
         return 1;
+    }
+    if (!smg::loadStageLights(argv[1], scene, error)) {
+        std::fprintf(stderr, "%s\n", error.c_str());
+        return 1;
+    }
+    if (const AreaLightInfo* light = scene.defaultAreaLight()) {
+        const ActorLightInfo& planet = light->mPlanetLight;
+        std::printf("Default area light %s: planet lights (%u %u %u) at (%g, %g, %g)%s and (%u %u %u) at (%g, %g, %g)%s, "
+                    "alpha light %u, ambient (%u %u %u %u)\n", light->mAreaLightName, planet.mInfo0.mColor.r, planet.mInfo0.mColor.g,
+                    planet.mInfo0.mColor.b, planet.mInfo0.mPos.x, planet.mInfo0.mPos.y, planet.mInfo0.mPos.z,
+                    planet.mInfo0.mIsFollowCamera ? " following the camera" : "", planet.mInfo1.mColor.r, planet.mInfo1.mColor.g,
+                    planet.mInfo1.mColor.b, planet.mInfo1.mPos.x, planet.mInfo1.mPos.y, planet.mInfo1.mPos.z,
+                    planet.mInfo1.mIsFollowCamera ? " following the camera" : "", planet.mAlpha2, planet.mColor.r, planet.mColor.g,
+                    planet.mColor.b, planet.mColor.a);
     }
     std::map<std::string, int> placed, skipped;
     for (const auto& gravity : scene.placedGravities()) ++placed[gravity.name];

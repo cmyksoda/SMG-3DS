@@ -26,7 +26,7 @@ bool placeStageGravity(const std::string& root, const Stage& stage, NativeScene&
         TPos3f placement;
         MR::makeMtxTR(placement.toMtxPtr(), TVec3f(zone.position[0], zone.position[1], zone.position[2]),
                       TVec3f(zone.rotation[0], zone.rotation[1], zone.rotation[2]));
-        const int id = scene.addZone(placement);
+        const int id = scene.addZone(zone.name, placement);
         // Paths are not layered; a wire gravity reads its rail from them.
         const auto find = [&](const std::string& path) {
             return std::find_if(entries.begin(), entries.end(),

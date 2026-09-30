@@ -1,11 +1,15 @@
 #pragma once
 #include <JSystem/JGeometry/TMatrix.hpp>
+#include <memory>
 #include <revolution/types.h>
 #include <string>
 #include <utility>
 #include <vector>
 
+struct AreaLightInfo;
 class CollisionCode;
+class LightDataHolder;
+class LightZoneDataHolder;
 class GravityCreator;
 class SleepController;
 class StageSwitchCtrl;
@@ -17,6 +21,8 @@ class SceneObjHolder;
 struct JMapData;
 
 namespace smg {
+class Bcsv;
+
 // The scene state GameSystemSceneController owns in the game, held natively until GameSystem runs.
 // Removable: see docs/PORTING.md, "The native scene boundary".
 class NativeScene {
@@ -35,7 +41,9 @@ public:
     void requestMovementSync() { mSyncRequested = true; }
 
     // StageDataHolder's zone placements. Zone 0 is the galaxy; rows are matched to zones by their table.
-    int addZone(const TPos3f& placement);
+    int addZone(const std::string& name, const TPos3f& placement);
+    int zoneCount() const { return static_cast<int>(mZones.size()); }
+    const std::string& zoneName(int zone) const { return mZoneNames[zone]; }
     void addZoneTable(int zone, const JMapInfo& table);
     // A zone's CommonPathInfo and its CommonPathPointInfo.<row> tables, which StageDataHolder keeps for rails.
     void addZonePaths(int zone, const JMapInfo& paths, std::vector<const JMapInfo*> points);
@@ -70,6 +78,15 @@ public:
     // Rows with a follower (FollowId), which keep their placement: base matrix followers are not brought up.
     const std::vector<std::string>& startStateGravities() const { return mStartStateGravities; }
 
+    // LightDirector's data: LightData.bcsv and each zone's Light<zone>.bcsv, which the original holders read.
+    // The tables are loaded outside the scene and handed over; initLights runs the holders' own init.
+    void initLights(std::unique_ptr<smg::Bcsv> data, std::vector<std::pair<std::string, std::unique_ptr<smg::Bcsv>>> zones);
+    const JMapInfo* lightTable(const char* zone) const; // null for the light data itself, or a zone without a table
+    const JMapInfo* lightData() const;
+    LightDataHolder* lightDataHolder() const { return mLightData; }
+    // LightFunction::getAreaLightInfo for an actor outside every light area: the galaxy's default light.
+    const AreaLightInfo* defaultAreaLight() const;
+
     // CollisionDirector's attribute codes, which KCollisionServer reads camera ids through.
     CollisionCode& collisionCode() { return *mCollisionCode; }
     // What CollisionParts hands CameraDirector while a part's collision initializes, kept until the camera runs.
@@ -85,12 +102,18 @@ public:
 
 private:
     void moveGravities();
+    void forgetLights();
     static void forgetGravity(const PlacedGravity& placed);
 
     NameObjHolder* mNameObjHolder;
     SceneObjHolder* mSceneObjHolder;
     bool mSyncRequested = false;
     std::vector<TPos3f> mZones;
+    std::vector<std::string> mZoneNames;
+    std::unique_ptr<smg::Bcsv> mLightTable;
+    std::vector<std::pair<std::string, std::unique_ptr<smg::Bcsv>>> mZoneLightTables;
+    LightDataHolder* mLightData = nullptr;
+    LightZoneDataHolder* mLightZones = nullptr;
     std::vector<std::pair<const JMapData*, int>> mZoneTables;
     std::vector<ZonePaths> mZonePaths;
     std::vector<PlacedGravity> mGravities;

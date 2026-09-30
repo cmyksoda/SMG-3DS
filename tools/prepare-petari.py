@@ -55,16 +55,22 @@ def adapt(relative, target, replacements, drop=(), reason=""):
         destination.write_text(text)
 
 
-def extract(relative, target, prologue, first_lines, epilogue=""):
+def extract(relative, target, prologue, first_lines, epilogue="", fixes=()):
     """Copy whole function definitions, found by their first line, out of a file too entangled to compile.
 
-    A (namespace, first line) pair copies a definition that sits inside that namespace's block."""
+    A (namespace, first line) pair copies a definition that sits inside that namespace's block ("" for an
+    anonymous one); `fixes` are exact (before, after) replacements made in the copied text."""
     text = (root / relative).read_text()
     bodies = []
     for first in first_lines:
         space, first = first if isinstance(first, tuple) else (None, first)
         start, end = definition(text, relative, first)
-        bodies.append(f"namespace {space} {{\n{text[start:end]}\n}}  // namespace {space}" if space else text[start:end])
+        bodies.append(f"namespace {space} {{\n{text[start:end]}\n}}  // namespace {space}" if space is not None else text[start:end])
+    for before, after in fixes:
+        joined = "\n\n".join(bodies)
+        if joined.count(before) != 1:
+            raise SystemExit(f"Upstream changed; review {relative}: {before!r}")
+        bodies = [body.replace(before, after) for body in bodies]
     text = (f"// Generated from Petari's {relative}: only these functions; see tools/prepare-petari.py.\n"
             + prologue + "\n" + "\n\n".join(bodies) + "\n" + epilogue)
     destination = output / target
@@ -423,6 +429,38 @@ adapt("include/Game/Map/StageSwitch.hpp", "include/Game/Map/StageSwitch.hpp", [
 adapt("include/Game/Util/JMapIdInfo.hpp", "include/Game/Util/JMapIdInfo.hpp", [
     ("#include <revolution.h>", "#include <revolution/types.h>", 1),
 ])
+
+# Lights: the original data and zone holders read LightData.arc; the light director that owns them, and
+# its archive, are the native scene's (source/compat/Light.cpp).
+adapt("include/Game/Map/LightDataHolder.hpp", "include/Game/Map/LightDataHolder.hpp", [
+    ("#include <revolution.h>", "#include <revolution/gx/GXStruct.h>\n#include <revolution/mtx.h>", 1),
+])
+adapt("include/Game/Map/LightZoneDataHolder.hpp", "include/Game/Map/LightZoneDataHolder.hpp", [
+    ("#include <revolution.h>", "#include <revolution/types.h>", 1),
+])
+adapt("src/Game/Map/LightDataHolder.cpp", "Game/Map/LightDataHolder.cpp", [
+    ('#include "Game/Util.hpp"', '#include "Game/Util/StringUtil.hpp"', 1),
+])
+adapt("src/Game/Map/LightZoneDataHolder.cpp", "Game/Map/LightZoneDataHolder.cpp", [
+    ('#include "Game/AreaObj/LightArea.hpp"\n', "", 1),
+    ('#include "Game/Util.hpp"', '#include "Game/Util/ObjUtil.hpp"\n#include "Game/Util/SceneUtil.hpp"', 1),
+], drop=["bool ZoneLightID::isTargetArea(const LightArea* pLightArea) const {"], reason="LightArea waits for AreaObj")
+extract("src/Game/Map/LightFunction.cpp", "Game/Map/LightFunctionData.cpp",
+        '#include "Game/Map/LightFunction.hpp"\n#include "Game/Util/JMapInfo.hpp"\n#include "Game/Util/ObjUtil.hpp"\n#include <cstdio>\n',
+        [("", "void getDataLightInfo(JMapInfo* pInfo, int id, LightInfo* pLightInfo, const char* pName) {"),
+         ("", "void getDataActorLightInfo(JMapInfo* pInfo, int lightID, ActorLightInfo* pActorInfo, const char* pName) {"),
+         "void LightFunction::getAreaLightLightData(JMapInfo* pInfo, int idx, AreaLightInfo* pLightInfo) {"])
+extract("src/Game/Util/ObjUtil.cpp", "Game/Util/ObjUtilCsv.cpp",
+        '#include "Game/Util/ObjUtil.hpp"\n#include "Game/Util/JMapInfo.hpp"\n#include <revolution/gx/GXStruct.h>\n'
+        '#include <revolution/mtx.h>\n#include <cstdio>\n',
+        ["void MR::getCsvDataStr(const char** pOut, const JMapInfo* pMapInfo, const char* pKey, s32 idx) {",
+         "void MR::getCsvDataS32(s32* pOut, const JMapInfo* pMapInfo, const char* pKey, s32 idx) {",
+         "void MR::getCsvDataU8(u8* pOut, const JMapInfo* pMapInfo, const char* pKey, s32 idx) NO_INLINE {",
+         "void MR::getCsvDataF32(f32* pOut, const JMapInfo* pMapInfo, const char* pKey, s32 idx) {",
+         "void MR::getCsvDataBool(bool* pOut, const JMapInfo* pMapInfo, const char* pKey, s32 idx) {",
+         "void MR::getCsvDataVec(Vec* pOut, const JMapInfo* pMapInfo, const char* pKey, s32 idx) {",
+         "void MR::getCsvDataColor(GXColor* pOut, const JMapInfo* pMapInfo, const char* pKey, s32 idx) {"],
+        fixes=[(" NO_INLINE {", " {")])
 
 adapt("include/Game/System/WPadButton.hpp", "include/Game/System/WPadButton.hpp", [
     ("#include <revolution.h>", "#include <revolution/kpad.h>", 1),
