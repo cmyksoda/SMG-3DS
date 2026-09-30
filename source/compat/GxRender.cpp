@@ -129,6 +129,8 @@ struct Renderer {
             out[i].position[0] = d.triangles[i].position[1];
             out[i].position[1] = -d.triangles[i].position[0];
         }
+        // The GPU reads this memory itself: on hardware the CPU's cache must hand it over (Azahar has no cache).
+        GSPGPU_FlushDataCache(out, d.triangles.size() * sizeof(GxDrawVertex));
 
         C3D_BindProgram(&program);
         C3D_AttrInfo* attributes = C3D_GetAttrInfo();
