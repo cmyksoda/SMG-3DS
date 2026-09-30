@@ -4,6 +4,7 @@
 #include <smg/Mesh.hpp>
 #include <smg/Stage.hpp>
 #include <citro3d.h>
+#include <array>
 #include <atomic>
 #include <memory>
 #include <string>
@@ -37,6 +38,16 @@ public:
     // Where that pull meets the placed models' original collision.
     const std::string& startLanding() const { return startLanding_; }
 
+    // A diagnostic marker, not Mario: dropped above Mario's start, it falls along the original gravity and
+    // stops on the original collision. Positions are on the top screen, from the last draw.
+    struct Probe {
+        bool visible = false;
+        float x = 0, y = 0;
+        std::vector<std::array<float, 2>> trail; // oldest first, only the points in view
+        std::string label;
+    };
+    const Probe& probe() const { return probeView_; }
+
     struct Material;
     struct GpuModel;
     struct Prepared;
@@ -53,6 +64,8 @@ private:
     void consume(Prepared& prepared);
     void resetCamera();
     void drawInstance(const Instance& instance, const C3D_Mtx& view, bool translucent, const Material*& current);
+    void dropProbe();
+    void stepProbe(float seconds);
 
     DVLB_s* shader_ = nullptr;
     shaderProgram_s program_{};
@@ -72,5 +85,10 @@ private:
     std::vector<std::unique_ptr<GpuModel>> models_;
     std::vector<Instance> instances_;
     float position_[3]{}, yaw_ = 0, pitch_ = 0;
+    bool probeFalling_ = false;
+    float probe_[3]{}, probeVelocity_[3]{}, probeFallen_ = 0, probeSinceTrail_ = 0;
+    std::vector<std::array<float, 3>> probeTrail_;
+    std::string probeState_;
+    Probe probeView_;
 };
 } // namespace smg

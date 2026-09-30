@@ -320,8 +320,9 @@ std::string describeLanding(const StageCollision& collision, const Stage& stage,
     StageCollision::Hit hit;
     if (!collision.land(TVec3f(at[0], at[1], at[2]), pull, hit)) return "falls onto no collision";
     char text[128];
-    std::snprintf(text, sizeof text, "lands on %s %.1f below, %s floor", stage.objects[hit.object].name.c_str(), hit.distance,
-                  hit.floor);
+    // A start can sit a little inside the surface; then the ground is above it.
+    std::snprintf(text, sizeof text, "lands on %s %.1f %s, %s floor", stage.objects[hit.object].name.c_str(), std::fabs(hit.distance),
+                  hit.distance < 0 ? "above" : "below", hit.floor);
     return text;
 }
 
@@ -481,6 +482,70 @@ void SceneRenderer::loadStage(const std::string& root, const std::string& galaxy
     }
 }
 
+void SceneRenderer::dropProbe() {
+    probeFalling_ = false;
+    probeTrail_.clear();
+    probeState_.clear();
+    if (!gravity_ || !collision_ || !stage_.entrance || loading()) return;
+    TVec3f pull;
+    const TVec3f start(stage_.start[0], stage_.start[1], stage_.start[2]);
+    auto* manager = MR::getSceneObj<PlanetGravityManager>(SceneObj_PlanetGravityManager);
+    if (!manager->calcTotalGravityVector(&pull, nullptr, start, GRAVITY_TYPE_NORMAL, 0)) return;
+    // 800 units up the start's own pull, where the start view can see it fall.
+    for (int i = 0; i < 3; ++i) probe_[i] = stage_.start[i] - (&pull.x)[i] * 800, probeVelocity_[i] = 0;
+    probeFallen_ = probeSinceTrail_ = 0;
+    probeFalling_ = true;
+    probeState_ = "probe";
+}
+
+void SceneRenderer::stepProbe(float seconds) {
+    // A fixed pull and top speed for a diagnostic marker; Mario's own physics are not what this shows.
+    constexpr float Acceleration = 500, TopSpeed = 4000, Step = 1 / 60.0f, GiveUp = 30000;
+    auto* manager = MR::getSceneObj<PlanetGravityManager>(SceneObj_PlanetGravityManager);
+    for (float left = seconds; probeFalling_ && left > 0; left -= Step) {
+        const float dt = std::min(left, Step);
+        const TVec3f at(probe_[0], probe_[1], probe_[2]);
+        TVec3f pull;
+        if (!manager->calcTotalGravityVector(&pull, nullptr, at, GRAVITY_TYPE_NORMAL, 0)) {
+            probeState_ = "probe: no gravity here";
+            return;
+        }
+        float speed = 0;
+        for (int i = 0; i < 3; ++i) {
+            probeVelocity_[i] += (&pull.x)[i] * Acceleration * dt;
+            speed += probeVelocity_[i] * probeVelocity_[i];
+        }
+        speed = std::sqrt(speed);
+        if (speed > TopSpeed) for (float& v : probeVelocity_) v *= TopSpeed / speed;
+        const TVec3f step(probeVelocity_[0] * dt, probeVelocity_[1] * dt, probeVelocity_[2] * dt);
+        StageCollision::Hit hit;
+        if (collision_->strikeLine(at, step, hit)) {
+            for (int i = 0; i < 3; ++i) probe_[i] = (&hit.position.x)[i] + (&hit.normal.x)[i] * 2;
+            probeFallen_ += hit.distance;
+            probeFalling_ = false;
+            char text[128];
+            std::snprintf(text, sizeof text, "probe: on %s, %s floor, fell %.0f", stage_.objects[hit.object].name.c_str(), hit.floor,
+                          probeFallen_);
+            probeState_ = text;
+        } else {
+            for (int i = 0; i < 3; ++i) probe_[i] += (&step.x)[i];
+            probeFallen_ += step.length();
+            char text[64];
+            std::snprintf(text, sizeof text, "probe: falling, %.0f so far", probeFallen_);
+            probeState_ = text;
+            if (probeFallen_ > GiveUp) {
+                probeFalling_ = false;
+                probeState_ = "probe: fell 30000 without meeting collision";
+            }
+        }
+        probeSinceTrail_ += dt;
+        if (probeSinceTrail_ >= 0.05f) {
+            probeSinceTrail_ = 0;
+            probeTrail_.push_back({probe_[0], probe_[1], probe_[2]});
+        }
+    }
+}
+
 void SceneRenderer::resetCamera() {
     // Behind and above the first start point, looking the way it faces.
     yaw_ = stage_.startRotation[1] * 3.14159265f / 180.0f;
@@ -568,9 +633,13 @@ void SceneRenderer::update(const InputFrame& input, float seconds) {
                 std::snprintf(parts, sizeof parts, " (%zu parts)", collision_->parts());
                 startLanding_ += parts;
             }
+            dropProbe();
         }
     }
-    if (input.camera.pressed) resetCamera();
+    if (input.camera.pressed) {
+        resetCamera();
+        dropProbe();
+    }
     if (!std::isfinite(seconds) || seconds < 0 || seconds > 0.25f) return;
     yaw_ -= (input.cameraX * 1.6f + (static_cast<int>(input.dpadRight.held) - input.dpadLeft.held)) * seconds;
     pitch_ += (input.cameraY * 1.2f + (static_cast<int>(input.dpadUp.held) - input.dpadDown.held) * 0.8f) * seconds;
@@ -585,6 +654,7 @@ void SceneRenderer::update(const InputFrame& input, float seconds) {
         // The scene's movement, as the game runs it each frame: switch and sleep state follow here.
         gravity_->movement();
         gravityHere_ = describeGravity(*gravity_, stage_, position_);
+        if (collision_) stepProbe(seconds);
     }
 }
 
@@ -684,6 +754,23 @@ void SceneRenderer::draw(C3D_RenderTarget* target) {
     for (const auto& [depth, instance] : visible) drawInstance(*instance, view, false, current);
     std::sort(visible.begin(), visible.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
     for (const auto& [depth, instance] : visible) drawInstance(*instance, view, true, current);
+
+    // The probe, projected with the same view and field of view for the overlay to draw.
+    const auto toScreen = [&](const float* p, std::array<float, 2>& out) {
+        const float x = view.r[0].x * p[0] + view.r[0].y * p[1] + view.r[0].z * p[2] + view.r[0].w;
+        const float y = view.r[1].x * p[0] + view.r[1].y * p[1] + view.r[1].z * p[2] + view.r[1].w;
+        const float depth = -(view.r[2].x * p[0] + view.r[2].y * p[1] + view.r[2].z * p[2] + view.r[2].w);
+        if (depth < Near) return false;
+        out = {200 + x / (depth * tanX) * 200, 120 - y / (depth * tanY) * 120};
+        return out[0] > -20 && out[0] < 420 && out[1] > -20 && out[1] < 260;
+    };
+    probeView_.trail.clear();
+    probeView_.label = probeState_;
+    std::array<float, 2> at{};
+    probeView_.visible = !probeState_.empty() && toScreen(probe_, at);
+    probeView_.x = at[0], probeView_.y = at[1];
+    for (const auto& point : probeTrail_)
+        if (toScreen(point.data(), at)) probeView_.trail.push_back(at);
     C3D_AlphaTest(false, GPU_ALWAYS, 0);
     C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA);
     C3D_CullFace(GPU_CULL_BACK_CCW);

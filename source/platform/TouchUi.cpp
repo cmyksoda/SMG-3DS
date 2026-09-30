@@ -141,7 +141,20 @@ void TouchUi::drawTop(const InputFrame& input, const NativePad& pad, SceneRender
     C2D_SceneBegin(top_);
     C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
     if (scene.ready()) {
-        C2D_DrawRectSolid(0, 0, 0, 400, 32, color(4, 9, 26, 0.7f));
+        // The gravity probe: a marker and its trail, drawn over the scene so it cannot pass for Mario.
+        const auto& probe = scene.probe();
+        for (const auto& point : probe.trail) C2D_DrawRectSolid(point[0] - 1, point[1] - 1, 0, 2, 2, color(255, 120, 220, 0.8f));
+        if (probe.visible) {
+            const float x = probe.x, y = probe.y;
+            // A ring, so the marker still shows around the star pointer when both sit at the start.
+            C2D_DrawCircle(x, y, 0, 11, color(255, 120, 220, 0.9f), color(255, 120, 220, 0.9f), color(255, 120, 220, 0.9f),
+                           color(255, 120, 220, 0.9f));
+            C2D_DrawCircle(x, y, 0, 9, color(20, 6, 30, 0.6f), color(20, 6, 30, 0.6f), color(20, 6, 30, 0.6f), color(20, 6, 30, 0.6f));
+            C2D_DrawTriangle(x, y - 7, color(255, 120, 220), x - 5, y, color(255, 120, 220), x + 5, y, color(255, 120, 220), 0);
+            C2D_DrawTriangle(x, y + 7, color(190, 60, 170), x - 5, y, color(190, 60, 170), x + 5, y, color(190, 60, 170), 0);
+        }
+        C2D_DrawRectSolid(0, 0, 0, 400, probe.label.empty() ? 32 : 46, color(4, 9, 26, 0.7f));
+        if (!probe.label.empty()) label(probe.label.c_str(), 200, 31, 0.4f, color(255, 170, 235), true);
         label(scene.title().c_str(), 200, 3, 0.4f, color(229, 239, 255), true);
         // The system font's glyphs are about 30 px; below 0.4 the linear filter drops thin strokes.
         if (!scene.gravityHere().empty())

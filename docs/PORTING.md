@@ -78,7 +78,10 @@ completion does not make those interfaces portable to ARM11/PICA200.
   scenario 1 that is 111 gravities in 16 zones. `gravity_tool` asks a stage for the pull at any
   point and follows it to the first placed model: from scenario 1's start, a disk gravity in
   `DiskGardenZone` pulls straight down onto `DiskGardenPlanet`, 9.2 units below. The preview
-  shows the same answer at Mario's start and, live, at the camera.
+  shows the same answer at Mario's start and, live, at the camera. A gravity probe, a magenta
+  marker drawn over the scene and plainly not Mario, drops 800 units up the pull at Mario's start
+  (again with L): each frame it asks the original manager for the pull, speeds up along it at a fixed
+  500 units/s², and sweeps its step through the original collision, stopping on the first face.
 - Collision runs through the original `KCollisionServer` (`KCollision`, `KCollisionPlus`) and
   `CollisionCode`. `smg::Kcl` validates a disc KCL and repacks it, as `Bcsv` repacks tables: every
   field swapped by its type (octree nodes are found by walking the tree the way `searchBlock` does;
