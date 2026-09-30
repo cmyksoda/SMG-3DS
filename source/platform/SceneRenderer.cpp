@@ -417,7 +417,11 @@ void SceneRenderer::loadStage(const std::string& root, const std::string& galaxy
     s32 priority = 0x30;
     svcGetThreadPriority(&priority, CUR_THREAD_HANDLE);
     worker_ = threadCreate(workerMain, this, 256 * 1024, std::min<s32>(priority + 1, 0x3f), -2, false);
-    if (!worker_) status_ = "Cannot start the model loader";
+    if (!worker_) {
+        // Nothing will arrive, so stop waiting and keep the reason on screen.
+        names_.clear();
+        status_ = summary_ = "Cannot start the model loader";
+    }
 }
 
 void SceneRenderer::resetCamera() {

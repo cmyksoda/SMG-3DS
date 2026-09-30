@@ -113,7 +113,7 @@ int main() {
         ui.draw(frame, input.settings(), pad, scene, session.booted(), session.assetStatus().c_str(), motion.ready);
     }
     aptUnhook(&hook);
-    if (motion.ready) motion.stop();
+    motion.stop(); // also undoes a partial start
     scene.shutdown();
     ui.shutdown();
     C2D_Fini();
