@@ -11,6 +11,7 @@
 
 namespace smg {
 class NativeScene;
+class StageCollision;
 
 // Draws a galaxy's placed models with their translated materials. A worker thread decodes
 // models; the main thread only uploads one finished model per frame, since citro3d is not thread-safe.
@@ -33,6 +34,8 @@ public:
     // What the original gravity code pulls with at Mario's start, and where the camera is now.
     const std::string& startGravity() const { return startGravity_; }
     const std::string& gravityHere() const { return gravityHere_; }
+    // Where that pull meets the placed models' original collision.
+    const std::string& startLanding() const { return startLanding_; }
 
     struct Material;
     struct GpuModel;
@@ -56,9 +59,10 @@ private:
     bool programReady_ = false;
     int projection_ = -1, modelView_ = -1, materialColor_ = -1, ambientColor_ = -1;
     int lightDirection_ = -1, lightColor_ = -1, colorSelect_ = -1, texgen_[3]{-1, -1, -1};
-    std::string root_, title_, status_ = "No stage loaded", summary_, startGravity_, gravityHere_;
+    std::string root_, title_, status_ = "No stage loaded", summary_, startGravity_, gravityHere_, startLanding_;
     Stage stage_;
     std::unique_ptr<NativeScene> gravity_;
+    std::unique_ptr<StageCollision> collision_; // after the scene, so it goes first
     std::vector<std::string> names_;
     std::size_t consumed_ = 0, skinned_ = 0, missing_ = 0, failed_ = 0;
     Thread worker_ = nullptr;

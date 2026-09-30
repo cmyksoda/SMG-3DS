@@ -25,38 +25,35 @@ StageCollision::~StageCollision() {
     }
 }
 
-bool StageCollision::load(const std::string& root, const Stage& stage, std::string& error) {
+std::unique_ptr<StageCollision::Model> StageCollision::readModel(const std::string& name, const std::uint8_t* storage,
+                                                                const std::vector<ArchiveEntry>& entries, std::string& error) {
+    auto model = std::make_unique<Model>();
+    model->name = name;
+    for (const ArchiveEntry& entry : entries) {
+        const Bytes bytes{storage + entry.offset, entry.size};
+        if (endsWith(entry.path, name + ".kcl") && !model->kcl.load(bytes, error)) {
+            error = name + ".kcl: " + error;
+            return nullptr;
+        }
+        if (endsWith(entry.path, name + ".pa") && !model->attributes.load(bytes, error)) {
+            error = name + ".pa: " + error;
+            return nullptr;
+        }
+    }
+    error.clear();
+    return model->kcl.triangles() ? std::move(model) : nullptr;
+}
+
+void StageCollision::addParts(const Stage& stage, std::unique_ptr<Model> model) {
     for (std::size_t i = 0; i < stage.objects.size(); ++i) {
         const StageObject& object = stage.objects[i];
-        auto model = std::find_if(models_.begin(), models_.end(), [&](const auto& m) { return m->name == object.name; });
-        if (model == models_.end()) {
-            auto loaded = std::make_unique<Model>();
-            loaded->name = object.name;
-            std::vector<std::uint8_t> storage;
-            std::vector<ArchiveEntry> entries;
-            if (readArchive((root + "/ObjectData/" + object.name + ".arc").c_str(), storage, entries, ArchiveBudget, error)) {
-                for (const ArchiveEntry& entry : entries) {
-                    const Bytes bytes{storage.data() + entry.offset, entry.size};
-                    if (endsWith(entry.path, object.name + ".kcl") && !loaded->kcl.load(bytes, error)) {
-                        error = object.name + ".kcl: " + error;
-                        return false;
-                    }
-                    if (endsWith(entry.path, object.name + ".pa") && !loaded->attributes.load(bytes, error)) {
-                        error = object.name + ".pa: " + error;
-                        return false;
-                    }
-                }
-            }
-            model = models_.insert(models_.end(), std::move(loaded));
-        }
-        if (!(*model)->kcl.triangles()) continue;
-
-        Part part{i, model->get(), new KCollisionServer, {}, {}, 0};
+        if (object.name != model->name) continue;
+        Part part{i, model.get(), new KCollisionServer, {}, {}, 0};
         for (int row = 0; row < 3; ++row)
             for (int column = 0; column < 4; ++column) part.base.mMtx[row][column] = object.transform[row * 4 + column];
         PSMTXInverse(part.base.toMtxPtr(), part.inverse.toMtxPtr());
         // CollisionParts::init: attach, then collect the camera codes while the server sets itself up.
-        part.server->init((*model)->kcl.data(), (*model)->attributes.info().mData);
+        part.server->init(model->kcl.data(), model->attributes.info().mData);
         const auto zone = std::find_if(stage.zones.begin(), stage.zones.end(), [&](const StageZone& z) { return z.name == object.zone; });
         MR::initCameraCodeCollection(object.name.c_str(), static_cast<s32>(zone - stage.zones.begin()));
         part.server->calcFarthestVertexDistance();
@@ -70,6 +67,21 @@ bool StageCollision::load(const std::string& root, const Stage& stage, std::stri
         }
         part.radius = part.server->mMaxVertexDistance * scale;
         parts_.push_back(part);
+    }
+    models_.push_back(std::move(model));
+}
+
+bool StageCollision::load(const std::string& root, const Stage& stage, std::string& error) {
+    std::vector<std::string> names;
+    for (const StageObject& object : stage.objects)
+        if (std::find(names.begin(), names.end(), object.name) == names.end()) names.push_back(object.name);
+    for (const std::string& name : names) {
+        std::vector<std::uint8_t> storage;
+        std::vector<ArchiveEntry> entries;
+        if (!readArchive((root + "/ObjectData/" + name + ".arc").c_str(), storage, entries, ArchiveBudget, error)) continue;
+        auto model = readModel(name, storage.data(), entries, error);
+        if (!error.empty()) return false;
+        if (model) addParts(stage, std::move(model));
     }
     error.clear();
     return true;

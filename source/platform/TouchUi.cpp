@@ -146,9 +146,10 @@ void TouchUi::drawTop(const InputFrame& input, const NativePad& pad, SceneRender
         // The system font's glyphs are about 30 px; below 0.4 the linear filter drops thin strokes.
         if (!scene.gravityHere().empty())
             label(("gravity here: " + scene.gravityHere()).c_str(), 200, 17, 0.4f, color(150, 214, 192), true);
-        C2D_DrawRectSolid(0, 193, 0, 400, 47, color(4, 9, 26, 0.7f));
+        C2D_DrawRectSolid(0, 179, 0, 400, 61, color(4, 9, 26, 0.7f));
         if (!scene.startGravity().empty())
-            label(("Mario's start: " + scene.startGravity()).c_str(), 200, 195, 0.4f, color(150, 214, 192), true);
+            label(("Mario's start: " + scene.startGravity()).c_str(), 200, 181, 0.4f, color(150, 214, 192), true);
+        if (!scene.startLanding().empty()) label(scene.startLanding().c_str(), 200, 195, 0.4f, color(150, 214, 192), true);
         label(scene.status().c_str(), 200, 209, 0.4f, color(173, 198, 223), true);
         label("Pad fly   C-Stick look   A up   ZL down   X fast   L reset", 200, 223, 0.4f, color(194, 210, 230), true);
     } else {

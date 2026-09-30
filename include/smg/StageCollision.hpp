@@ -1,4 +1,5 @@
 #pragma once
+#include <smg/Archive.hpp>
 #include <smg/Bcsv.hpp>
 #include <smg/Kcl.hpp>
 #include <smg/Stage.hpp>
@@ -20,6 +21,18 @@ public:
     StageCollision& operator=(const StageCollision&) = delete;
     ~StageCollision();
 
+    struct Model {
+        std::string name;
+        Kcl kcl;
+        Bcsv attributes;
+    };
+    // A model's <name>.kcl and <name>.pa from its opened archive, or null without them. Touches no scene,
+    // so a loader thread can do it.
+    static std::unique_ptr<Model> readModel(const std::string& name, const std::uint8_t* storage,
+                                            const std::vector<ArchiveEntry>& entries, std::string& error);
+    // A part for each placement of the model, set up as CollisionParts::init sets one up.
+    void addParts(const Stage& stage, std::unique_ptr<Model> model);
+    // Both, reading each placed model's archive.
     bool load(const std::string& root, const Stage& stage, std::string& error);
     struct Hit {
         std::size_t object = 0; // index into Stage::objects
@@ -34,11 +47,6 @@ public:
     std::size_t triangles() const;
 
 private:
-    struct Model {
-        std::string name;
-        Kcl kcl;
-        Bcsv attributes;
-    };
     struct Part {
         std::size_t object;
         const Model* model;

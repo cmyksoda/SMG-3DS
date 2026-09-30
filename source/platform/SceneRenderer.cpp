@@ -3,6 +3,7 @@
 #include <smg/Archive.hpp>
 #include <smg/Etc1.hpp>
 #include <smg/Scene.hpp>
+#include <smg/StageCollision.hpp>
 #include <smg/StageGravity.hpp>
 #include <Game/Gravity/GravityInfo.hpp>
 #include <Game/Gravity/PlanetGravityManager.hpp>
@@ -311,6 +312,19 @@ std::string describeGravity(const NativeScene& scene, const Stage& stage, const 
     return text;
 }
 
+// "lands on DiskGardenPlanet 13.9 below, Normal floor": the pull followed to the first collision face.
+std::string describeLanding(const StageCollision& collision, const Stage& stage, const float at[3]) {
+    TVec3f pull;
+    auto* manager = MR::getSceneObj<PlanetGravityManager>(SceneObj_PlanetGravityManager);
+    if (!manager->calcTotalGravityVector(&pull, nullptr, TVec3f(at[0], at[1], at[2]), GRAVITY_TYPE_NORMAL, 0)) return "";
+    StageCollision::Hit hit;
+    if (!collision.strikeLine(TVec3f(at[0], at[1], at[2]), pull * 100000.0f, hit)) return "falls onto no collision";
+    char text[128];
+    std::snprintf(text, sizeof text, "lands on %s %.1f below, %s floor", stage.objects[hit.object].name.c_str(), hit.distance,
+                  hit.floor);
+    return text;
+}
+
 bool endsWith(const std::string& text, const std::string& suffix) {
     return text.size() >= suffix.size() && MR::isEqualStringCase(text.c_str() + text.size() - suffix.size(), suffix.c_str());
 }
@@ -319,6 +333,8 @@ bool endsWith(const std::string& text, const std::string& suffix) {
 struct SceneRenderer::Prepared {
     enum class Result { Ready, Missing, Skinned, Failed } result = Result::Failed;
     std::string name;
+    std::unique_ptr<StageCollision::Model> collision; // read from the same archive, whatever the model is
+    std::string collisionError;
     PackedMesh mesh;
     std::vector<TiledTexture> textures;
     std::vector<Material> materials;
@@ -334,6 +350,7 @@ std::unique_ptr<SceneRenderer::Prepared> prepareModel(const std::string& root, c
     std::string error;
     out->result = SceneRenderer::Prepared::Result::Missing;
     if (!readArchive((root + "/ObjectData/" + name + ".arc").c_str(), storage, entries, ArchiveBudget, error)) return out;
+    out->collision = StageCollision::readModel(name, storage.data(), entries, out->collisionError);
     const auto entry = std::find_if(entries.begin(), entries.end(), [&](const ArchiveEntry& e) {
         return endsWith(e.path, name + ".bdl") || endsWith(e.path, name + ".bmd");
     });
@@ -414,6 +431,8 @@ bool SceneRenderer::init() {
 
 void SceneRenderer::shutdown() {
     stopWorker();
+    collision_.reset();
+    gravity_.reset();
     instances_.clear();
     models_.clear();
     names_.clear();
@@ -431,15 +450,20 @@ void SceneRenderer::loadStage(const std::string& root, const std::string& galaxy
     names_.clear();
     consumed_ = skinned_ = missing_ = failed_ = 0;
     root_ = root;
+    // The collision's parts read the scene's codes, so they go before the scene does.
+    collision_.reset();
+    gravity_.reset();
+    startLanding_.clear();
     title_ = galaxy + " / scenario " + std::to_string(scenario);
     std::string error;
     if (!smg::loadStage(root, galaxy, scenario, stage_, error)) { status_ = error; return; }
     for (const auto& object : stage_.objects)
         if (std::find(names_.begin(), names_.end(), object.name) == names_.end()) names_.push_back(object.name);
-    gravity_.reset();
     gravity_ = std::make_unique<NativeScene>();
     if (smg::placeStageGravity(root, stage_, *gravity_, error)) {
         startGravity_ = stage_.entrance ? describeGravity(*gravity_, stage_, stage_.start.data()) : "no MarioNo 0 entrance";
+        // Each model's collision arrives with it from the loader thread.
+        collision_ = std::make_unique<StageCollision>();
     } else {
         startGravity_ = "unavailable: " + error;
         gravity_.reset();
@@ -467,6 +491,8 @@ void SceneRenderer::resetCamera() {
 }
 
 void SceneRenderer::consume(Prepared& prepared) {
+    if (!prepared.collisionError.empty()) startLanding_ = "collision unavailable: " + prepared.collisionError;
+    if (prepared.collision && collision_) collision_->addParts(stage_, std::move(prepared.collision));
     if (prepared.result == Prepared::Result::Missing) { ++missing_; return; }
     if (prepared.result == Prepared::Result::Skinned) { ++skinned_; return; }
     if (prepared.result != Prepared::Result::Ready) { ++failed_; return; }
@@ -536,6 +562,12 @@ void SceneRenderer::update(const InputFrame& input, float seconds) {
                       std::to_string(skinned_) + " animated" + failed + memory;
             std::snprintf(memory, sizeof(memory), "%zu models, %.1f MB free", models_.size(), linearSpaceFree() / (1024.0 * 1024.0));
             summary_ = memory + failed;
+            if (collision_ && stage_.entrance && startLanding_.empty()) {
+                startLanding_ = describeLanding(*collision_, stage_, stage_.start.data());
+                char parts[32];
+                std::snprintf(parts, sizeof parts, " (%zu parts)", collision_->parts());
+                startLanding_ += parts;
+            }
         }
     }
     if (input.camera.pressed) resetCamera();
