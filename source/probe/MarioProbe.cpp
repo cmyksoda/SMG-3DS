@@ -1,10 +1,16 @@
 // A bring-up app: the game's own boot (GameSystem.cpp's main) runs until it reaches something the port does not
 // have yet. Each stop names itself in the emulator's log (see docs/PORTING.md, "Road to Mario").
 #include <3ds.h>
+#include <csignal>
 #include <cstdio>
+
+// Every stop ends in abort. libctru's exit would unmount the SD card under the game's own threads (the DVD worker,
+// mid-read), which then fault on hardware, so a stop ends the process at once.
+[[noreturn]] static void endAtStop(int) { svcExitProcess(); }
 
 // The game's static initializers run before main; stderr has to reach the emulator's log before any of them.
 __attribute__((constructor(101))) static void logFromTheStart() {
+    std::signal(SIGABRT, endAtStop);
     consoleDebugInit(debugDevice_SVC);
     std::fprintf(stderr, "mario-probe: static initialization begins\n");
 }

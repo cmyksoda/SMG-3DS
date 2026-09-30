@@ -359,7 +359,9 @@ nw4r's 29. `petari_game` (CMakeLists.txt, 3DS only) builds all of them that the 
 game's own `main()` (GameSystem.cpp, kept whole as `smgGameMain`) and runs until the first thing the port
 lacks; every such stop prints its name to stderr, which the probe routes to Azahar's log (filter
 `*:Info Debug.Emulated:Debug`, and **`instant_debug_log=true`**, or the log file stops a second in). A
-priority-101 constructor opens that channel before the game's static initializers run.
+priority-101 constructor opens that channel before the game's static initializers run. Every stop ends in `abort`,
+and the probe ends the process right there (`svcExitProcess` from a SIGABRT handler): libctru's own exit would
+unmount the SD card while the game's DVD worker was still reading from it, which faults on hardware.
 
 **Measuring.** `tools/petari-link-needs.sh BUILD "Game JSystem nw4r" OUT HEADER 'STATEMENT'` compiles every
 source for ARM, lists what nothing defines, and links a probe of `STATEMENT` against the port's libraries with
