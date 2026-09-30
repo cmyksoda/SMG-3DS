@@ -585,7 +585,7 @@ void SceneRenderer::loadStage(const std::string& root, const std::string& galaxy
         lightSets_.clear();
         lightSet(nullptr);
     }
-    closeView_ = false;
+    view_ = 0;
     resetCamera();
     status_ = std::to_string(stage_.objects.size()) + " placements, " + std::to_string(names_.size()) + " models to load";
     // Just below the main thread, so decoding fills the time the main thread spends waiting on the GPU.
@@ -707,15 +707,18 @@ void SceneRenderer::stepProbe(float seconds) {
 }
 
 void SceneRenderer::resetCamera() {
-    // Behind and above the first start point, looking the way it faces; or close in front, looking back at it.
+    // Behind and above the first start point looking the way it faces; close in front looking back at it; level
+    // with a standing figure's head; or close behind it. The near views turn a little so the pointer misses it.
+    struct View { float away, above, turn, pitch; };
+    constexpr View views[]{{-2400, 900, 0, -0.35f}, {500, 330, 3.14159265f - 0.25f, -0.45f}, {210, 118, 3.14159265f - 0.3f, 0.0f},
+                           {-330, 200, 0.28f, -0.3f}};
+    const View& view = views[view_];
     const float facing = stage_.startRotation[1] * 3.14159265f / 180.0f;
-    const float away = closeView_ ? 500 : -2400, above = closeView_ ? 330 : 900;
-    // Turned a little, so the star pointer at the centre does not cover what stands at the start.
-    yaw_ = closeView_ ? facing + 3.14159265f - 0.25f : facing;
-    pitch_ = closeView_ ? -0.45f : -0.35f;
-    position_[0] = stage_.start[0] + std::sin(facing) * away;
-    position_[1] = stage_.start[1] + above;
-    position_[2] = stage_.start[2] + std::cos(facing) * away;
+    yaw_ = facing + view.turn;
+    pitch_ = view.pitch;
+    position_[0] = stage_.start[0] + std::sin(facing) * view.away;
+    position_[1] = stage_.start[1] + view.above;
+    position_[2] = stage_.start[2] + std::cos(facing) * view.away;
 }
 
 namespace {
@@ -906,7 +909,7 @@ void SceneRenderer::update(const InputFrame& input, float seconds) {
         }
     }
     if (input.camera.pressed) {
-        closeView_ = !closeView_;
+        view_ = (view_ + 1) % 4;
         resetCamera();
         dropProbe();
     }

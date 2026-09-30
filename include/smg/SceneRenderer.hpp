@@ -116,7 +116,7 @@ private:
     std::vector<std::unique_ptr<GpuModel>> models_;
     std::vector<Instance> instances_;
     float position_[3]{}, yaw_ = 0, pitch_ = 0;
-    bool closeView_ = false; // L swaps between the view behind the start and the close one in front
+    int view_ = 0; // L steps through views of the start: behind, close in front, a figure's head, close behind
     bool probeFalling_ = false;
     float probe_[3]{}, probeVelocity_[3]{}, probeFallen_ = 0, probeSinceTrail_ = 0;
     std::vector<std::array<float, 3>> probeTrail_;

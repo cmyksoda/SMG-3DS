@@ -51,7 +51,8 @@ buttons reset the camera and recenter the pointer, and it lists the current bind
 The current build streams in Good Egg's first scenario as a stage preview: every rigid model
 its layers place, drawn with the game's own materials translated to the 3DS combiner. Fly
 with the Circle Pad, look with the C-Stick or D-pad, rise with A, sink with ZL, hold X to
-go faster, and press L to swap between the view behind the start and a close one in front of it.
+go faster, and press L to step through views of the start: behind it, close in front, level with
+Mario's head, and close behind him.
 Mario's own model stands where his start's pull meets the collision, idling through his wait
 animation; he is a model and an animation only, so none of these inputs reach him, the game's
 camera, or star bits yet. A `preview=` line in `settings.ini` opens another
