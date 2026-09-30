@@ -81,7 +81,9 @@ void readTev(const GxCommandProcessor& gpu, GxDraw& out) {
         if (s.texMap < 8) m.textures[s.texMap] = s.texMap;
     }
     for (int r = 0; r < 4; ++r) {
-        const std::uint32_t ra = gpu.tevColor[2 * r], bg = gpu.tevColor[2 * r + 1];
+        // A material keeps C0, C1, C2 then PREV (as J3D's MAT3 does); BP 0xE0 holds PREV, 0xE2 C0 and so on.
+        const int pair = (r + 1) % 4;
+        const std::uint32_t ra = gpu.tevColor[2 * pair], bg = gpu.tevColor[2 * pair + 1];
         m.tevColors[r] = {signed11(TEV_REGISTERL_GET_R(ra)), signed11(TEV_REGISTERH_GET_G(bg)), signed11(TEV_REGISTERH_GET_B(bg)),
                           signed11(TEV_REGISTERL_GET_A(ra))};
         const std::uint32_t kra = gpu.tevKonst[2 * r], kbg = gpu.tevKonst[2 * r + 1];

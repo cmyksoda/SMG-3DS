@@ -89,8 +89,8 @@ void clearQuad() {
     check(d.material.tevStageCount == 1 && t.colorIn[0] == 15 && t.colorIn[3] == 2 && t.alphaIn[0] == 7 && t.alphaIn[3] == 1 &&
           t.colorOp == 0 && t.colorClamp == 1 && t.colorReg == 0, "the TEV stage reads as GXSetTevColorIn and GXSetTevColorOp set it");
     check(t.texMap == 0 && t.texCoord == 0 && t.channel == 6 && d.material.textures[0] == 0, "the TEV order reads its map, coordinate and no channel");
-    check(near(d.material.tevColors[1][0], 0x40 / 255.0f) && near(d.material.tevColors[1][1], 0x80 / 255.0f) &&
-          near(d.material.tevColors[1][2], 0xC0 / 255.0f) && near(d.material.tevColors[1][3], 1), "C0 reads from its two halves");
+    check(near(d.material.tevColors[0][0], 0x40 / 255.0f) && near(d.material.tevColors[0][1], 0x80 / 255.0f) &&
+          near(d.material.tevColors[0][2], 0xC0 / 255.0f) && near(d.material.tevColors[0][3], 1), "C0 reads from its two halves");
     check(d.material.depth.enable && d.material.depth.function == 7 && d.material.depth.update && d.material.blend.type == 0 &&
           d.colorUpdate && d.alphaUpdate && d.material.alphaTest.compare0 == 7 && d.material.alphaTest.op == 1, "the pixel tests read as set");
     check(d.depthTextureOp == 2 && d.depthTextureType == 2, "depth comes from a 24-bit texel, replacing");
@@ -187,8 +187,38 @@ void channels() {
 }
 } // namespace
 
+// nw4r's layout material: black (C0) to white (C1) by the texture, which is the texture itself. The material keeps
+// C0, C1, C2, PREV, as the combiner reads them; BP 0xE0 is PREV's, so a grey there must not become C0.
+void layoutMaterial() {
+    auto owned = std::make_unique<smg::GxCommandProcessor>(host());
+    smg::GxCommandProcessor& gpu = *owned;
+    Stream s;
+    clearState(s);
+    s.bp(0xC008248F);                                    // colour: lerp(C0, C1, TEXC), clamped
+    s.bp(0xE0080080), s.bp(0xE1080080);                  // PREV = grey
+    s.bp(0xE20FF000), s.bp(0xE3000000);                  // C0 = black
+    s.bp(0xE40FF0FF), s.bp(0xE50FF0FF);                  // C1 = white
+    s.bp(0xF6000004), s.bp(0xF700000E);                  // swap table 0 as GXInit leaves it: R, G, B, A
+    quad(s, {0, 1, 3, 2});
+    drawn.clear();
+    gpu.put(s.bytes.data(), static_cast<std::uint32_t>(s.bytes.size()));
+    smg::GxDraw d;
+    smg::buildGxDraw(gpu, drawn[0].kind, drawn[0].format, drawn[0].count, drawn[0].data.data(), {}, d);
+    const auto& c = d.material.tevColors;
+    check(near(c[0][0], 0) && near(c[1][0], 1) && near(c[1][2], 1) && near(c[3][0], 0x80 / 255.0f), "the material holds C0, C1, then PREV last");
+    bool plain = false, inverted = false;
+    for (unsigned k = 0; k < d.program.stageCount; ++k)
+        for (int i = 0; i < 3; ++i)
+            if (d.program.stages[k].colorSource[i] == smg::CombineSource::Texture0) {
+                plain |= d.program.stages[k].colorOperand[i] == smg::CombineOperand::Color;
+                inverted |= d.program.stages[k].colorOperand[i] == smg::CombineOperand::OneMinusColor;
+            }
+    check(plain && !inverted, "black to white by the texture reads the texture as it is");
+}
+
 int runGxDrawTests() {
     clearQuad();
+    layoutMaterial();
     texturedQuad();
     perspective();
     channels();
