@@ -287,7 +287,12 @@ void settingsFiles() {
     settings.invertY = true;
     settings.bindings[smg::Shoot] = smg::ZR | smg::R;
     settings.bindings[smg::Minus] = 0;
+    settings.previewGalaxy = "FloaterOtaKingGalaxy";
+    settings.previewScenario = 2;
     check(smg::parseSettings(smg::formatSettings(settings)) == settings, "settings round trip");
+    check(smg::parseSettings("preview=../../sys 1\n").previewGalaxy == "EggStarGalaxy" &&
+          smg::parseSettings("preview=EggStarGalaxy 0\n").previewScenario == 1 &&
+          smg::parseSettings("preview=HeavenlyBeachGalaxy 3\n").previewScenario == 3, "only a plain galaxy name and scenario");
     const auto parsed = smg::parseSettings(
         "pointer=teleport\nmotion_speed=9000\nstick_speed=50\ninvert_x=yes\nbind.jump=A+Q\nbind.spin = Y \nnonsense\n");
     check(parsed.pointer == smg::PointerMode::Motion && parsed.motionSpeed == 100 && parsed.stickSpeed == 50,

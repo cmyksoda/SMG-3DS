@@ -1,5 +1,6 @@
 #include <smg/Settings.hpp>
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 
@@ -53,6 +54,19 @@ void parseSpeed(const std::string& value, int& speed) {
     if (!value.empty() && !*end && parsed >= Settings::MinSpeed && parsed <= Settings::MaxSpeed)
         speed = static_cast<int>(parsed);
 }
+// "EggStarGalaxy 1": the name becomes part of a path, so only letters and digits pass.
+void parsePreview(const std::string& value, Settings& settings) {
+    const auto space = value.find(' ');
+    if (space == std::string::npos || space == 0 || space > 64) return;
+    const std::string galaxy = value.substr(0, space);
+    for (char c : galaxy) if (!std::isalnum(static_cast<unsigned char>(c))) return;
+    char* end = nullptr;
+    const std::string number = trim(value.substr(space + 1));
+    const long scenario = std::strtol(number.c_str(), &end, 10);
+    if (number.empty() || *end || scenario < 1 || scenario > 16) return;
+    settings.previewGalaxy = galaxy;
+    settings.previewScenario = static_cast<int>(scenario);
+}
 } // namespace
 
 const char* keyName(unsigned bit) { return bit < KeyCount ? keyNames[bit] : "?"; }
@@ -73,7 +87,8 @@ Bindings defaultBindings() {
 
 bool operator==(const Settings& a, const Settings& b) {
     return a.pointer == b.pointer && a.bindings == b.bindings && a.motionSpeed == b.motionSpeed &&
-           a.stickSpeed == b.stickSpeed && a.invertX == b.invertX && a.invertY == b.invertY;
+           a.stickSpeed == b.stickSpeed && a.invertX == b.invertX && a.invertY == b.invertY &&
+           a.previewGalaxy == b.previewGalaxy && a.previewScenario == b.previewScenario;
 }
 
 Settings parseSettings(const std::string& text, Settings base) {
@@ -94,6 +109,8 @@ Settings parseSettings(const std::string& text, Settings base) {
             parseSpeed(value, settings.stickSpeed);
         } else if (key == "invert_x" || key == "invert_y") {
             if (value == "0" || value == "1") (key == "invert_x" ? settings.invertX : settings.invertY) = value == "1";
+        } else if (key == "preview") {
+            parsePreview(value, settings);
         } else if (key.rfind("bind.", 0) == 0) {
             const int action = lookup(actionNames, key.substr(5));
             std::uint32_t keys;
@@ -112,6 +129,7 @@ std::string formatSettings(const Settings& settings) {
     text += "invert_y=" + std::string(settings.invertY ? "1" : "0") + "\n";
     for (unsigned action = 0; action < ActionCount; ++action)
         text += "bind." + std::string(actionNames[action]) + "=" + formatKeys(settings.bindings[action]) + "\n";
+    text += "preview=" + settings.previewGalaxy + " " + std::to_string(settings.previewScenario) + "\n";
     return text;
 }
 

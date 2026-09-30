@@ -94,7 +94,7 @@ int main() {
     smg::NativePad pad;
     smg::Session session(DataRoot);
     smg::SceneRenderer scene;
-    if (scene.init()) scene.loadStage(DataRoot, "EggStarGalaxy", 1);
+    if (scene.init()) scene.loadStage(DataRoot, settings.previewGalaxy, settings.previewScenario);
     aptHookCookie hook;
     aptHook(&hook, aptCallback, nullptr);
     u64 previousTime = osGetTime();

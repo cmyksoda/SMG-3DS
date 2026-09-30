@@ -27,6 +27,9 @@ struct Settings {
     Bindings bindings = defaultBindings();
     int motionSpeed = 100, stickSpeed = 100; // percent
     bool invertX = false, invertY = false;
+    // The galaxy and scenario the stage preview opens; a galaxy is a StageData folder name.
+    std::string previewGalaxy = "EggStarGalaxy";
+    int previewScenario = 1;
     static constexpr int MinSpeed = 25, MaxSpeed = 300, SpeedStep = 25;
 };
 bool operator==(const Settings& a, const Settings& b);
