@@ -78,9 +78,10 @@ int auditGravity(const fs::path& root) {
         }
         zonesWithGravity += any;
     }
-    std::size_t total = 0;
-    for (const auto& [name, r] : rows) total += r.count;
-    std::printf("Gravity rows on the disc: %zu in %zu of %zu stage archives\n", total, zonesWithGravity, archives);
+    std::size_t global = 0, actors = 0;
+    for (const auto& [name, r] : rows) (name.rfind("Global", 0) == 0 ? global : actors) += r.count;
+    std::printf("Global gravity rows on the disc: %zu, and %zu rows of other objects named for gravity, in %zu of %zu "
+                "stage archives\n", global, actors, zonesWithGravity, archives);
     std::printf("%6s %5s %5s %5s %5s  %s\n", "rows", "SW_A", "SW_B", "SLEEP", "Follow", "name (tables)");
     for (const auto& [name, r] : rows) {
         std::string tables;

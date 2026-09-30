@@ -242,14 +242,15 @@ The four remaining `.arc` files are U8-format Wii HOME Menu resources, currently
 
 `resource_audit --gravity` places the gravity of all 136 scenarios in the 48 galaxies through
 the original creators under ASan and UBSan, and asks every placed gravity for its pull at 48
-points around Mario's start (181,392 pulls, none infinite or NaN). The disc has 1,142 global
+points around Mario's start (181,392 pulls, none infinite or NaN). The disc has 1,075 global
 gravity rows, all in `planetobjinfo` tables: 463 planes in boxes, 178 points, 147 cubes, 140
 disks, 75 segments, 34 planes in cylinders, 10 disk tori, 9 planes, 7 cones and 12 wires. Wire
 gravity (59 placements in 22 scenarios, among them Honeybee Kingdom, Sand Clock and Cosmos
 Garden) is the only kind not placed. 63 rows use switch A, 15 switch B, 11 `SW_SLEEP`, and none
 a follower. Every scenario has gravity at Mario's start except twelve hidden-star scenarios
 (`IsHidden`), which place no MarioNo 0 entrance of their own; `Stage::entrance` says so instead
-of starting at the origin.
+of starting at the origin. Another 67 rows place actors with gravity of their own (the reverse
+and quarter-roll gravity rooms, gravity lights); they wait for `LiveActor`.
 
 All 1,758 BMD/BDL models load under ASan and UBSan (5,053,844 triangles), and 6,949 of their
 7,780 materials translate to the combiner exactly. Good Egg scenario 1 places 296 objects
