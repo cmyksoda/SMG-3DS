@@ -77,37 +77,55 @@ GPU_TEXCOLOR chooseFormat(const ModelTexture& texture) {
     return texture.format == GxFormat::RGB5A3 ? GPU_RGBA4 : GPU_RGBA8;
 }
 
-bool upload(C3D_Tex& texture, const ModelTexture& source) {
+struct TiledTexture {
+    unsigned width = 0, height = 0, wrapS = 0, wrapT = 0, minFilter = 1, magFilter = 1;
+    GPU_TEXCOLOR format = GPU_RGBA8;
+    std::vector<std::uint8_t> bytes;
+};
+
+// Runs on the loader thread: converts and swizzles into the layout the GPU samples.
+TiledTexture tile(const ModelTexture& source) {
+    TiledTexture out;
     const Image& image = source.image;
-    if (!image.width || !image.height) return false;
-    const unsigned width = powerOfTwo(image.width), height = powerOfTwo(image.height);
-    const GPU_TEXCOLOR format = chooseFormat(source);
-    if (!C3D_TexInit(&texture, width, height, format)) return false;
-    auto* bytes = static_cast<std::uint8_t*>(texture.data);
-    for (unsigned y = 0; y < height; ++y) {
-        for (unsigned x = 0; x < width; ++x) {
+    if (!image.width || !image.height) return out;
+    out.width = powerOfTwo(image.width);
+    out.height = powerOfTwo(image.height);
+    out.format = chooseFormat(source);
+    out.wrapS = source.wrapS;
+    out.wrapT = source.wrapT;
+    out.minFilter = source.minFilter;
+    out.magFilter = source.magFilter;
+    const unsigned bytesPerTexel = out.format == GPU_RGBA8 ? 4 : out.format == GPU_LA4 || out.format == GPU_L8 ? 1 : 2;
+    out.bytes.assign(std::size_t(out.width) * out.height * bytesPerTexel, 0);
+    auto* bytes = out.bytes.data();
+    for (unsigned y = 0; y < out.height; ++y) {
+        for (unsigned x = 0; x < out.width; ++x) {
             // Nearest-neighbour stretch for the few textures that are not a power of two.
-            const std::uint32_t c = image.pixels[std::size_t(y * image.height / height) * image.width + x * image.width / width];
+            const std::uint32_t c = image.pixels[std::size_t(y * image.height / out.height) * image.width + x * image.width / out.width];
             const unsigned r = c >> 24, g = c >> 16 & 255, b = c >> 8 & 255, a = c & 255;
-            const unsigned texel = ((y / 8) * (width / 8) + x / 8) * 64 + morton(x, y);
-            switch (format) {
-            case GPU_RGBA8: reinterpret_cast<std::uint32_t*>(bytes)[texel] = c; break;
-            case GPU_RGB565: reinterpret_cast<std::uint16_t*>(bytes)[texel] = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3); break;
-            case GPU_RGBA5551:
-                reinterpret_cast<std::uint16_t*>(bytes)[texel] = ((r >> 3) << 11) | ((g >> 3) << 6) | ((b >> 3) << 1) | (a >> 7);
-                break;
-            case GPU_RGBA4:
-                reinterpret_cast<std::uint16_t*>(bytes)[texel] = ((r >> 4) << 12) | ((g >> 4) << 8) | ((b >> 4) << 4) | (a >> 4);
-                break;
-            case GPU_LA8: reinterpret_cast<std::uint16_t*>(bytes)[texel] = (r << 8) | a; break;
-            case GPU_LA4: bytes[texel] = ((r >> 4) << 4) | (a >> 4); break;
-            default: bytes[texel] = r; break;
+            const unsigned texel = ((y / 8) * (out.width / 8) + x / 8) * 64 + morton(x, y);
+            std::uint16_t half = 0;
+            switch (out.format) {
+            case GPU_RGBA8: std::memcpy(bytes + texel * 4, &c, 4); continue;
+            case GPU_RGB565: half = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3); break;
+            case GPU_RGBA5551: half = ((r >> 3) << 11) | ((g >> 3) << 6) | ((b >> 3) << 1) | (a >> 7); break;
+            case GPU_RGBA4: half = ((r >> 4) << 12) | ((g >> 4) << 8) | ((b >> 4) << 4) | (a >> 4); break;
+            case GPU_LA8: half = (r << 8) | a; break;
+            case GPU_LA4: bytes[texel] = ((r >> 4) << 4) | (a >> 4); continue;
+            default: bytes[texel] = r; continue;
             }
+            std::memcpy(bytes + texel * 2, &half, 2);
         }
     }
+    return out;
+}
+
+bool upload(C3D_Tex& texture, const TiledTexture& tiled) {
+    if (!tiled.width || !C3D_TexInit(&texture, tiled.width, tiled.height, tiled.format)) return false;
+    std::memcpy(texture.data, tiled.bytes.data(), std::min<std::size_t>(texture.size, tiled.bytes.size()));
     C3D_TexFlush(&texture);
-    C3D_TexSetFilter(&texture, source.magFilter ? GPU_LINEAR : GPU_NEAREST, source.minFilter ? GPU_LINEAR : GPU_NEAREST);
-    C3D_TexSetWrap(&texture, wrap(source.wrapS), wrap(source.wrapT));
+    C3D_TexSetFilter(&texture, tiled.magFilter ? GPU_LINEAR : GPU_NEAREST, tiled.minFilter ? GPU_LINEAR : GPU_NEAREST);
+    C3D_TexSetWrap(&texture, wrap(tiled.wrapS), wrap(tiled.wrapT));
     return true;
 }
 
@@ -260,8 +278,77 @@ bool endsWith(const std::string& text, const std::string& suffix) {
 }
 } // namespace
 
-SceneRenderer::SceneRenderer() = default;
+struct SceneRenderer::Prepared {
+    enum class Result { Ready, Missing, Skinned, Failed } result = Result::Failed;
+    std::string name;
+    PackedMesh mesh;
+    std::vector<TiledTexture> textures;
+    std::vector<Material> materials;
+};
+
+namespace {
+// Everything a model needs short of GPU memory, so it can run off the main thread.
+std::unique_ptr<SceneRenderer::Prepared> prepareModel(const std::string& root, const std::string& name) {
+    auto out = std::make_unique<SceneRenderer::Prepared>();
+    out->name = name;
+    std::vector<std::uint8_t> storage;
+    std::vector<ArchiveEntry> entries;
+    std::string error;
+    out->result = SceneRenderer::Prepared::Result::Missing;
+    if (!readArchive((root + "/ObjectData/" + name + ".arc").c_str(), storage, entries, ArchiveBudget, error)) return out;
+    const auto entry = std::find_if(entries.begin(), entries.end(), [&](const ArchiveEntry& e) {
+        return endsWith(e.path, name + ".bdl") || endsWith(e.path, name + ".bmd");
+    });
+    if (entry == entries.end()) return out;
+    Model model;
+    out->result = SceneRenderer::Prepared::Result::Failed;
+    if (!loadModel({storage.data() + entry->offset, entry->size}, model, ModelBudget, error)) return out;
+    std::vector<std::uint8_t>().swap(storage);
+    out->result = SceneRenderer::Prepared::Result::Skinned;
+    if (model.skinned) return out;
+    out->mesh = packMesh(model);
+    for (const auto& texture : model.textures) out->textures.push_back(tile(texture));
+    for (const auto& material : model.materials) out->materials.push_back(prepare(material));
+    out->result = SceneRenderer::Prepared::Result::Ready;
+    return out;
+}
+} // namespace
+
+SceneRenderer::SceneRenderer() { LightLock_Init(&lock_); }
 SceneRenderer::~SceneRenderer() { shutdown(); }
+
+void SceneRenderer::workerMain(void* self) { static_cast<SceneRenderer*>(self)->work(); }
+
+void SceneRenderer::work() {
+    for (const auto& name : names_) {
+        // Hold at most two decoded models, so the loader cannot run far ahead of the uploads.
+        for (;;) {
+            if (stopping_) return;
+            LightLock_Lock(&lock_);
+            const std::size_t queued = finished_.size();
+            LightLock_Unlock(&lock_);
+            if (queued < 2) break;
+            svcSleepThread(2000000);
+        }
+        auto prepared = prepareModel(root_, name);
+        LightLock_Lock(&lock_);
+        finished_.push_back(std::move(prepared));
+        LightLock_Unlock(&lock_);
+    }
+}
+
+void SceneRenderer::stopWorker() {
+    stopping_ = true;
+    if (worker_) {
+        threadJoin(worker_, U64_MAX);
+        threadFree(worker_);
+        worker_ = nullptr;
+    }
+    stopping_ = false;
+    LightLock_Lock(&lock_);
+    finished_.clear();
+    LightLock_Unlock(&lock_);
+}
 
 bool SceneRenderer::init() {
     shader_ = DVLB_ParseFile(reinterpret_cast<u32*>(modelShader), sizeof(modelShader));
@@ -288,10 +375,11 @@ bool SceneRenderer::init() {
 }
 
 void SceneRenderer::shutdown() {
+    stopWorker();
     instances_.clear();
     models_.clear();
-    pending_.clear();
-    next_ = 0;
+    names_.clear();
+    consumed_ = 0;
     if (programReady_) shaderProgramFree(&program_);
     programReady_ = false;
     if (shader_) DVLB_Free(shader_);
@@ -299,18 +387,24 @@ void SceneRenderer::shutdown() {
 }
 
 void SceneRenderer::loadStage(const std::string& root, const std::string& galaxy, int scenario) {
+    stopWorker();
     instances_.clear();
     models_.clear();
-    pending_.clear();
-    next_ = skinned_ = missing_ = failed_ = 0;
+    names_.clear();
+    consumed_ = skinned_ = missing_ = failed_ = 0;
     root_ = root;
     title_ = galaxy + " / scenario " + std::to_string(scenario);
     std::string error;
     if (!smg::loadStage(root, galaxy, scenario, stage_, error)) { status_ = error; return; }
     for (const auto& object : stage_.objects)
-        if (std::find(pending_.begin(), pending_.end(), object.name) == pending_.end()) pending_.push_back(object.name);
+        if (std::find(names_.begin(), names_.end(), object.name) == names_.end()) names_.push_back(object.name);
     resetCamera();
-    status_ = std::to_string(stage_.objects.size()) + " placements, " + std::to_string(pending_.size()) + " models to load";
+    status_ = std::to_string(stage_.objects.size()) + " placements, " + std::to_string(names_.size()) + " models to load";
+    // Just below the main thread, so decoding fills the time the main thread spends waiting on the GPU.
+    s32 priority = 0x30;
+    svcGetThreadPriority(&priority, CUR_THREAD_HANDLE);
+    worker_ = threadCreate(workerMain, this, 256 * 1024, std::min<s32>(priority + 1, 0x3f), -2, false);
+    if (!worker_) status_ = "Cannot start the model loader";
 }
 
 void SceneRenderer::resetCamera() {
@@ -322,30 +416,16 @@ void SceneRenderer::resetCamera() {
     position_[2] = stage_.start[2] - std::cos(yaw_) * 2400;
 }
 
-void SceneRenderer::loadNext() {
-    const std::string& name = pending_[next_++];
-    std::vector<std::uint8_t> storage;
-    std::vector<ArchiveEntry> entries;
-    std::string error;
-    if (!readArchive((root_ + "/ObjectData/" + name + ".arc").c_str(), storage, entries, ArchiveBudget, error)) {
-        ++missing_;
-        return;
-    }
-    const auto entry = std::find_if(entries.begin(), entries.end(), [&](const ArchiveEntry& e) {
-        return endsWith(e.path, name + ".bdl") || endsWith(e.path, name + ".bmd");
-    });
-    if (entry == entries.end()) { ++missing_; return; }
-    Model model;
-    if (!loadModel({storage.data() + entry->offset, entry->size}, model, ModelBudget, error)) { ++failed_; return; }
-    std::vector<std::uint8_t>().swap(storage);
-    if (model.skinned) { ++skinned_; return; }
-
+void SceneRenderer::consume(Prepared& prepared) {
+    if (prepared.result == Prepared::Result::Missing) { ++missing_; return; }
+    if (prepared.result == Prepared::Result::Skinned) { ++skinned_; return; }
+    if (prepared.result != Prepared::Result::Ready) { ++failed_; return; }
     auto gpu = std::make_unique<GpuModel>();
-    gpu->name = name;
-    const auto mesh = packMesh(model);
+    gpu->name = prepared.name;
+    const auto& mesh = prepared.mesh;
     gpu->vertices = linearAlloc(mesh.vertices.size() * sizeof(PackedVertex));
     gpu->indices = linearAlloc(mesh.indices.size() * sizeof(std::uint16_t));
-    if (!gpu->vertices || !gpu->indices) { ++failed_; status_ = "Out of linear memory at " + name; return; }
+    if (!gpu->vertices || !gpu->indices) { ++failed_; status_ = "Out of linear memory at " + prepared.name; return; }
     std::memcpy(gpu->vertices, mesh.vertices.data(), mesh.vertices.size() * sizeof(PackedVertex));
     std::memcpy(gpu->indices, mesh.indices.data(), mesh.indices.size() * sizeof(std::uint16_t));
     GSPGPU_FlushDataCache(gpu->vertices, mesh.vertices.size() * sizeof(PackedVertex));
@@ -353,15 +433,19 @@ void SceneRenderer::loadNext() {
     gpu->shapes = mesh.shapes;
     std::copy(mesh.center, mesh.center + 3, gpu->center);
     gpu->radius = mesh.radius;
-    gpu->textures.resize(model.textures.size());
-    for (std::size_t i = 0; i < model.textures.size(); ++i) {
-        if (!upload(gpu->textures[i], model.textures[i])) { ++failed_; status_ = "Cannot upload a texture of " + name; return; }
+    gpu->textures.resize(prepared.textures.size());
+    for (std::size_t i = 0; i < prepared.textures.size(); ++i) {
+        if (!upload(gpu->textures[i], prepared.textures[i])) {
+            ++failed_;
+            status_ = "Cannot upload a texture of " + prepared.name;
+            return;
+        }
     }
-    for (const auto& material : model.materials) gpu->materials.push_back(prepare(material));
+    gpu->materials = std::move(prepared.materials);
 
-    const bool sky = name.size() > 2 && name[0] == 'V' && name[1] == 'R';
+    const bool sky = prepared.name.size() > 2 && prepared.name[0] == 'V' && prepared.name[1] == 'R';
     for (const auto& object : stage_.objects) {
-        if (object.name != name) continue;
+        if (object.name != prepared.name) continue;
         Instance instance{gpu.get(), {}, {}, 0, sky};
         setMatrix(instance.transform, object.transform);
         const auto& t = object.transform;
@@ -379,10 +463,20 @@ void SceneRenderer::loadNext() {
 
 void SceneRenderer::update(const InputFrame& input, float seconds) {
     if (loading()) {
-        loadNext();
-        status_ = "Loading " + std::to_string(next_) + "/" + std::to_string(pending_.size()) + "  " +
-                  (next_ < pending_.size() ? pending_[next_] : std::string("done"));
-        summary_ = "loading " + std::to_string(next_) + " of " + std::to_string(pending_.size()) + " models";
+        std::unique_ptr<Prepared> next;
+        LightLock_Lock(&lock_);
+        if (!finished_.empty()) {
+            next = std::move(finished_.front());
+            finished_.erase(finished_.begin());
+        }
+        LightLock_Unlock(&lock_);
+        if (next) {
+            consume(*next);
+            ++consumed_;
+        }
+        status_ = "Loading " + std::to_string(consumed_) + "/" + std::to_string(names_.size()) + "  " +
+                  (consumed_ < names_.size() ? names_[consumed_] : std::string("done"));
+        summary_ = "loading " + std::to_string(consumed_) + " of " + std::to_string(names_.size()) + " models";
         if (!loading()) {
             char memory[48];
             std::snprintf(memory, sizeof(memory), "; %.1f MB linear free", linearSpaceFree() / (1024.0 * 1024.0));
