@@ -1627,6 +1627,10 @@ adapt("src/RVL_SDK/mem/mem_allocator.c", "RVL_SDK/mem/mem_allocator.c", [], drop
     "static void AllocatorFreeForExpHeap_(MEMAllocator *pAllocator, void *pBlock) {",
     "void MEMInitAllocatorForExpHeap(MEMAllocator *pAllocator, MEMHeapHandle handle, int align) {",
 ], reason="the SDK's expanded heaps, which the game never makes: it gives nw4r its own allocators")
+# The Yaz0 header's decoded size is a big-endian word, as this file's other path already reads it.
+adapt("src/Game/System/FileRipper.cpp", "Game/System/FileRipper.cpp", [
+    ("    u32 data_len = *(u32*)(src + 4);", "    u32 data_len = (src[4] << 24) | (src[5] << 16) | (src[6] << 8) | src[7];", 1),
+])
 # MSL's own wide-string functions, built as C over newlib's headers (compat/smg/MslWide.h stands in for MSL's).
 adapt("src/MSL_C/wstring.c", "MSL_C/wstring.c", [('#include "size_t.h"\n#include "wchar_t.h"\n', "#include <smg/MslWide.h>\n", 1)])
 adapt("src/MSL_C/wmem.c", "MSL_C/wmem.c", [('#include "wchar_io.h"\n#include "cstring"\n', "#include <smg/MslWide.h>\n", 1)])
