@@ -448,7 +448,9 @@ would give game code MSL's own formatter (its decompiled `printf.c`) or wrap the
 casts to `u32`), and the game stores pointers in `u32`, so a 32-bit host is the honest target for sanitizer runs.
 `wchar_t` is two bytes on the Wii and four here, and the game reads its UTF-16 text through `wchar_t*`
 (`TalkNodeCtrl`, the tag processors, nw4r's `TextWriter`), so text will need `-fshort-wchar` for the game's
-libraries and wide-string functions built for it (MSL's own, from the decomp), not newlib's. MSL's
+libraries and wide-string functions built for it (MSL's own, from the decomp), not newlib's. The game calls
+only four: `swprintf`, `vswprintf`, `wcslen` and `wcsncpy`, with integer and string conversions in its own
+format strings. MSL's
 `std::sort` orders equal keys differently from libstdc++'s.
 
 ## The native scene boundary

@@ -1534,6 +1534,11 @@ adapt("src/Game/System/MessageHolder.cpp", "Game/System/MessageHolder.cpp", [
     ('    u8* msgData = (u8*)pArchive->getResource("Message.bmg");\n',
      '    u8* msgData = (u8*)pArchive->getResource("Message.bmg");\n    smgNativeBmg(msgData, pArchive->getResSize(msgData));\n', 1),
 ])
+# A string tag's slot holds a pointer the game stored natively; the Wii's first byte of it was the top byte.
+adapt("src/Game/Screen/CustomTagProcessor.cpp", "Game/Screen/CustomTagProcessor.cpp", [
+    ("    if (!*reinterpret_cast< const u8* >(tag.getParamPtr(0))) {",
+     "    if (!(reinterpret_cast< uintptr_t >(*reinterpret_cast< const wchar_t* const* >(tag.getParamPtr(0))) >> 24)) {", 1),
+])
 # Reads past an array, which gcc treats as unreachable and may fold the surrounding loop or copy away.
 # Nintendo's loop runs past three horizontal tasks into mInfinityTasks, which createInfinityTask then replaces;
 # stopping at three leaves the same tasks, less four leaked allocations.
