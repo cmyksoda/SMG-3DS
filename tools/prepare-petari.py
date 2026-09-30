@@ -91,8 +91,8 @@ def adapt(relative, target, replacements, drop=(), reason="", cases=()):
     text = msl_binders(text)
     for first in drop:
         start, end = definition(text, relative, first)
-        indent = text[start:text.index(first)]
-        text = text[:start] + f"{indent}// Left out, {reason}: {first.rstrip(' {')}" + text[end:]
+        indent = text[start:text.index(first)] + first[:len(first) - len(first.lstrip())]
+        text = text[:start] + f"{indent}// Left out, {reason}: {first.strip().rstrip(' {')}" + text[end:]
     destination = output / target
     destination.parent.mkdir(parents=True, exist_ok=True)
     text = "// Generated Petari adaptation; see tools/prepare-petari.py.\n" + text
@@ -1258,4 +1258,56 @@ constructor, push_back, increment = ["template <>\n" + part for part in demo_rin
 adapt("src/Game/Demo/DemoStartRequestHolder.cpp", "Game/Demo/DemoStartRequestHolder.cpp", [
     (demo_ring_buffer, "", 1),
     ("DemoStartInfo::DemoStartInfo() {\n", increment.rstrip("\n") + "\n\n" + constructor + push_back + "DemoStartInfo::DemoStartInfo() {\n", 1),
+])
+
+# The paired-single quantized casts, as Dolphin's interpreter models them: clamp to the type's range, then truncate.
+adapt("libs/RVL_SDK/include/revolution/os/OSFastCast.h", "include/revolution/os/OSFastCast.h", [
+    ('#define OSf32tou16(in, out) asm volatile("psq_st   %1, 0(%0), 1, 3 " : : "b"(out), "f"(*(in)) : "memory")\n#endif\n'
+     '#define OSu16tof32(in, out) asm volatile("psq_l   %0, 0(%1), 1, 3  " : "=f"(*(out)) : "b"(in))',
+     "static inline void OSf32tou16(const f32* in, volatile u16* out) {\n"
+     "    *out = (u16)(*in < 0.0f ? 0.0f : *in > 65535.0f ? 65535.0f : *in);\n}\n#endif\n"
+     "static inline void OSu16tof32(const u16* in, f32* out) {\n    *out = *in;\n}", 1),
+])
+for relative, anchor, include in [
+    ("libs/JSystem/include/JSystem/JKernel/JKRAramHeap.hpp", '#include "JSystem/JKernel/JKRDisposer.hpp"', "<revolution/os.h>"),
+    ("libs/JSystem/include/JSystem/JKernel/JKRDvdFile.hpp", '#include "JSystem/JKernel/JKRDisposer.hpp"', "<revolution/dvd.h>\n#include <revolution/os.h>"),
+    ("libs/JSystem/include/JSystem/JAudio2/JASAramStream.hpp", '#include "JSystem/JAudio2/JASTaskThread.hpp"', "<revolution/dvd.h>"),
+    ("libs/JSystem/include/JSystem/J2DGraph/J2DPane.hpp", '#include "JSystem/JSupport/JSUList.hpp"', "<revolution/gx/GXEnum.h>"),
+]:
+    adapt(relative, relative[relative.index("include/"):], [(anchor, f"{anchor}\n#include {include}", 1)])
+# Metrowerks' size_t is u32's unsigned long; the toolchains' own size_t is what operator new takes.
+adapt("src/JSystem/JKernel/JKRHeap.cpp", "JSystem/JKernel/JKRHeap.cpp", [
+    ("void* operator new(u32 size", "void* operator new(size_t size", 3), ("void* operator new[](u32 size", "void* operator new[](size_t size", 3),
+])
+adapt("src/JSystem/JKernel/JKRMemArchive.cpp", "JSystem/JKernel/JKRMemArchive.cpp", [], cases=["    case JKR_COMPRESSION_SZS:"])
+# The callback's argument carries a pointer (JAUSeqDataBlockMgr passes a link), which a 64-bit host cannot fit in u32.
+adapt("libs/JSystem/include/JSystem/JAudio2/JASResArcLoader.hpp", "include/JSystem/JAudio2/JASResArcLoader.hpp", [
+    ("typedef void (*LoadCallback)(u32, u32);", "typedef void (*LoadCallback)(u32, uintptr_t);", 1),
+    ("/* 0x14 */ u32 mCallbackArg;", "/* 0x14 */ uintptr_t mCallbackArg;", 1),
+    ("int loadResourceAsync(JKRArchive*, u16, u8*, u32, void (*)(u32, u32), u32);", "int loadResourceAsync(JKRArchive*, u16, u8*, u32, LoadCallback, uintptr_t);", 1),
+])
+adapt("src/JSystem/JAudio2/JASResArcLoader.cpp", "JSystem/JAudio2/JASResArcLoader.cpp", [
+    ("LoadCallback callback, u32 callbackArg)", "LoadCallback callback, uintptr_t callbackArg)", 1),
+])
+adapt("src/JSystem/JAudio2/JASSeqReader.cpp", "JSystem/JAudio2/JASSeqReader.cpp", [
+    ("        mLoopCounts[i] = nullptr;", "        mLoopCounts[i] = 0;", 1),
+])
+adapt("src/JSystem/J2DGraph/J2DManage.cpp", "JSystem/J2DGraph/J2DManage.cpp", [("#include <cstdio>", "#include <cstdio>\n#include <cstring>", 1)])
+# The port's JMath table holds TablePair, which has the a1/b1 names MSL's pair had.
+adapt("src/JSystem/JParticle/JPAMath.cpp", "JSystem/JParticle/JPAMath.cpp", [
+    ("const std::pair< f32, f32 >* p = &JMath::sSinCosTable", "const JMath::TablePair< f32, f32 >* p = &JMath::sSinCosTable", 2),
+])
+adapt("src/JSystem/JParticle/JPABaseShape.cpp", "JSystem/JParticle/JPABaseShape.cpp", [
+    ("__declspec(force_export) static dirTypeFunc p_direction[5]", "static dirTypeFunc p_direction[5]", 1),
+])
+adapt("src/JSystem/JUtility/JUTException.cpp", "JSystem/JUtility/JUTException.cpp", [
+    ("    panic_f_va(file, line, format, args);\n    va_end();", "    panic_f_va(file, line, format, args);\n    va_end(args);", 1),
+    ("    if (isnan(value)) {", "    if (std::isnan(value)) {", 1), ("    } else if (isinf(value)) {", "    } else if (std::isinf(value)) {", 1),
+])
+# VPanic walks the PowerPC back chain and takes over the Wii's video; the port's is in source/compat.
+adapt("src/nw4r/db/db_assert.cpp", "nw4r/db/db_assert.cpp", [
+    ("        __declspec(weak) void Panic(", "        void VPanic(const char*, int, const char*, va_list, bool);\n\n        void Panic(", 1),
+], drop=["        __declspec(weak) void VPanic("], reason="the Wii's stack walk and video")
+adapt("src/nw4r/lyt/lyt_arcResourceAccessor.cpp", "nw4r/lyt/lyt_arcResourceAccessor.cpp", [
+    ("#include <extras.h>", "#include <cstring>\n#include <extras.h>", 1),
 ])

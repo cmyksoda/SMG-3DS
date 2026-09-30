@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Compiles every source under one Petari directory for the 3DS (generated copies where the port adapts one) and
-# lists what they reference that neither they nor the port's libraries define: a bring-up's work list.
-# symbols.txt keeps every object's symbols for tools/petari-closure.py.
+# Compiles every source under the given Petari directories for the 3DS (generated copies where the port adapts
+# one) and lists what they reference that nothing defines: a bring-up's work list. symbols.txt feeds petari-closure.py.
 set -euo pipefail
 project_dir=$(cd -- "$(dirname -- "$0")/.." && pwd)
 build_dir=$(cd -- "${1:?usage: petari-link-needs.sh 3DS_BUILD_DIR Game/Player OUT_DIR}" && pwd)
@@ -22,7 +21,7 @@ compile() {
     arm-none-eabi-g++ $FLAGS "$src" -o "$object" 2>/dev/null || echo "$relative" >> failed.txt
 }
 export -f compile; export P FLAGS
-find "$P/src/$SUBDIR" -name "*.cpp" | xargs -P "$(nproc)" -n 1 bash -c '"'"'compile "$0"'"'"'
+for d in $SUBDIR; do find "$P/src/$d" -name "*.cpp"; done | xargs -P "$(nproc)" -n 1 bash -c '"'"'compile "$0"'"'"'
 arm-none-eabi-nm -C --defined-only -- *.o /build/lib*.a 2>/dev/null |
     awk '"'"'$2 ~ /^[TWVDBRtwvdbruS]$/ {sub(/^[0-9a-f]+ [A-Za-z] /,""); print}'"'"' | sort -u > defined.txt
 arm-none-eabi-nm -C --undefined-only -- *.o | sed "s/^ *U //" | grep -v ":$" |
