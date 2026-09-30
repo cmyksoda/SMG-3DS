@@ -1,6 +1,9 @@
-; GX color channel 0 with one directional light, and three texgens for the combiner's units.
+; GX color channel 0 (color and alpha) lit as SMG's light director loads it: two diffuse lights, a light at
+; the camera that only lights alpha, and the scene's ambient; plus three texgens for the combiner's units.
 .fvec projection[4], modelView[4]
-.fvec materialColor, ambientColor, lightDirection, lightColor, colorSelect
+.fvec materialColor, lightAmbient
+.fvec light0Pos, light0Color, light1Pos, light1Color, light2Alpha
+.fvec colorSelect, alphaSelect, colorLights, alphaLights
 .fvec texgen0[3], texgen1[3], texgen2[3]
 .constf constants(0.0, 1.0, 0.5, 0.00392156862)
 .constf scales(0.00787401574, 0.0, 0.0, 0.0)
@@ -36,26 +39,60 @@
     rsq r4.x, r4.x
     mul r3.xyz, r3.xyz, r4.xxx
 
-    ; Channel colors come from the register or the vertex, as colorSelect says
+    ; Material and ambient colors come from their registers or the vertex, as the channel says
     mul r5, constants.wwww, inclr
     add r6, -materialColor, r5
     mul r6, colorSelect.xxxw, r6
     add r6, materialColor, r6
-    add r7, -ambientColor, r5
-    mul r7, colorSelect.yyyy, r7
-    add r7, ambientColor, r7
+    mov r7.xyz, colorSelect.yyy
+    mov r7.w, alphaSelect.x
+    add r8, -lightAmbient, r5
+    mul r8, r7, r8
+    add r8, lightAmbient, r8
 
-    ; lit = min(ambient + max(n.l, 0) * light, 1), used when colorSelect.z enables lighting
-    dp3 r8.x, lightDirection.xyz, r3.xyz
-    max r8.x, constants.x, r8.x
-    mul r9, lightColor, r8.xxxx
-    add r9, r7, r9
-    min r9, constants.yyyy, r9
-    add r9, -constants.yyyy, r9
-    mov r12, constants.yyyy
-    mad r9, r9, colorSelect.zzzz, r12
-    mov r9.w, constants.y
-    mul outcolor, r6, r9
+    ; N.L toward each light's view-space position; light 2 sits at the camera
+    add r9.xyz, light0Pos.xyz, -r1.xyz
+    dp3 r10.x, r9.xyz, r9.xyz
+    rsq r10.x, r10.x
+    mul r9.xyz, r9.xyz, r10.xxx
+    dp3 r11.x, r3.xyz, r9.xyz
+    add r9.xyz, light1Pos.xyz, -r1.xyz
+    dp3 r10.x, r9.xyz, r9.xyz
+    rsq r10.x, r10.x
+    mul r9.xyz, r9.xyz, r10.xxx
+    dp3 r11.y, r3.xyz, r9.xyz
+    mov r9.xyz, -r1.xyz
+    dp3 r10.x, r9.xyz, r9.xyz
+    rsq r10.x, r10.x
+    mul r9.xyz, r9.xyz, r10.xxx
+    dp3 r11.z, r3.xyz, r9.xyz
+    mov r11.w, constants.x
+    max r12, constants.xxxx, r11
+
+    ; Color: each masked light's color times its signed or clamped N.L, over the ambient
+    add r13, r12, -r11
+    mad r13, r13, colorLights.wwww, r11
+    mul r13, colorLights, r13
+    mad r14.xyz, r13.xxx, light0Color.xyz, r8.xyz
+    mad r14.xyz, r13.yyy, light1Color.xyz, r14.xyz
+
+    ; Alpha: the same with each light's alpha; only the camera light carries one
+    add r13, r12, -r11
+    mad r13, r13, alphaLights.wwww, r11
+    mul r13, alphaLights, r13
+    mad r14.w, r13.x, light0Color.w, r8.w
+    mad r14.w, r13.y, light1Color.w, r14.w
+    mad r14.w, r13.z, light2Alpha.x, r14.w
+
+    ; Saturate, and leave an unlit channel at the material color
+    max r14, constants.xxxx, r14
+    min r14, constants.yyyy, r14
+    add r14, -constants.yyyy, r14
+    mov r15.xyz, colorSelect.zzz
+    mov r15.w, alphaSelect.y
+    mul r14, r15, r14
+    add r14, constants.yyyy, r14
+    mul outcolor, r6, r14
 
     ; Sphere-map coordinates stand in for GX's normal-driven environment texgens
     mul r10.xy, constants.zz, r3.xy

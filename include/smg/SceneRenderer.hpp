@@ -10,6 +10,8 @@
 #include <string>
 #include <vector>
 
+struct AreaLightInfo;
+
 namespace smg {
 class NativeScene;
 class StageCollision;
@@ -64,14 +66,22 @@ private:
     void consume(Prepared& prepared);
     void resetCamera();
     void drawInstance(const Instance& instance, const C3D_Mtx& view, bool translucent, const Material*& current);
+    void useLights(const AreaLightInfo* area);
     void dropProbe();
     void stepProbe(float seconds);
 
     DVLB_s* shader_ = nullptr;
     shaderProgram_s program_{};
     bool programReady_ = false;
-    int projection_ = -1, modelView_ = -1, materialColor_ = -1, ambientColor_ = -1;
-    int lightDirection_ = -1, lightColor_ = -1, colorSelect_ = -1, texgen_[3]{-1, -1, -1};
+    int projection_ = -1, modelView_ = -1, materialColor_ = -1, lightAmbient_ = -1, light0Pos_ = -1, light0Color_ = -1;
+    int light1Pos_ = -1, light1Color_ = -1, light2Alpha_ = -1, colorSelect_ = -1, alphaSelect_ = -1, colorLights_ = -1;
+    int alphaLights_ = -1, texgen_[3]{-1, -1, -1};
+    struct Light {
+        float color[4]{}, position[3]{};
+        bool followCamera = false;
+    } light_[2];
+    float ambient_[4]{1, 1, 1, 1}, lightAlpha_ = 0;
+    std::string lightName_; // Shift-JIS, as the disc names it
     std::string root_, title_, status_ = "No stage loaded", summary_, startGravity_, gravityHere_, startLanding_;
     Stage stage_;
     std::unique_ptr<NativeScene> gravity_;

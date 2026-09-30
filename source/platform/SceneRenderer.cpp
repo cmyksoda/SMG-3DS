@@ -5,6 +5,8 @@
 #include <smg/Scene.hpp>
 #include <smg/StageCollision.hpp>
 #include <smg/StageGravity.hpp>
+#include <smg/StageLight.hpp>
+#include <Game/Map/LightDataHolder.hpp>
 #include <Game/Gravity/GravityInfo.hpp>
 #include <Game/Gravity/PlanetGravityManager.hpp>
 #include <Game/Scene/SceneObjHolder.hpp>
@@ -21,7 +23,7 @@ struct SceneRenderer::Material {
     int bufferUpdate[2]{};
     int textures[CombinerProgram::MaxUnits]{-1, -1, -1};
     C3D_FVec texgen[CombinerProgram::MaxUnits][3];
-    C3D_FVec materialColor, ambientColor, colorSelect;
+    C3D_FVec materialColor, colorSelect, alphaSelect, colorLights, alphaLights;
     GPU_CULLMODE cull = GPU_CULL_BACK_CCW;
     bool alphaTest = false;
     GPU_TESTFUNC alphaFunc = GPU_ALWAYS;
@@ -248,9 +250,15 @@ SceneRenderer::Material prepare(const ModelMaterial& m) {
     const auto& color = m.channels[0];
     const auto& alpha = m.channels[1];
     out.materialColor = FVec4_New(m.materialColor[0][0], m.materialColor[0][1], m.materialColor[0][2], m.materialColor[0][3]);
-    out.ambientColor = FVec4_New(m.ambientColor[0][0], m.ambientColor[0][1], m.ambientColor[0][2], m.ambientColor[0][3]);
     out.colorSelect = FVec4_New(color.materialSource == 1, color.ambientSource == 1, m.channelCount && color.lighting,
                                 alpha.materialSource == 1);
+    out.alphaSelect = FVec4_New(alpha.ambientSource == 1, m.channelCount && alpha.lighting, 0, 0);
+    // Lights 0 to 2 are the director's; point lights (4) come with actors. GX_DF_CLAMP is 2, GX_DF_SIGN 1.
+    const auto lights = [](const ColorChannel& c) {
+        return FVec4_New(c.lightMask & 1, (c.lightMask >> 1) & 1, (c.lightMask >> 2) & 1, c.diffuse != 1);
+    };
+    out.colorLights = lights(color);
+    out.alphaLights = lights(alpha);
 
     // GX treats clockwise triangles as front faces.
     out.cull = m.cullMode == 0 || m.cullMode == 3 ? GPU_CULL_NONE : m.cullMode == 2 ? GPU_CULL_FRONT_CCW : GPU_CULL_BACK_CCW;
@@ -416,15 +424,22 @@ bool SceneRenderer::init() {
     projection_ = uniform("projection");
     modelView_ = uniform("modelView");
     materialColor_ = uniform("materialColor");
-    ambientColor_ = uniform("ambientColor");
-    lightDirection_ = uniform("lightDirection");
-    lightColor_ = uniform("lightColor");
+    lightAmbient_ = uniform("lightAmbient");
+    light0Pos_ = uniform("light0Pos");
+    light0Color_ = uniform("light0Color");
+    light1Pos_ = uniform("light1Pos");
+    light1Color_ = uniform("light1Color");
+    light2Alpha_ = uniform("light2Alpha");
     colorSelect_ = uniform("colorSelect");
+    alphaSelect_ = uniform("alphaSelect");
+    colorLights_ = uniform("colorLights");
+    alphaLights_ = uniform("alphaLights");
     texgen_[0] = uniform("texgen0");
     texgen_[1] = uniform("texgen1");
     texgen_[2] = uniform("texgen2");
-    for (int location : {projection_, modelView_, materialColor_, ambientColor_, lightDirection_, lightColor_,
-                         colorSelect_, texgen_[0], texgen_[1], texgen_[2]}) {
+    for (int location : {projection_, modelView_, materialColor_, lightAmbient_, light0Pos_, light0Color_, light1Pos_,
+                         light1Color_, light2Alpha_, colorSelect_, alphaSelect_, colorLights_, alphaLights_, texgen_[0],
+                         texgen_[1], texgen_[2]}) {
         if (location < 0) { status_ = "Missing model shader uniforms"; programReady_ = false; return false; }
     }
     return true;
@@ -465,6 +480,8 @@ void SceneRenderer::loadStage(const std::string& root, const std::string& galaxy
         startGravity_ = stage_.entrance ? describeGravity(*gravity_, stage_, stage_.start.data()) : "no MarioNo 0 entrance";
         // Each model's collision arrives with it from the loader thread.
         collision_ = std::make_unique<StageCollision>();
+        useLights(smg::loadStageLights(root, *gravity_, error) ? gravity_->defaultAreaLight() : nullptr);
+        if (!gravity_->defaultAreaLight()) lightName_ = "lights unavailable: " + error;
     } else {
         startGravity_ = "unavailable: " + error;
         gravity_.reset();
@@ -480,6 +497,30 @@ void SceneRenderer::loadStage(const std::string& root, const std::string& galaxy
         names_.clear();
         status_ = summary_ = "Cannot start the model loader";
     }
+}
+
+// Placed models draw in the map and planet buffers, which take the area light's planet set; the player,
+// enemy and NPC sets come with actors. Without light data every channel sees plain white.
+void SceneRenderer::useLights(const AreaLightInfo* area) {
+    const auto unit = [](const GXColor& c, float* out) {
+        out[0] = c.r / 255.0f, out[1] = c.g / 255.0f, out[2] = c.b / 255.0f, out[3] = c.a / 255.0f;
+    };
+    if (!area) {
+        for (auto& light : light_) light = {};
+        for (float& c : ambient_) c = 1;
+        lightAlpha_ = 0;
+        return;
+    }
+    const ActorLightInfo& planet = area->mPlanetLight;
+    const LightInfo* infos[2]{&planet.mInfo0, &planet.mInfo1};
+    for (int i = 0; i < 2; ++i) {
+        unit(infos[i]->mColor, light_[i].color);
+        light_[i].position[0] = infos[i]->mPos.x, light_[i].position[1] = infos[i]->mPos.y, light_[i].position[2] = infos[i]->mPos.z;
+        light_[i].followCamera = infos[i]->mIsFollowCamera;
+    }
+    unit(planet.mColor, ambient_);
+    lightAlpha_ = planet.mAlpha2 / 255.0f;
+    lightName_ = area->mAreaLightName;
 }
 
 void SceneRenderer::dropProbe() {
@@ -680,8 +721,9 @@ void SceneRenderer::drawInstance(const Instance& instance, const C3D_Mtx& view, 
                 }
             }
             C3D_FVUnifSet(GPU_VERTEX_SHADER, materialColor_, m.materialColor.x, m.materialColor.y, m.materialColor.z, m.materialColor.w);
-            C3D_FVUnifSet(GPU_VERTEX_SHADER, ambientColor_, m.ambientColor.x, m.ambientColor.y, m.ambientColor.z, m.ambientColor.w);
-            C3D_FVUnifSet(GPU_VERTEX_SHADER, colorSelect_, m.colorSelect.x, m.colorSelect.y, m.colorSelect.z, m.colorSelect.w);
+            for (const auto& [location, v] : {std::pair{colorSelect_, m.colorSelect}, std::pair{alphaSelect_, m.alphaSelect},
+                                              std::pair{colorLights_, m.colorLights}, std::pair{alphaLights_, m.alphaLights}})
+                C3D_FVUnifSet(GPU_VERTEX_SHADER, location, v.x, v.y, v.z, v.w);
             C3D_CullFace(m.cull);
             C3D_AlphaTest(m.alphaTest, m.alphaFunc, m.alphaReference);
             C3D_AlphaBlend(m.equation, GPU_BLEND_ADD, m.source, m.destination, m.source, m.destination);
@@ -714,9 +756,20 @@ void SceneRenderer::draw(C3D_RenderTarget* target) {
                FVec3_New(position_[0] + forward[0], position_[1] + forward[1], position_[2] + forward[2]), FVec3_New(0, 1, 0), false);
     Mtx_PerspTilt(&projection, C3D_AngleFromDegrees(FieldOfView), C3D_AspectRatioTop, Near, Far, false);
     C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, projection_, &projection);
-    // A light over the viewer's shoulder until the zones' own light tables are read.
-    C3D_FVUnifSet(GPU_VERTEX_SHADER, lightDirection_, 0.35f, 0.6f, 0.72f, 0);
-    C3D_FVUnifSet(GPU_VERTEX_SHADER, lightColor_, 0.75f, 0.75f, 0.72f, 0);
+    // LightFunction::loadActorLightInfo with the stage's planet light: positions go into view space unless
+    // they follow the camera already; the third light, at the camera, lights alpha only.
+    for (int i = 0; i < 2; ++i) {
+        const auto& light = light_[i];
+        float at[3]{light.position[0], light.position[1], light.position[2]};
+        if (!light.followCamera) {
+            for (int row = 0; row < 3; ++row)
+                at[row] = view.r[row].x * light.position[0] + view.r[row].y * light.position[1] + view.r[row].z * light.position[2] + view.r[row].w;
+        }
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, i ? light1Pos_ : light0Pos_, at[0], at[1], at[2], 1);
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, i ? light1Color_ : light0Color_, light.color[0], light.color[1], light.color[2], light.color[3]);
+    }
+    C3D_FVUnifSet(GPU_VERTEX_SHADER, light2Alpha_, lightAlpha_, 0, 0, 0);
+    C3D_FVUnifSet(GPU_VERTEX_SHADER, lightAmbient_, ambient_[0], ambient_[1], ambient_[2], ambient_[3]);
 
     // The sky turns with the camera but never moves away from it, and is drawn first without depth.
     C3D_Mtx skyView = view;

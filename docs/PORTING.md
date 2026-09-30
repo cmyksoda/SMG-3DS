@@ -110,9 +110,17 @@ completion does not make those interfaces portable to ARM11/PICA200.
   gives, stops the program with a message: neither exists in the port yet.
 - `loadStage` resolves a galaxy's scenario, zones and layers into world-space placements.
   The renderer streams those models in one per frame, packs them into indexed 36-byte
-  vertices and native texture formats, and draws them with the translated combiners, a GX
-  color channel with one directional light, three texgens, blending, alpha test and depth
-  modes. Skinned models are skipped until animation exists. This is a stage preview with a
+  vertices and native texture formats, and draws them with the translated combiners, GX's
+  color and alpha channels lit as the game lights its planets, three texgens, blending, alpha test
+  and depth modes. The original `LightDataHolder` and `LightZoneDataHolder` read LightData.arc
+  (their director and archive are the native scene's), and the stage's default area light (LightID
+  -1 in the galaxy's own table) gives its planet set: two diffuse lights, a light at the camera
+  that lights only alpha, which the planets' TEV programs turn into rim light, and an ambient,
+  which lit channels use in place of the material's own (a judgment call: the director loads it
+  for every draw buffer). Light areas (an `AreaObj`) and point lights come with actors, and so do
+  the player, enemy and NPC sets. Petari's string literals are UTF-8 in this build and the disc's
+  names Shift-JIS, so `LightDataHolder`'s "デフォルト" never matches a row by name; its fallback, the
+  first row, is the one the disc names that anyway. Skinned models are skipped until animation exists. This is a stage preview with a
   free camera, not gameplay: no actor, collision or camera code from the game runs yet.
 
 The WPad pointer, accelerometer, swing, and rumble device members are not installed yet.
@@ -133,8 +141,8 @@ borrows its owner's sample storage rather than allocating the Wii's 120-sample I
    collision, effects, layouts, and audio readers;
    direct casts of Wii bytes to ARM structures are insufficient. Handle the game's Shift-JIS
    names and text encodings deliberately.
-3. **PICA200 renderer.** The static stage path exists. Still missing: the zones' own light
-   tables (a fixed light stands in), GX's second color channel, projection texgens (they
+3. **PICA200 renderer.** The static stage path exists. Still missing: light areas and point
+   lights, GX's second color channel, projection texgens (they
    fall back to sphere maps), mipmaps, BTK/BRK/BPK material animation, billboards, runtime
    skinning, fog, particles and postprocessing. `resource_audit --models` lists the 831
    approximated TEV programs by reason: an unclamped output or value outside 0..1 (370 and 156,
@@ -304,6 +312,6 @@ across 12 zones; the preview draws 56 rigid models in 172 placements.
 
 The portable math tests check tolerances and conventions, not bit-identical Gekko rounding.
 The native validation app passes 1,069 math, 37 WPad, 179 BCSV, 1,043 J3D model/texture,
-8,607 TEV combiner, 27 original gravity, 27 NameObj, 73 scene and gravity creator, 48 collision, 7 ETC1 and 8 GPU texture checks on emulated ARM
+8,607 TEV combiner, 27 original gravity, 27 NameObj, 81 scene and gravity creator, 48 collision, 7 ETC1 and 8 GPU texture checks on emulated ARM
 in Azahar; the GPU checks compare the hardware's ETC1 decoding against ours. Of the disc's
 7,780 materials, 6,949 translate to the combiner exactly. No physical console has been tested.
