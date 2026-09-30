@@ -1235,6 +1235,30 @@ adapt("libs/nw4r/include/nw4r/lyt/pane.h", "include/nw4r/lyt/pane.h", [
      "        typedef ut::LinkList< Pane, 0 > PaneList;\n#endif",
      "        typedef ut::LinkList< Pane, offsetof(detail::PaneBase, mLink) > PaneList;", 1),
 ])
+# Lists find each element from its link at the link's real offset; upstream's non-Metrowerks fallback said 0, which
+# under GCC is the vtable pointer the list would overwrite (AnimTransform) or another member.
+adapt("libs/nw4r/include/nw4r/lyt/arcResourceAccessor.h", "include/nw4r/lyt/arcResourceAccessor.h", [
+    ('            #ifdef __MWERKS__\n            typedef ut::LinkList<FontRefLink, offsetof(FontRefLink, mLink)>  FontRefList;\n            #else\n            typedef ut::LinkList<FontRefLink, 0> FontRefList;\n            #endif',
+     '            typedef ut::LinkList<FontRefLink, offsetof(FontRefLink, mLink)>  FontRefList;', 1),
+])
+adapt("libs/nw4r/include/nw4r/lyt/group.h", "include/nw4r/lyt/group.h", [
+    ('        #ifdef __MWERKS__\n        typedef ut::LinkList<detail::PaneLink, offsetof(detail::PaneLink, mLink)> PaneLinkList;\n        #else\n        typedef ut::LinkList<detail::PaneLink, 0>   PaneLinkList;\n        #endif',
+     '        typedef ut::LinkList<detail::PaneLink, offsetof(detail::PaneLink, mLink)> PaneLinkList;', 1),
+    ('        #ifdef __MWERKS__\n        typedef ut::LinkList<Group, offsetof(Group, mLink)> GroupList;\n        #else\n        typedef ut::LinkList<Group, 0> GroupList;\n        #endif',
+     '        typedef ut::LinkList<Group, offsetof(Group, mLink)> GroupList;', 1),
+])
+adapt("libs/nw4r/include/nw4r/lyt/types.h", "include/nw4r/lyt/types.h", [
+    ('#ifdef __MWERKS__\n        typedef ut::LinkList< AnimationLink, offsetof(AnimationLink, mLink) > AnimationList;\n#else\n        typedef ut::LinkList< AnimationLink, 0 > AnimationList;\n#endif',
+     '        typedef ut::LinkList< AnimationLink, offsetof(AnimationLink, mLink) > AnimationList;', 1),
+])
+adapt("libs/nw4r/include/nw4r/lyt/layout.h", "include/nw4r/lyt/layout.h", [
+    ('#ifdef __MWERKS__\n        typedef ut::LinkList< AnimTransform, offsetof(AnimTransform, mLink) > AnimTransformList;\n#else\n        typedef ut::LinkList< AnimTransform, 0 > AnimTransformList;\n#endif',
+     '        typedef ut::LinkList< AnimTransform, offsetof(AnimTransform, mLink) > AnimTransformList;', 1),
+])
+adapt("libs/JSystem/include/JSystem/JUtility/JUTConsole.hpp", "include/JSystem/JUtility/JUTConsole.hpp", [
+    ('#ifdef __MWERKS__\n    typedef JGadget::TLinkList< JUTConsole, -offsetof(JUTConsole, mListNode) > ConsoleList;\n#else\n    typedef JGadget::TLinkList< JUTConsole, 0 > ConsoleList;\n#endif',
+     '    typedef JGadget::TLinkList< JUTConsole, -offsetof(JUTConsole, mListNode) > ConsoleList;', 1),
+])
 adapt("src/Game/Util/LayoutUtil.cpp", "Game/Util/LayoutUtil.cpp", [
     ("template const nw4r::lyt::Pane* nw4r::ut::LinkList< nw4r::lyt::Pane, 4 >::ConstIterator::operator->() const;",
      "template const nw4r::lyt::Pane* nw4r::lyt::PaneList::ConstIterator::operator->() const;", 1),

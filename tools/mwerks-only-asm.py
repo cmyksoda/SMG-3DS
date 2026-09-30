@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Lists code that only Metrowerks gets: #if/#ifdef __MWERKS__ blocks holding asm and no #else, and #else
-branches that define a function-like macro as nothing (upstream's fallbacks for an editor's parser). GCC
-compiles either without the Metrowerks part, so a function can come out empty or reading registers never set.
+"""Lists code that only Metrowerks gets: #if/#ifdef __MWERKS__ blocks holding asm and no #else, #else branches that
+define a function-like macro as nothing (upstream's fallbacks for an editor's parser), and #else branches that put a
+literal where Metrowerks takes an offsetof (a list's link, which GCC lays out elsewhere). GCC compiles each without
+the Metrowerks part, so a function can come out empty, read registers never set, or a list overwrite a vtable.
 
 usage: mwerks-only-asm.py PETARI_DIR GENERATED_DIR [Game JSystem nw4r RVL_SDK/gx RVL_SDK/gd RVL_SDK/aralt ...]
 Each file is read as the build reads it: the port's compat header or the generated copy where one exists.
@@ -26,7 +27,7 @@ def blocks(text):
             keyword, rest = match.groups()
             if keyword in ("if", "ifdef", "ifndef"):
                 mwerks = "__MWERKS__" in rest and keyword != "ifndef" and "!" not in rest
-                stack.append({"line": number, "mwerks": mwerks, "asm": False, "else": False})
+                stack.append({"line": number, "mwerks": mwerks, "asm": False, "else": False, "offsetof": False})
             elif keyword in ("elif", "else") and stack:
                 stack[-1]["else"] = True
             elif keyword == "endif" and stack:
@@ -35,6 +36,11 @@ def blocks(text):
                     found.append((block["line"], block["else"]))
         elif stack and stack[-1]["mwerks"] and not stack[-1]["else"] and re.search(r"\basm\b", line):
             stack[-1]["asm"] = True
+        elif stack and stack[-1]["mwerks"] and not stack[-1]["else"] and "offsetof" in line:
+            stack[-1]["offsetof"] = True
+        elif stack and stack[-1]["mwerks"] and stack[-1]["else"] and stack[-1]["offsetof"] and "offsetof" not in line \
+                and re.search(r"<[^<>]*,\s*-?\d+\s*>", line):
+            found.append((number, False))
         elif stack and stack[-1]["mwerks"] and stack[-1]["else"] and empty_macro.match(line):
             found.append((number, False))
     return found
