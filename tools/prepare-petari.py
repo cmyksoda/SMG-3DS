@@ -24,12 +24,30 @@ if not destination.exists() or destination.read_text() != text:
     destination.write_text(text)
 
 
-def adapt(relative, target, replacements):
+def definition(text, relative, first):
+    """The span of the whole definition that starts on the line holding `first`."""
+    if text.count(first) != 1:
+        raise SystemExit(f"Upstream changed; review {relative}: {first!r}")
+    start = text.rfind("\n", 0, text.index(first)) + 1
+    depth, end = 0, text.index("{", text.index(first))
+    while True:
+        depth += {"{": 1, "}": -1}.get(text[end], 0)
+        end += 1
+        if depth == 0:
+            return start, end
+
+
+def adapt(relative, target, replacements, drop=(), reason=""):
+    """Copy a file with exact replacements; `drop` leaves out whole definitions, found by first line, for `reason`."""
     text = (root / relative).read_text()
     for before, after, expected in replacements:
         if text.count(before) != expected:
             raise SystemExit(f"Upstream changed; review {relative}: {before!r}")
         text = text.replace(before, after)
+    for first in drop:
+        start, end = definition(text, relative, first)
+        indent = text[start:text.index(first)]
+        text = text[:start] + f"{indent}// Left out, {reason}: {first.rstrip(' {')}" + text[end:]
     destination = output / target
     destination.parent.mkdir(parents=True, exist_ok=True)
     text = "// Generated Petari adaptation; see tools/prepare-petari.py.\n" + text
@@ -45,15 +63,7 @@ def extract(relative, target, prologue, first_lines, epilogue=""):
     bodies = []
     for first in first_lines:
         space, first = first if isinstance(first, tuple) else (None, first)
-        if text.count(first) != 1:
-            raise SystemExit(f"Upstream changed; review {relative}: {first!r}")
-        start = text.rfind("\n", 0, text.index(first)) + 1
-        depth, end = 0, text.index("{", text.index(first))
-        while True:
-            depth += {"{": 1, "}": -1}.get(text[end], 0)
-            end += 1
-            if depth == 0:
-                break
+        start, end = definition(text, relative, first)
         bodies.append(f"namespace {space} {{\n{text[start:end]}\n}}  // namespace {space}" if space else text[start:end])
     text = (f"// Generated from Petari's {relative}: only these functions; see tools/prepare-petari.py.\n"
             + prologue + "\n" + "\n\n".join(bodies) + "\n" + epilogue)
@@ -324,6 +334,49 @@ extract("src/Game/Scene/SceneObjHolder.cpp", "Game/Scene/SceneObjHolderMethods.c
         ["SceneObjHolder::SceneObjHolder() {", "NameObj* SceneObjHolder::create(int id) {",
          "NameObj* SceneObjHolder::getObj(int id) const {", "bool SceneObjHolder::isExist(int id) const {",
          ("MR", "NameObj* createSceneObj(int id) {")])
+
+# JMapUtil reads placement rows; its umbrella include reaches the whole game, and NO_INLINE only mattered for matching.
+adapt("include/Game/Util/JMapUtil.hpp", "include/Game/Util/JMapUtil.hpp", [
+    ("#include <revolution.h>", "#include <revolution/types.h>", 1),
+])
+adapt("src/Game/Util/JMapUtil.cpp", "Game/Util/JMapUtil.cpp", [
+    ('#include "Game/Util.hpp"', '#include "Game/Util/MathUtil.hpp"\n#include "Game/Util/MtxUtil.hpp"\n'
+     '#include "Game/Util/SceneUtil.hpp"\n#include "Game/Util/StringUtil.hpp"', 1),
+    (") NO_INLINE {", ") {", 5),
+])
+extract("src/Game/Util/StringUtil.cpp", "Game/Util/StringUtilCompare.cpp",
+        '#include "Game/Util/StringUtil.hpp"\n#include <cstring>\n',
+        [("MR", "bool isEqualString(const char* pStr1, const char* pStr2) {")])
+
+adapt("src/Game/Util/GravityUtil.cpp", "Game/Util/GravityUtil.cpp", [
+    ('#include "Game/LiveActor/LiveActor.hpp"\n', "", 1),
+    ("#include <cstring>", "#include <cstdint>\n#include <cstring>", 1),
+    ("u32 host) NO_INLINE {", "u32 host) {", 1),
+    # A u32 holds a pointer on the Wii and the 3DS; 64-bit host tests keep the low half, as the manager compares.
+    ("host = (u32)pActor;", "host = (u32)(uintptr_t)pActor;", 1),
+], drop=[
+    "bool calcGravityVector(const LiveActor* pActor, TVec3f* pDest, GravityInfo* pInfo, u32 host) {",
+    "bool calcDropShadowVector(const LiveActor* pActor, TVec3f* pDest, GravityInfo* pInfo, u32 host) {",
+    "bool calcGravityAndDropShadowVector(const LiveActor* pActor, TVec3f* pDest, GravityInfo* pInfo, u32 host) {",
+    "bool calcGravityVectorOrZero(const LiveActor* pActor, TVec3f* pDest, GravityInfo* pInfo, u32 host) {",
+    "bool calcGravityAndDropShadowVectorOrZero(const LiveActor* pActor, TVec3f* pDest, GravityInfo* pInfo, u32 host) {",
+    "bool calcAttractMarioLauncherOrZero(const LiveActor* pActor, TVec3f* pDest, GravityInfo* pInfo, u32 host) {",
+    "bool isZeroGravity(const LiveActor* pActor) {",
+], reason="LiveActor is not brought up")
+
+# Wire gravity follows a rail; RailRider and the stage's path data are not brought up.
+adapt("include/Game/Gravity/GravityCreator.hpp", "include/Game/Gravity/GravityCreator.hpp", [
+    ('#include "Game/LiveActor/RailRider.hpp"', "class RailRider;", 1),
+])
+adapt("src/Game/Gravity/GravityCreator.cpp", "Game/Gravity/GravityCreator.cpp", [
+    ('#include "Game/Gravity.hpp"\n#include "Game/Util.hpp"',
+     '#include "Game/Gravity/GravityCreator.hpp"\n#include "Game/Util/GravityUtil.hpp"\n#include "Game/Util/JMapUtil.hpp"\n'
+     '#include "Game/Util/MathUtil.hpp"\n#include "Game/Util/MtxUtil.hpp"', 1),
+], drop=[
+    "PlanetGravity* WireGravityCreator::createInstance() {",
+    "void WireGravityCreator::settingFromJMapOtherParam(const JMapInfoIter& rIter) {",
+    "PlanetGravity* WireGravityCreator::getGravity() {",
+], reason="RailRider is not brought up")
 
 adapt("include/Game/System/WPadButton.hpp", "include/Game/System/WPadButton.hpp", [
     ("#include <revolution.h>", "#include <revolution/kpad.h>", 1),

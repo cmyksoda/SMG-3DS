@@ -31,16 +31,9 @@ float field(const JMapInfo& info, int row, const char* name, float fallback) {
 
 bool fail(std::string& error, const std::string& text) { error = text; return false; }
 
-std::vector<std::string> layers(std::int32_t mask) {
-    std::vector<std::string> names{"common"};
-    for (int bit = 0; bit < 16; ++bit)
-        if (mask & (1 << bit)) names.push_back(std::string("layer") + static_cast<char>('a' + bit));
-    return names;
-}
-
 void place(const Archive& archive, const std::string& zone, std::int32_t mask, const Transform& zoneTransform,
            std::vector<StageObject>& objects) {
-    for (const auto& layer : layers(mask)) {
+    for (const auto& layer : layerNames(mask)) {
         for (const auto& path : {"jmp/placement/" + layer + "/objinfo", "jmp/mapparts/" + layer + "/mappartsinfo"}) {
             Bcsv table;
             std::string ignored;
@@ -58,6 +51,13 @@ void place(const Archive& archive, const std::string& zone, std::int32_t mask, c
     }
 }
 } // namespace
+
+std::vector<std::string> layerNames(std::int32_t mask) {
+    std::vector<std::string> names{"common"};
+    for (int bit = 0; bit < 16; ++bit)
+        if (mask & (1 << bit)) names.push_back(std::string("layer") + static_cast<char>('a' + bit));
+    return names;
+}
 
 Transform placementMatrix(const float position[3], const float rotation[3], const float scale[3]) {
     constexpr float toRadians = 3.14159265358979f / 180.0f;
@@ -107,10 +107,11 @@ bool loadStage(const std::string& root, const std::string& galaxy, int scenario,
     if (!map.open(root + "/StageData/" + galaxy + ".arc", error)) return false;
     constexpr Transform identity{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
     place(map, galaxy, maskOf(galaxy), identity, stage.objects);
+    stage.zones.push_back({galaxy, identity, {}, {}, maskOf(galaxy)});
 
     // Entering from the galaxy map starts at the galaxy's MarioNo 0, searched through its active layers in order.
     std::string ignored;
-    for (const auto& layer : layers(maskOf(galaxy))) {
+    for (const auto& layer : layerNames(maskOf(galaxy))) {
         Bcsv start;
         if (!map.table(("jmp/start/" + layer + "/startinfo").c_str(), start, ignored)) continue;
         const JMapInfoIter entrance = start.info().findElement<s32>("MarioNo", 0, 0);
@@ -125,7 +126,7 @@ bool loadStage(const std::string& root, const std::string& galaxy, int scenario,
     }
 
     // Zones are placed by the galaxy's own layers, then their contents by each zone's mask.
-    for (const auto& layer : layers(maskOf(galaxy))) {
+    for (const auto& layer : layerNames(maskOf(galaxy))) {
         Bcsv zones;
         if (!map.table(("jmp/placement/" + layer + "/stageobjinfo").c_str(), zones, ignored)) continue;
         const auto& info = zones.info();
@@ -137,7 +138,10 @@ bool loadStage(const std::string& root, const std::string& galaxy, int scenario,
             const float unit[3]{1, 1, 1};
             Archive zone;
             if (!zone.open(root + "/StageData/" + name + ".arc", error)) return fail(error, std::string(name) + ": " + error);
-            place(zone, name, maskOf(name), placementMatrix(position, rotation, unit), stage.objects);
+            const Transform placement = placementMatrix(position, rotation, unit);
+            place(zone, name, maskOf(name), placement, stage.objects);
+            stage.zones.push_back({name, placement, {position[0], position[1], position[2]},
+                                   {rotation[0], rotation[1], rotation[2]}, maskOf(name)});
         }
     }
     error.clear();

@@ -47,8 +47,9 @@ completion does not make those interfaces portable to ARM11/PICA200.
   generated copies that include only what each file uses. Three helpers whose only bodies
   were paired-single assembly, and `fastSqrtf`/`frsqrte`, have scalar bodies; the SDK matrix
   and quaternion routines they call have portable implementations. `MR::getRandom` reads a
-  natively held `TRandom_fast_` seeded as `GameSystemObjHolder` seeds it. Point, parallel,
-  disk and segment gravity are under test; cube, cone, wire and torus compile but are not yet.
+  natively held `TRandom_fast_` seeded as `GameSystemObjHolder` seeds it. Every shape is
+  under test: point, parallel, disk, segment and wire directly, and cube, cone and disk torus
+  through their original creators, fed `planetobjinfo` rows.
 - The original `NameObj`, `NameObjRegister`, `NameObjHolder` and `NameObjGroup` compile for ARM,
   with `MR::getHashCode` from `HashUtil` (MSL's locale table replaced by the "C" locale's ASCII
   lowering it holds) and ObjUtil's and SystemUtil's NameObj helpers copied out of their files
@@ -57,6 +58,17 @@ completion does not make those interfaces portable to ARM11/PICA200.
 - The original `PlanetGravityManager` and `GravityInfo` combine every registered gravity by
   priority, type, host and switch state. Hosts are compared as `u32`, which holds a pointer on
   the Wii and the 3DS; 64-bit host tests compare its low half.
+- Placed gravity is built by the original code: `JMapUtil` (the whole file, with narrow includes),
+  `GravityUtil` (without its seven `LiveActor` overloads, left out with a comment until actors run)
+  and `GravityCreator` (without the wire creator, which samples a rail through `RailRider`).
+  `placeStageGravity` walks a scenario's zones and active layers and hands every `planetobjinfo`
+  row to the native scene, which does what `GlobalGravityObj` does (see below). For Good Egg
+  scenario 1 that is 111 gravities in 16 zones. `gravity_tool` asks a stage for the pull at any
+  point and follows it to the first placed model: from scenario 1's start, a disk gravity in
+  `DiskGardenZone` pulls straight down onto `DiskGardenPlanet`, 9.2 units below.
+- newlib's `<ctype.h>` defines `_U`, `_L`, `_N`, `_S`, `_P`, `_C`, `_X` and `_B` as macros, and
+  Petari uses some of them as member names. ARM builds force-include `compat/smg/NewlibCtype.hpp`,
+  which lets libstdc++ read them once and then undefines them.
 - `NameObjCategoryList`, the lists the scheduler runs movement, calcAnim and draw through,
   compiles with one adaptation: the game calls every list's delegator through the non-const
   type, const draw lists included, which is undefined behavior UBSan reports; the two delegator
@@ -98,10 +110,10 @@ borrows its owner's sample storage rather than allocating the Wii's 120-sample I
    A loader thread decodes models while the main thread uploads one per frame. CMPR
    textures become ETC1/ETC1A4 (a GPU readback test confirms the block layout), leaving
    19.4 MB of linear memory after Good Egg in Azahar; other formats stay uncompressed.
-4. **Original scene and actor execution.** Placed gravity needs `GravityCreator`, whose
-   `MR::registerGravity` reaches `PlanetGravityManager` - a `NameObj` owned by the scene
-   object holder - so `NameObj` and the scene holder come before real stage gravity.
-   Then bring up the original `NameObj`/`LiveActor` scheduler,
+4. **Original scene and actor execution.** Placed gravity runs through the original creators
+   over the native scene. Next: `LiveActor` (which also brings back `GlobalGravityObj` and the
+   `GravityUtil` actor overloads), `RailRider` for wire gravity, stage switches, collision from
+   each zone's `.kcl`, then the original `NameObjListExecutor` scheduler,
    gravity, collision, stage placement, Mario, animation, and camera using the real resources.
    Integrate the input boundary into `GamePadUtil`/`WPad`, including explicit digital spin input.
    Skip the Wii pointer's multi-frame loss-of-IR delay: stylus lift must hide it immediately.
@@ -155,6 +167,17 @@ Three ways forward:
   original's, copied out verbatim; `newEachObj` makes only `PlanetGravityManager` (as the game
   names it, "重力"), which the scene creates first, as `GameScene::init` does. Any other scene
   object stops the program with a message naming its id.
+
+- the zone placements `StageDataHolder` keeps. `MR::isPlacementLocalStage` and
+  `MR::getZonePlacementMtx`, which `JMapUtil` uses to move rows into the galaxy, find a row's
+  zone by the table it came from, as the original finds it by address range. Each zone's matrix
+  comes from the original `MR::makeMtxTR`, as `StageDataHolder::calcPlacementMtx` builds it;
+- `GlobalGravityObj`'s work, until `LiveActor` runs (`source/compat/GlobalGravity.cpp`): pick the
+  creator by the names `NameObjFactory` uses, call `createFromJMap` (which registers the gravity),
+  then appear and apply switches as a scene starts, with every stage switch off: a gravity with
+  switch A stays off, one with only switch B stays on. Rows with switches, sleep control
+  (`SW_SLEEP`) or a follower (`FollowId`) are listed, because only their start state is honored;
+  wire gravity is listed as skipped. Creators and gravities are freed with the scene.
 
 Everything else about the scene still belongs to `GameSystem`. Asking for the scene before one
 exists stops the program with a message. Once `GameSystem` and the original `SceneObjHolder.cpp`
@@ -211,6 +234,6 @@ across 12 zones; the preview draws 56 rigid models in 172 placements.
 
 The portable math tests check tolerances and conventions, not bit-identical Gekko rounding.
 The native validation app passes 1,069 math, 37 WPad, 179 BCSV, 1,043 J3D model/texture,
-4,404 TEV combiner, 23 original gravity, 27 NameObj, 22 scene and gravity manager, 7 ETC1 and 8 GPU texture checks on emulated ARM
+4,404 TEV combiner, 27 original gravity, 27 NameObj, 56 scene and gravity creator, 7 ETC1 and 8 GPU texture checks on emulated ARM
 in Azahar; the GPU checks compare the hardware's ETC1 decoding against ours. Of the disc's
 7,780 materials, 7,526 translate to the combiner exactly. No physical console has been tested.

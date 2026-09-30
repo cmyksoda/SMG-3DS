@@ -1,5 +1,6 @@
 #pragma once
 #include <array>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -11,12 +12,23 @@ struct StageObject {
     Transform transform{};
 };
 
+struct StageZone {
+    std::string name;
+    Transform placement{};
+    std::array<float, 3> position{}, rotation{}; // the galaxy's stageobjinfo row; degrees
+    std::int32_t layerMask = 0;
+};
+
 struct Stage {
     std::string galaxy;
     int scenario = 1;
     std::vector<StageObject> objects;
+    std::vector<StageZone> zones; // the galaxy itself first, then the zones it places
     std::array<float, 3> start{}, startRotation{};
 };
+
+// "common" plus one name per bit of a scenario's layer mask: "layera" for bit 0, and so on.
+std::vector<std::string> layerNames(std::int32_t mask);
 
 // T * Rz * Ry * Rx * S with angles in degrees, as MR::makeMtxTRS builds placements.
 Transform placementMatrix(const float position[3], const float rotation[3], const float scale[3]);

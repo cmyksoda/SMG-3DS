@@ -78,13 +78,21 @@ add_library(petari_scene STATIC
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/SystemUtilSceneNameObj.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Scene/SceneObjHolderMethods.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Gravity/PlanetGravityManager.cpp"
-  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Gravity/GravityInfo.cpp")
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Gravity/GravityInfo.cpp"
+  source/compat/GlobalGravity.cpp
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Gravity/GravityCreator.cpp"
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/GravityUtil.cpp"
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/JMapUtil.cpp"
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/StringUtilCompare.cpp")
 target_link_libraries(petari_scene PUBLIC petari_gravity)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
   "${PETARI}/src/Game/NameObj/NameObjHolder.cpp" "${PETARI}/src/Game/Util/HashUtil.cpp"
   "${PETARI}/src/Game/NameObj/NameObjCategoryList.cpp" "${PETARI}/include/Game/NameObj/NameObjCategoryList.hpp"
   "${PETARI}/src/Game/Scene/SceneObjHolder.cpp" "${PETARI}/src/Game/Gravity/PlanetGravityManager.cpp"
   "${PETARI}/src/Game/Gravity/GravityInfo.cpp" "${PETARI}/include/Game/Gravity/GravityInfo.hpp"
+  "${PETARI}/src/Game/Gravity/GravityCreator.cpp" "${PETARI}/include/Game/Gravity/GravityCreator.hpp"
+  "${PETARI}/src/Game/Util/GravityUtil.cpp" "${PETARI}/src/Game/Util/JMapUtil.cpp"
+  "${PETARI}/include/Game/Util/JMapUtil.hpp" "${PETARI}/src/Game/Util/StringUtil.cpp"
   "${PETARI}/src/Game/Util/ObjUtil.cpp" "${PETARI}/src/Game/Util/SystemUtil.cpp"
   "${PETARI}/include/Game/NameObj/NameObjHolder.hpp" "${PETARI}/include/Game/Util/ObjUtil.hpp"
   "${PETARI}/libs/JSystem/include/JSystem/JSupport/JSUList.hpp"
@@ -93,13 +101,15 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
 add_library(smg_platform STATIC
   source/core/Input.cpp source/core/Motion.cpp source/core/Settings.cpp source/core/Session.cpp
   source/core/Archive.cpp source/core/Bcsv.cpp source/core/Model.cpp source/core/Texture.cpp source/core/Combiner.cpp
-  source/core/Stage.cpp source/core/Mesh.cpp source/core/Etc1.cpp source/compat/NativePad.cpp)
+  source/core/Stage.cpp source/core/StageGravity.cpp source/core/Mesh.cpp source/core/Etc1.cpp
+  source/compat/NativePad.cpp)
 target_include_directories(smg_platform PUBLIC include)
-target_link_libraries(smg_platform PUBLIC petari_core)
+target_link_libraries(smg_platform PUBLIC petari_scene)
 target_compile_options(smg_platform PRIVATE -Wall -Wextra -Werror)
 
 if(NINTENDO_3DS)
   target_include_directories(petari_core PUBLIC "${DEVKITPRO}/libctru/include")
+  target_compile_options(petari_core PUBLIC -include "${CMAKE_CURRENT_SOURCE_DIR}/compat/smg/NewlibCtype.hpp")
   set(MODEL_SHADER "${CMAKE_CURRENT_BINARY_DIR}/ModelShader.hpp")
   add_custom_command(OUTPUT "${MODEL_SHADER}"
     COMMAND "${DEVKITPRO}/tools/bin/picasso" -o "${CMAKE_CURRENT_BINARY_DIR}/model.shbin"
@@ -152,6 +162,9 @@ else()
   target_link_libraries(model_tool PRIVATE smg_platform)
   add_executable(stage_tool tools/StageTool.cpp)
   target_link_libraries(stage_tool PRIVATE smg_platform)
+  add_executable(gravity_tool tools/GravityTool.cpp)
+  target_link_libraries(gravity_tool PRIVATE smg_platform)
+  target_compile_options(gravity_tool PRIVATE -Wall -Wextra -Werror)
   add_executable(resource_audit tools/AuditResources.cpp)
   target_link_libraries(resource_audit PRIVATE smg_platform)
   target_compile_options(resource_audit PRIVATE -Wall -Wextra -Werror)
@@ -183,7 +196,7 @@ else()
   target_compile_options(nameobj_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME original_nameobj COMMAND nameobj_tests)
   add_executable(scene_tests tests/SceneTests.cpp)
-  target_link_libraries(scene_tests PRIVATE petari_scene)
+  target_link_libraries(scene_tests PRIVATE smg_platform)
   target_compile_options(scene_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME original_scene_gravity COMMAND scene_tests)
   add_executable(combiner_tests tests/CombinerTests.cpp)

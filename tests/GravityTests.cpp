@@ -2,6 +2,7 @@
 #include <Game/Gravity/ParallelGravity.hpp>
 #include <Game/Gravity/PointGravity.hpp>
 #include <Game/Gravity/SegmentGravity.hpp>
+#include <Game/Gravity/WireGravity.hpp>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -93,6 +94,21 @@ void segmentGravity() {
     segment.setEdgeValid(1, false);
     check(!segment.calcGravity(&pull, TVec3f(3000.0f, 0.0f, 0.0f)), "a disabled end has no pull");
 }
+// Wire gravity pulls toward the nearest point of a polyline; its creator samples a rail, which waits for RailRider.
+void wireGravity() {
+    WireGravity wire;
+    wire.setPointListSize(3);
+    wire.addPoint(TVec3f(0.0f, 0.0f, 0.0f));
+    wire.addPoint(TVec3f(1000.0f, 0.0f, 0.0f));
+    wire.addPoint(TVec3f(1000.0f, 1000.0f, 0.0f));
+    wire.updateIdentityMtx();
+    TVec3f pull;
+    check(wire.calcGravity(&pull, TVec3f(500.0f, -2000.0f, 0.0f)) && vec(pull, 0, 1, 0), "toward the first span");
+    check(wire.calcGravity(&pull, TVec3f(3000.0f, 500.0f, 0.0f)) && vec(pull, -1, 0, 0), "toward the nearer second span");
+    check(wire.calcGravity(&pull, TVec3f(1000.0f, 3000.0f, 0.0f)) && vec(pull, 0, -1, 0), "past the end, toward the end point");
+    wire.mRange = 1000.0f;
+    check(!wire.calcGravity(&pull, TVec3f(500.0f, -2000.0f, 0.0f)), "no pull past the range");
+}
 } // namespace
 
 int runGravityTests() {
@@ -100,6 +116,7 @@ int runGravityTests() {
     parallelGravity();
     diskGravity();
     segmentGravity();
+    wireGravity();
     std::printf("%u original gravity checks passed\n", checks);
     return 0;
 }
