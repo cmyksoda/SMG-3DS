@@ -1,5 +1,6 @@
 #include <smg/Combiner.hpp>
 #include <algorithm>
+#include <cstring>
 #include <vector>
 
 namespace smg {
@@ -195,8 +196,9 @@ struct Compiler {
             ops.push_back({subtract ? CombineFunc::Subtract : CombineFunc::Add, {d, x}});
         } else if (form == Product && !subtract) {
             ops.push_back({CombineFunc::MultiplyAdd, {x, y, d}});
-        } else if (!subtract && usesPrev(d)) {
-            // d + a(1 - c) + bc reads the incoming previous value in the first op when it can.
+        } else if (!subtract && usesPrev(d) && bias != 2 && scale != 3) {
+            // d + a(1 - c) + bc reads the incoming previous value in the first op. A signed or halved
+            // sum instead needs the whole lerp in one op, and gets d back from the buffer.
             ops.push_back({CombineFunc::MultiplyAdd, {a, invert(c), d}});
             ops.push_back({CombineFunc::MultiplyAdd, {b, c, temp}});
         } else {
@@ -373,7 +375,8 @@ CombinerProgram compileTev(const ModelMaterial& material) {
     const auto program = direct.run();
     if (program.exact || !direct.wantsLeading) return program;
     // Stage 0 cannot read the buffer color; spending a stage lets stage 1 read it instead.
+    // A clamp between ops is a smaller error than a wrong constant.
     const auto shifted = Compiler(material, true).run();
-    return shifted.exact ? shifted : program;
+    return shifted.exact || std::strcmp(shifted.approximation, "more than two constants") ? shifted : program;
 }
 } // namespace smg
