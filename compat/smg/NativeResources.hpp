@@ -11,3 +11,8 @@ extern void* (*smgBcsvAllocator)(const void* beside, u32 size);
 const char* smgNativeBcsvProblem(const void* table);
 // A BMG message file turned in place (smg::nativeBmg); one the port cannot turn stops, naming why.
 void smgNativeBmg(void* bmg, u32 size);
+// A layout archive's file turned in place as LayoutHolder mounts it (BRLYT, BRLAN and TPL, by name; others stay as
+// they are). One the port cannot turn stops, naming why.
+void smgNativeLayoutFile(const char* name, void* data, u32 size);
+// A font (BRFNT) turned in place as ResFont takes it, sized by its own header.
+void smgNativeFont(void* brfnt);

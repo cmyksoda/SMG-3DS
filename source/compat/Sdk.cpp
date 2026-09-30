@@ -40,9 +40,6 @@ void DSPSendMailToDSP() { unported("DSPSendMailToDSP"); }
 // LC
 void LCDisable() { unported("LCDisable"); }
 void LCEnable() { unported("LCEnable"); }
-// MEM
-void MEMAllocFromAllocator() { unported("MEMAllocFromAllocator"); }
-void MEMFreeToAllocator() { unported("MEMFreeToAllocator"); }
 // NAND
 void NANDCheck() { unported("NANDCheck"); }
 void NANDClose() { unported("NANDClose"); }

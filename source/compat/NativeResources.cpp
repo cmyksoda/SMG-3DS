@@ -2,9 +2,12 @@
 // See compat/smg/NativeResources.hpp.
 #include <JSystem/JKernel/JKRArchive.hpp>
 #include <smg/Bmg.hpp>
+#include <smg/Layout.hpp>
 #include <smg/NativeResources.hpp>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <strings.h>
 
 namespace {
 void swap(u32& value) { value = __builtin_bswap32(value); }
@@ -38,6 +41,29 @@ void smgNativeRarc(void* archive) {
         swap(files[i].mFileID);
         swap(files[i].mHash);
         swapWords(reinterpret_cast<u8*>(&files[i]) + 4, 3);  // flag and name offset, data offset or directory, size
+    }
+}
+
+void smgNativeLayoutFile(const char* name, void* data, u32 size) {
+    const char* dot = std::strrchr(name, '.');
+    const char* (*turn)(std::uint8_t*, std::size_t) = nullptr;
+    if (dot && !strcasecmp(dot, ".brlyt")) turn = smg::nativeBrlyt;
+    if (dot && !strcasecmp(dot, ".brlan")) turn = smg::nativeBrlan;
+    if (dot && !strcasecmp(dot, ".tpl")) turn = smg::nativeTpl;
+    if (!turn) return;
+    if (const char* why = turn(static_cast<std::uint8_t*>(data), size)) {
+        std::fprintf(stderr, "A layout archive's %s %s\n", name, why);
+        std::abort();
+    }
+}
+
+void smgNativeFont(void* brfnt) {
+    auto* bytes = static_cast<std::uint8_t*>(brfnt);
+    if (bytes == nullptr || std::memcmp(bytes, "RFNT", 4) != 0) return;  // already native, or not a font (ResFont says so)
+    const u32 size = u32(bytes[8]) << 24 | u32(bytes[9]) << 16 | u32(bytes[10]) << 8 | bytes[11];
+    if (const char* why = smg::nativeBrfnt(bytes, size)) {
+        std::fprintf(stderr, "A font (BRFNT) %s\n", why);
+        std::abort();
     }
 }
 

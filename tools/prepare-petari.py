@@ -1567,9 +1567,24 @@ adapt("src/nw4r/lyt/lyt_layout.cpp", "nw4r/lyt/lyt_layout.cpp", [
     ('#include "nw4r/lyt/util.h"\n', '#include "nw4r/lyt/util.h"\n#include <revolution/os.h>\n#include <cstring>\n', 1),
     ("            if (!detail::TestFileHeader(*pFileHead, 'RLYT')) {\n",
      "            if (!std::memcmp(lytResBuf, \"RLYT\\xFE\\xFF\", 6)) {\n"
-     "                OSPanic(__FILE__, __LINE__, \"nw4r's layouts (BRLYT) are big-endian, and turning them native is not the port's yet\");\n"
+     "                OSPanic(__FILE__, __LINE__, \"a BRLYT reached nw4r still big-endian: layouts turn native as LayoutHolder mounts them\");\n"
      "            }\n"
      "            if (!detail::TestFileHeader(*pFileHead, 'RLYT')) {\n", 1),
+])
+# A BRLAN any other way than through LayoutHolder would be skipped silently by the header test.
+adapt("src/nw4r/lyt/lyt_animation.cpp", "nw4r/lyt/lyt_animation.cpp", [
+    ("#include <new>\n", "#include <new>\n#include <cstring>\n", 1),
+    ("            if (!detail::TestFileHeader(*pFileHeader, res::FILESIGNATURE_RLAN)) {\n",
+     "            if (!std::memcmp(anmResBuf, \"RLAN\\xFE\\xFF\", 6)) {\n"
+     "                OSPanic(__FILE__, __LINE__, \"a BRLAN reached nw4r still big-endian: animations turn native as LayoutHolder mounts them\");\n"
+     "            }\n"
+     "            if (!detail::TestFileHeader(*pFileHeader, res::FILESIGNATURE_RLAN)) {\n", 1),
+])
+# Fonts come from GameSystemFontHolder's archives rather than a layout holder: they turn native as ResFont takes them.
+adapt("src/nw4r/ut/ut_ResFont.cpp", "nw4r/ut/ut_ResFont.cpp", [
+    ('#include "nw4r/ut/binaryFileFormat.h"\n', '#include "nw4r/ut/binaryFileFormat.h"\n#include <smg/NativeResources.hpp>\n', 1),
+    ("            BinaryFileHeader* fileHeader = reinterpret_cast< BinaryFileHeader* >(brfnt);\n",
+     "            smgNativeFont(brfnt);\n            BinaryFileHeader* fileHeader = reinterpret_cast< BinaryFileHeader* >(brfnt);\n", 1),
 ])
 # TPL's headers hold GX enums, 4 bytes under Metrowerks' -enum int and 1 under devkitARM's short enums; the file's
 # fields are spelled as the words they are.
@@ -1600,6 +1615,11 @@ adapt("src/Game/System/DrawSyncManager.cpp", "Game/System/DrawSyncManager.cpp", 
 adapt("include/Game/System/ErrorArchive.hpp", "include/Game/System/ErrorArchive.hpp", [
     ("const u8 cErrorArchive[] = {", "alignas(32) inline u8 cErrorArchive[] = {", 1),
 ])
+adapt("src/RVL_SDK/mem/mem_allocator.c", "RVL_SDK/mem/mem_allocator.c", [], drop=[
+    "static void* AllocatorAllocForExpHeap_(MEMAllocator *pAllocator, u32 size) {",
+    "static void AllocatorFreeForExpHeap_(MEMAllocator *pAllocator, void *pBlock) {",
+    "void MEMInitAllocatorForExpHeap(MEMAllocator *pAllocator, MEMHeapHandle handle, int align) {",
+], reason="the SDK's expanded heaps, which the game never makes: it gives nw4r its own allocators")
 # MSL's own wide-string functions, built as C over newlib's headers (compat/smg/MslWide.h stands in for MSL's).
 adapt("src/MSL_C/wstring.c", "MSL_C/wstring.c", [('#include "size_t.h"\n#include "wchar_t.h"\n', "#include <smg/MslWide.h>\n", 1)])
 adapt("src/MSL_C/wmem.c", "MSL_C/wmem.c", [('#include "wchar_io.h"\n#include "cstring"\n', "#include <smg/MslWide.h>\n", 1)])
@@ -1798,6 +1818,9 @@ adapt("src/Game/System/LayoutHolder.cpp", "Game/System/LayoutHolder.cpp", [
      '                sprintf(path, "%s%s%s", pRoot ? pRoot : "", "/", pFinder->mName);', 1),
     ('                snprintf(path, 128, "%s/%s", pRoot, pFinder->mName);',
      '                snprintf(path, 128, "%s/%s", pRoot ? pRoot : "", pFinder->mName);', 1),
+    # Each file turns native as its archive mounts (compat/smg/NativeResources.hpp).
+    ('#include <JSystem/JKernel/JKRFileFinder.hpp>\n', '#include <JSystem/JKernel/JKRFileFinder.hpp>\n#include <smg/NativeResources.hpp>\n', 1),
+    ('            pInfo->_C = pFinder->mFileID;\n', '            pInfo->_C = pFinder->mFileID;\n            smgNativeLayoutFile(pFinder->mName, pInfo->_8, pInfo->_4);\n', 1),
 ])
 adapt("src/Game/System/ResourceHolder.cpp", "Game/System/ResourceHolder.cpp", [
     ('                sprintf(path, "%s%s%s", pPath, "/", finder->mName);',
