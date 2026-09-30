@@ -277,7 +277,8 @@ stands in until then.
    fails to link; the `MR::` helpers they call are extracted from `LiveActorUtil`, `ActorSensorUtil`,
    `ActorMovementUtil`, `MapUtil`, `ObjUtil` and `ShadowController`. What reaches systems not brought
    up (models, animation keepers, effects, shadows, the star pointer, `ActorLightCtrl`, LOD, the
-   player's position) stops the program by name (`source/compat/Actor.cpp`). `smg::CollisionHost` is a
+   player's position) stops the program by name (`source/compat/Actor.cpp`); the app sends stderr to
+   `svcOutputDebugString`, which Azahar logs with the filter `Debug.Emulated:Debug`. `smg::CollisionHost` is a
    modelless `LiveActor` holding a placed part's `CollisionParts` from its own KCL and PA, as
    `initActorCollisionParts` builds it, with the files handed over instead of looked up in a
    `ResourceHolder`. `smg::ProbeActor` is a modelless `LiveActor` with a `Binder` and gravity, moved by
