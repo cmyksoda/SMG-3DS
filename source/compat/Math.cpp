@@ -2,6 +2,7 @@
 #include <JSystem/JMath/JMATrigonometric.hpp>
 #include <revolution/mtx.h>
 #include <cmath>
+#include <cstring>
 
 // Scalar replacements for Gekko paired-single instructions. Outputs may alias inputs.
 namespace JMathInlineVEC {
@@ -164,3 +165,10 @@ void JMAMTXApplyScale(const Mtx src, Mtx dst, f32 x, f32 y, f32 z) {
         dst[row][3] = src[row][3];
     }
 }
+
+// The PowerPC intrinsics. frsqrte is an estimate good to 1/32; callers refine it, and the exact root
+// only makes their result closer.
+f32 __frsqrte(f32 x) { return 1.0f / std::sqrt(x); }
+u32 __cntlzw(u32 x) { return x ? __builtin_clz(x) : 32; }
+s32 __abs(s32 x) { return x < 0 ? -x : x; }
+void* __memcpy(void* dst, const void* src, int n) { return std::memcpy(dst, src, n); }
