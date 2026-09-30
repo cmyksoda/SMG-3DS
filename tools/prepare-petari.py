@@ -275,6 +275,21 @@ adapt("src/Game/Util/HashUtil.cpp", "Game/Util/HashUtil.cpp", [
     ("hash = tolower(*pStr) + hash * 31;", "hash = lowerAscii(*pStr) + hash * 31;", 1),
 ])
 
+# Every list calls its delegator through the non-const type, const lists too; a shared base makes that call defined.
+adapt("include/Game/NameObj/NameObjCategoryList.hpp", "include/Game/NameObj/NameObjCategoryList.hpp", [
+    ("namespace {\n    template < typename T >\n    class NameObjRealDelegator {",
+     "namespace {\n    class NameObjDelegator {\n    public:\n        virtual ~NameObjDelegator() {}\n"
+     "        virtual void operator()(NameObj* pNameObj) = 0;\n    };\n\n"
+     "    template < typename T >\n    class NameObjRealDelegator : public NameObjDelegator {", 1),
+    ("    /* 0x08 */ union {\n        NameObjRealDelegator< NameObjMethod >* mDelegator;\n"
+     "        NameObjRealDelegator< NameObjMethodConst >* mDelegatorConst;\n    };",
+     "    /* 0x08 */ NameObjDelegator* mDelegator;", 1),
+])
+adapt("src/Game/NameObj/NameObjCategoryList.cpp", "Game/NameObj/NameObjCategoryList.cpp", [
+    ("mDelegatorConst = new NameObjRealDelegator< NameObjMethodConst >(method);",
+     "mDelegator = new NameObjRealDelegator< NameObjMethodConst >(method);", 1),
+])
+
 # ObjUtil and SystemUtil reach most of the game; NameObj needs only these.
 extract("src/Game/Util/ObjUtil.cpp", "Game/Util/ObjUtilNameObj.cpp",
         '#include "Game/Util/ObjUtil.hpp"\n#include "Game/NameObj/NameObj.hpp"\n',

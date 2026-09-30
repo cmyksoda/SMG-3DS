@@ -1,4 +1,5 @@
 #include <smg/Scene.hpp>
+#include <Game/NameObj/NameObjCategoryList.hpp>
 #include <Game/NameObj/NameObjGroup.hpp>
 #include <Game/NameObj/NameObjHolder.hpp>
 #include <Game/Util/HashUtil.hpp>
@@ -6,6 +7,7 @@
 #include <Game/Util/SystemUtil.hpp>
 #include <cstdio>
 #include <cstdlib>
+#include <initializer_list>
 
 namespace {
 unsigned checks = 0;
@@ -18,7 +20,9 @@ struct Counter : NameObj {
     explicit Counter(const char* name) : NameObj(name) {}
     void init(const JMapInfoIter& iter) override { initialized = !iter.isValid(); }
     void movement() override { ++moves; }
+    void draw() const override { ++draws; }
     int moves = 0;
+    mutable int draws = 0;
     bool initialized = false;
 };
 
@@ -92,6 +96,53 @@ void movement(smg::NativeScene& scene) {
     check(actor.moves == 5, "the scene resumes every object at once");
     scene.nameObjHolder().clearArray();
 }
+struct BeforeCategory {
+    void run() { ++calls; }
+    int calls = 0;
+};
+
+// The scheduler's lists, as NameObjListExecutor builds them for movement, calcAnim and draw.
+void categoryLists() {
+    Counter a("A"), b("B"), c("C");
+    const CategoryListInitialTable sizes[]{{0, 4}, {2, 2}, {static_cast<u32>(-1), 0}};
+    NameObjCategoryList movement(3, sizes, &NameObj::movement, false, "movement");
+    movement.add(&a, 0);
+    movement.add(&b, 0);
+    movement.add(&c, 2);
+    movement.execute(0);
+    check(a.moves == 1 && b.moves == 1 && c.moves == 0, "a category runs only its own objects");
+
+    BeforeCategory before;
+    movement.registerExecuteBeforeFunction(MR::Functor(&before, &BeforeCategory::run), 1);
+    movement.execute(1);
+    check(before.calls == 0, "an empty category skips its before-function");
+    movement.registerExecuteBeforeFunction(MR::Functor(&before, &BeforeCategory::run), 2);
+    movement.execute(2);
+    check(c.moves == 1 && before.calls == 1, "the before-function runs ahead of its category");
+
+    movement.remove(&a, 0);
+    movement.execute(0);
+    check(a.moves == 1 && b.moves == 2, "a removed object stops running");
+    // The scene heap frees the cloned functors in the game; FunctorBase has no virtual destructor.
+    using Clone = decltype(MR::Functor(&before, &BeforeCategory::run));
+    for (int category : {1, 2}) {
+        auto* clone = static_cast<Clone*>(movement.mCategoryInfo[category].mExecuteBeforeFunction);
+        clone->~Clone();
+        ::operator delete(clone);
+    }
+
+    // Draw lists count their members first, then allocate exactly that much.
+    const CategoryListInitialTable counted[]{{0, 0}, {static_cast<u32>(-1), 0}};
+    NameObjCategoryList draw(1, counted, &NameObj::draw, true, "draw");
+    draw.incrementCheck(&a, 0);
+    draw.incrementCheck(&b, 0);
+    draw.allocateBuffer();
+    check(draw.mBufferAllocated && draw.mCategoryInfo[0].mNameObjArr.capacity() == 2, "sized by the counted members");
+    draw.add(&a, 0);
+    draw.add(&b, 0);
+    draw.execute(0);
+    check(a.draws == 1 && b.draws == 1 && c.draws == 0, "a const list calls draw");
+}
 } // namespace
 
 int runNameObjTests() {
@@ -100,6 +151,8 @@ int runNameObjTests() {
         smg::NativeScene scene;
         registration(scene);
         movement(scene);
+        categoryLists();
+        scene.nameObjHolder().clearArray();
     }
     std::printf("%u original NameObj checks passed\n", checks);
     return 0;

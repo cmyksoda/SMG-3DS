@@ -71,6 +71,7 @@ add_library(petari_nameobj STATIC
   "${PETARI}/src/Game/NameObj/NameObj.cpp"
   "${PETARI}/src/Game/NameObj/NameObjRegister.cpp"
   "${PETARI}/src/Game/NameObj/NameObjGroup.cpp"
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/NameObj/NameObjCategoryList.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/NameObj/NameObjHolder.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/HashUtil.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/ObjUtilNameObj.cpp"
@@ -78,6 +79,7 @@ add_library(petari_nameobj STATIC
 target_link_libraries(petari_nameobj PUBLIC petari_core)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
   "${PETARI}/src/Game/NameObj/NameObjHolder.cpp" "${PETARI}/src/Game/Util/HashUtil.cpp"
+  "${PETARI}/src/Game/NameObj/NameObjCategoryList.cpp" "${PETARI}/include/Game/NameObj/NameObjCategoryList.hpp"
   "${PETARI}/src/Game/Util/ObjUtil.cpp" "${PETARI}/src/Game/Util/SystemUtil.cpp"
   "${PETARI}/include/Game/NameObj/NameObjHolder.hpp" "${PETARI}/include/Game/Util/ObjUtil.hpp"
   "${PETARI}/libs/JSystem/include/JSystem/JSupport/JSUList.hpp"

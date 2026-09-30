@@ -54,6 +54,11 @@ completion does not make those interfaces portable to ARM11/PICA200.
   lowering it holds) and ObjUtil's and SystemUtil's NameObj helpers copied out of their files
   verbatim by `tools/prepare-petari.py`. Their scene is the native scene described below. Plain
   `char` is unsigned on every build, as on the Wii and the 3DS, so Shift-JIS names hash the same.
+- `NameObjCategoryList`, the lists the scheduler runs movement, calcAnim and draw through,
+  compiles with one adaptation: the game calls every list's delegator through the non-const
+  type, const draw lists included, which is undefined behavior UBSan reports; the two delegator
+  types now share a base. `NameObjListExecutor` itself also owns the LiveActor draw buffers,
+  so it waits until actors draw.
 - JKRHeap's placement `operator new` forms allocate from the C++ free store, which stands in for
   the current heap. A request naming a `JKRHeap`, or wanting more alignment than the free store
   gives, stops the program with a message: neither exists in the port yet.
@@ -114,7 +119,8 @@ Placed gravity, collision and every actor sit on `NameObj`. Its 13 sources split
 | Slice | Needs |
 | --- | --- |
 | `NameObj`, `NameObjRegister`, `NameObjHolder`, `NameObjGroup` (running) | `SingletonHolder`, `MR::getHashCode`, movement on/off requests |
-| `NameObjListExecutor` | draw/movement list functors and camera types - the scheduler |
+| `NameObjCategoryList` (running) | `MR::FunctorBase` - the movement, calcAnim and draw lists |
+| `NameObjListExecutor` | `DrawBufferHolder`: the LiveActor draw buffers, J3D model drawing and light lookup |
 | `NameObjExecuteHolder`, `NameObjFinder` | `GameSystem`, `GameSystemSceneController`, `SceneObjHolder` |
 
 Three ways forward:
@@ -197,6 +203,6 @@ across 12 zones; the preview draws 56 rigid models in 172 placements.
 
 The portable math tests check tolerances and conventions, not bit-identical Gekko rounding.
 The native validation app passes 1,069 math, 37 WPad, 179 BCSV, 1,043 J3D model/texture,
-4,404 TEV combiner, 23 original gravity, 21 NameObj, 7 ETC1 and 8 GPU texture checks on emulated ARM
+4,404 TEV combiner, 23 original gravity, 27 NameObj, 7 ETC1 and 8 GPU texture checks on emulated ARM
 in Azahar; the GPU checks compare the hardware's ETC1 decoding against ours. Of the disc's
 7,780 materials, 7,526 translate to the combiner exactly. No physical console has been tested.
