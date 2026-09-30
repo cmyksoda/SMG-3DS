@@ -1259,6 +1259,12 @@ adapt("src/Game/System/ResourceHolderManager.cpp", "Game/System/ResourceHolderMa
      "SingletonHolder< ResourceHolderManager >::get(), &ResourceHolderManager::createResourceHolder,", 1),
     ("SingletonHolder< ResourceHolderManager >::get(), createLayoutHolder,",
      "SingletonHolder< ResourceHolderManager >::get(), &ResourceHolderManager::createLayoutHolder,", 1),
+    # A holder of an archive nobody mounted crashes on the Wii as here; the port names the archive first.
+    ("    MR::getMountedArchiveAndHeap(pParam1, &pArchive, &pArgs->mHeap);\n    MR::CurrentHeapRestorer heapRestorer(pArgs->mHeap);\n\n"
+     "    pArgs->mLayoutHolder = new LayoutHolder(*pArchive);",
+     "    MR::getMountedArchiveAndHeap(pParam1, &pArchive, &pArgs->mHeap);\n"
+     "    if (pArchive == nullptr) {\n        OSPanic(__FILE__, __LINE__, \"the layout archive %s is not mounted\", pParam1);\n    }\n"
+     "    MR::CurrentHeapRestorer heapRestorer(pArgs->mHeap);\n\n    pArgs->mLayoutHolder = new LayoutHolder(*pArchive);", 1),
 ])
 adapt("src/Game/Screen/GalaxyMapController.cpp", "Game/Screen/GalaxyMapController.cpp", [
     ("MR::Functor(this, GalaxyMapController::capture)", "MR::Functor(this, &GalaxyMapController::capture)", 1),
@@ -1513,6 +1519,12 @@ adapt("src/JSystem/JKernel/JKRHeap.cpp", "JSystem/JKernel/JKRHeap.cpp", [
     ("    OSBootInfo* code = (OSBootInfo*)OSPhysicalToCached(0);", "    OSBootInfo* code = smgBootInfo();", 1),
     ("bool JKRHeap::initArena(char** memory, u32* size, int maxHeaps) {",
      'extern "C" OSBootInfo* smgBootInfo();\n\nbool JKRHeap::initArena(char** memory, u32* size, int maxHeaps) {', 1),
+    # A heap made without an error handler fails an allocation silently; the port names each one in the log.
+    ("void* JKRHeap::alloc(u32 size, int align) {\n    return do_alloc(size, align);\n}",
+     "void* JKRHeap::alloc(u32 size, int align) {\n    void* memory = do_alloc(size, align);\n"
+     "    if (memory == nullptr) {\n"
+     "        OSReport(\"JKRHeap %p could not give %lu bytes aligned %d (%lu free, %lu in one block)\\n\", this, (unsigned long)size, align,\n"
+     "                 (unsigned long)getTotalFreeSize(), (unsigned long)getFreeSize());\n    }\n    return memory;\n}", 1),
 ])
 
 # Last: everything above may adapt a file these build on.
@@ -1553,7 +1565,8 @@ adapt("libs/JSystem/include/JSystem/JKernel/JKRArchive.hpp", "include/JSystem/JK
 # A memory archive's tables turn native as it takes the archive (compat/smg/NativeResources.hpp).
 adapt("src/JSystem/JKernel/JKRMemArchive.cpp", "JSystem/JKernel/JKRMemArchive.cpp", [
     ('#include "JSystem/JKernel/JKRMemArchive.hpp"', '#include "JSystem/JKernel/JKRMemArchive.hpp"\n#include <smg/NativeResources.hpp>', 1),
-    ("    } else {\n        mInfoBlock = reinterpret_cast< RarcInfoBlock* >(reinterpret_cast< u8* >(mHeader) + mHeader->mHeaderSize);",
+    ("    if (mHeader == nullptr) {\n        mMountMode = MOUNT_MODE_0;\n    } else {\n        mInfoBlock = reinterpret_cast< RarcInfoBlock* >(reinterpret_cast< u8* >(mHeader) + mHeader->mHeaderSize);",
+     "    if (mHeader == nullptr) {\n        OSReport(\"JKRMemArchive: disc entry %ld did not load\\n\", (long)entryNum);\n        mMountMode = MOUNT_MODE_0;\n"
      "    } else {\n        smgNativeRarc(mHeader);\n        mInfoBlock = reinterpret_cast< RarcInfoBlock* >(reinterpret_cast< u8* >(mHeader) + mHeader->mHeaderSize);", 1),
     ("    mHeader = reinterpret_cast< RarcHeader* >(pData);\n    mInfoBlock =",
      "    mHeader = reinterpret_cast< RarcHeader* >(pData);\n    smgNativeRarc(mHeader);\n    mInfoBlock =", 1),
