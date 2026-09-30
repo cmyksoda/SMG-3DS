@@ -1,3 +1,4 @@
+#include <smg/Combiner.hpp>
 #include <smg/Model.hpp>
 #include <cstdio>
 #include <array>
@@ -9,9 +10,9 @@ void printMaterial(const smg::ModelMaterial& m) {
         m.name.c_str(), m.mode, m.cullMode, m.channelCount, m.texGenCount, m.tevStageCount);
     std::printf("  textures");
     for (int t : m.textures) if (t >= 0) std::printf(" %d", t);
-    std::printf("; color0 lit %d src %u amb %u mask %02x; alpha test %u/%u %u %u/%u; blend %u %u %u; depth %d %u %d\n",
+    std::printf("; color0 lit %d src %u amb %u mask %02x; alpha0 lit %d src %u; alpha test %u/%u %u %u/%u; blend %u %u %u; depth %d %u %d\n",
         m.channels[0].lighting, m.channels[0].materialSource, m.channels[0].ambientSource, m.channels[0].lightMask,
-        m.alphaTest.compare0, m.alphaTest.reference0, m.alphaTest.op, m.alphaTest.compare1, m.alphaTest.reference1,
+        m.channels[1].lighting, m.channels[1].materialSource, m.alphaTest.compare0, m.alphaTest.reference0, m.alphaTest.op, m.alphaTest.compare1, m.alphaTest.reference1,
         m.blend.type, m.blend.source, m.blend.destination, m.depth.enable, m.depth.function, m.depth.update);
     const auto print = [](const char* label, const std::array<float, 4>* colors, unsigned count) {
         std::printf("  %s", label);
@@ -27,12 +28,14 @@ void printMaterial(const smg::ModelMaterial& m) {
         std::printf("  texgen %u: type %u src %u mtx %u\n", i, m.texGens[i].type, m.texGens[i].source, m.texGens[i].matrix);
     for (unsigned i = 0; i < m.tevStageCount; ++i) {
         const auto& s = m.stages[i];
-        std::printf("  tev %u: coord %u map %u chan %u | C %u %u %u %u op %u bias %u scale %u -> %u | "
-                    "A %u %u %u %u op %u bias %u scale %u -> %u | k %02x/%02x swap %u/%u\n",
+        std::printf("  tev %u: coord %u map %u chan %u | C %u %u %u %u op %u bias %u scale %u clamp %u -> %u | "
+                    "A %u %u %u %u op %u bias %u scale %u clamp %u -> %u | k %02x/%02x swap %u/%u\n",
             i, s.texCoord, s.texMap, s.channel, s.colorIn[0], s.colorIn[1], s.colorIn[2], s.colorIn[3],
-            s.colorOp, s.colorBias, s.colorScale, s.colorReg, s.alphaIn[0], s.alphaIn[1], s.alphaIn[2], s.alphaIn[3],
-            s.alphaOp, s.alphaBias, s.alphaScale, s.alphaReg, s.konstColor, s.konstAlpha, s.rasSwap, s.texSwap);
+            s.colorOp, s.colorBias, s.colorScale, s.colorClamp, s.colorReg, s.alphaIn[0], s.alphaIn[1], s.alphaIn[2],
+            s.alphaIn[3], s.alphaOp, s.alphaBias, s.alphaScale, s.alphaClamp, s.alphaReg, s.konstColor, s.konstAlpha, s.rasSwap, s.texSwap);
     }
+    const auto program = smg::compileTev(m);
+    std::printf("  combiner: %u stage(s), %s\n", program.stageCount, program.exact ? "exact" : program.approximation);
 }
 } // namespace
 

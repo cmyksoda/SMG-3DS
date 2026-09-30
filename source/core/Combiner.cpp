@@ -1,5 +1,6 @@
 #include <smg/Combiner.hpp>
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <vector>
 
@@ -61,6 +62,22 @@ bool one(const Arg& a) {
     return a.kind == Arg::One || (a.kind == Arg::Constant && a.value[0] == 1 && a.value[1] == 1 && a.value[2] == 1);
 }
 bool usesPrev(const Arg& a) { return a.kind == Arg::Prev; }
+bool inUnit(const Arg& a) {
+    if (a.kind != Arg::Constant) return true;
+    for (float v : a.value) if (v < 0 || v > 1) return false;
+    return true;
+}
+
+// TEV inputs a, b and c see only a register's low eight bits; d sees the whole signed value.
+float wrapByte(float v) {
+    if (v >= 0 && v <= 1) return v;
+    return static_cast<float>(static_cast<int>(std::lround(v * 255)) & 255) / 255;
+}
+
+struct Range {
+    float lo = 0, hi = 1;
+    bool inUnit() const { return lo >= -1e-6f && hi <= 1 + 1e-6f; }
+};
 
 float konst(const ModelMaterial& m, std::uint8_t select, int component) {
     if (select < 8) return (8 - select) / 8.0f;
@@ -98,21 +115,30 @@ struct Compiler {
     int saved[2]{-1, -1};   // the stage whose output the buffer keeps, per color and alpha
     int constantLast[2]{-1, -1};
 
+    // What each register can hold (color, alpha), signed as GX keeps it; unclamped stages can leave 0..1.
+    Range ranges[4][2];
+
     Compiler(const ModelMaterial& material, bool leadingStage) : m(material), leading(leadingStage) {
         registers[0] = m.tevColors[3];
         for (int i = 0; i < 3; ++i) registers[i + 1] = m.tevColors[i];
+        for (int i = 0; i < 4; ++i) {
+            const auto& r = registers[i];
+            ranges[i][0] = {std::min({r[0], r[1], r[2]}), std::max({r[0], r[1], r[2]})};
+            ranges[i][1] = {r[3], r[3]};
+        }
         for (auto& row : unitFor) for (int& unit : row) unit = -1;
     }
 
-    Arg reg(int index, bool alphaPart, bool colorInput) {
+    Arg reg(int index, bool alphaPart, bool colorInput, bool d) {
         const int part = alphaPart ? 1 : 0;
         const CombineOperand operand = alphaPart ? CombineOperand::Alpha : CombineOperand::Color;
         if (!written[index][part]) {
             const auto& r = registers[index];
-            if (!colorInput) return constant(std::clamp(r[3], 0.0f, 1.0f));
-            if (alphaPart) return constant(std::clamp(r[3], 0.0f, 1.0f));
-            return constant(std::clamp(r[0], 0.0f, 1.0f), std::clamp(r[1], 0.0f, 1.0f), std::clamp(r[2], 0.0f, 1.0f));
+            const auto value = [&](float v) { return d ? v : wrapByte(v); };
+            if (!colorInput || alphaPart) return constant(value(r[3]));
+            return constant(value(r[0]), value(r[1]), value(r[2]));
         }
+        if (!ranges[index][part].inUnit()) approximate("unclamped value");
         if (live[part] != index) approximate("overwritten register read");
         return kind(Arg::Prev, operand);
     }
@@ -145,10 +171,10 @@ struct Compiler {
         return a;
     }
 
-    Arg colorInput(const TevStage& s, std::uint8_t input) {
+    Arg colorInput(const TevStage& s, std::uint8_t input, bool d = false) {
         switch (input) {
-        case 0: case 2: case 4: case 6: return reg(input / 2, false, true);
-        case 1: case 3: case 5: case 7: return reg(input / 2, true, true);
+        case 0: case 2: case 4: case 6: return reg(input / 2, false, true, d);
+        case 1: case 3: case 5: case 7: return reg(input / 2, true, true, d);
         case 8: return texture(s, false, true);
         case 9: return texture(s, true, true);
         case 10: return raster(s, false, true);
@@ -160,9 +186,9 @@ struct Compiler {
         }
     }
 
-    Arg alphaInput(const TevStage& s, std::uint8_t input) {
+    Arg alphaInput(const TevStage& s, std::uint8_t input, bool d = false) {
         switch (input) {
-        case 0: case 1: case 2: case 3: return reg(input, true, false);
+        case 0: case 1: case 2: case 3: return reg(input, true, false, d);
         case 4: return texture(s, true, false);
         case 5: return raster(s, true, false);
         case 6: return constant(konst(m, s.konstAlpha, 3));
@@ -170,13 +196,15 @@ struct Compiler {
         }
     }
 
+    enum Form { None, Single, Product, Lerp };
+
     // out = (d +/- lerp(a, b, c) + bias) * scale, as a short list of combiner ops.
     std::vector<Op> build(Arg a, Arg b, Arg c, Arg d, std::uint8_t op, std::uint8_t bias, std::uint8_t scale, bool alpha) {
         std::vector<Op> ops;
         const Arg temp = kind(Arg::Temp, alpha ? CombineOperand::Alpha : CombineOperand::Color);
         const bool subtract = op == 1;
         if (op > 1) approximate("compare op"); // compare modes
-        enum { None, Single, Product, Lerp } form;
+        Form form;
         Arg x, y;
         if (zero(c) || (a == b)) { form = Single; x = a; }
         else if (one(c)) { form = Single; x = b; }
@@ -185,6 +213,7 @@ struct Compiler {
         else if (zero(b)) { form = Product; x = a; y = invert(c); }
         else form = Lerp;
         if (form == Single && zero(x)) form = None;
+        if (!inUnit(d)) return signedSum(form, x, y, a, b, c, d, subtract, bias, scale, alpha);
 
         if (form == None) {
             ops.push_back({CombineFunc::Replace, {d}});
@@ -258,6 +287,78 @@ struct Compiler {
         return ops;
     }
 
+    // (k +/- t) * scale for a constant k outside 0..1, as GX saturates it: the positive and negative
+    // parts of k never meet in one component, so a subtract and an add apply them without clipping.
+    std::vector<Op> signedSum(Form form, Arg x, Arg y, Arg a, Arg b, Arg c, Arg d, bool subtract, std::uint8_t bias,
+                              std::uint8_t scale, bool alpha) {
+        std::vector<Op> ops;
+        const Arg temp = kind(Arg::Temp, alpha ? CombineOperand::Alpha : CombineOperand::Color);
+        const float factor = scale == 1 ? 2 : scale == 2 ? 4 : scale == 3 ? 0.5f : 1;
+        if (bias == 3) approximate("compare bias");
+        float k[3], positive[3], negative[3];
+        bool beyondOne = false, anyPositive = false, anyNegative = false;
+        for (int i = 0; i < 3; ++i) {
+            k[i] = d.value[alpha ? 0 : i] + (bias == 1 ? 0.5f : bias == 2 ? -0.5f : 0);
+            positive[i] = std::min(std::max(k[i], 0.0f), 1.0f);
+            negative[i] = std::min(std::max(-k[i], 0.0f), 1.0f);
+            beyondOne |= k[i] > 1;
+            anyPositive |= positive[i] > 0;
+            anyNegative |= negative[i] > 0;
+        }
+        const bool mixed = anyPositive && anyNegative;
+        if (form == None || (form == Single && (x.kind == Arg::Constant || x.kind == Arg::One))) {
+            // Nothing varies: saturate the constant here.
+            float v[3];
+            for (int i = 0; i < 3; ++i) {
+                const float term = form == None ? 0 : x.kind == Arg::One ? 1 : x.value[alpha ? 0 : i];
+                v[i] = std::clamp((subtract ? k[i] - term : k[i] + term) * factor, 0.0f, 1.0f);
+            }
+            ops.push_back({CombineFunc::Replace, {constant(v[0], v[1], v[2])}});
+            return ops;
+        }
+        Arg t;
+        if (form == Single) t = x;
+        else {
+            if (form == Product) ops.push_back({CombineFunc::Modulate, {x, y}});
+            else ops.push_back({CombineFunc::Interpolate, {b, a, c}});
+            t = temp;
+        }
+        if (subtract) {
+            // k - t: a component with k at or below zero saturates to zero, as max(0, 0 - t) does.
+            if (beyondOne) approximate("register beyond one");
+            ops.push_back({CombineFunc::Subtract, {constant(positive[0], positive[1], positive[2]), t}});
+        } else {
+            // A sum past one saturates the same whether k or one was added, unless it is halved after.
+            if (beyondOne && factor < 1) approximate("register beyond one");
+            bool small = true;
+            for (float v : k) small &= std::fabs(v) <= 0.5f;
+            if (mixed && small) {
+                ops.push_back({CombineFunc::AddSigned, {t, constant(k[0] + 0.5f, k[1] + 0.5f, k[2] + 0.5f)}});
+            } else {
+                if (anyNegative) {
+                    ops.push_back({CombineFunc::Subtract, {t, constant(negative[0], negative[1], negative[2])}});
+                    t = temp;
+                }
+                if (anyPositive) ops.push_back({CombineFunc::Add, {t, constant(positive[0], positive[1], positive[2])}});
+            }
+        }
+        if (factor > 1) {
+            ops.back().scale = static_cast<std::uint8_t>(factor);
+        } else if (factor < 1) {
+            const Op last = ops.back();
+            const Arg half = constant(0.5f);
+            if (last.func == CombineFunc::Add) {
+                ops.back() = {CombineFunc::Interpolate, {last.args[0], last.args[1], half}};
+            } else if (last.func == CombineFunc::AddSigned) {
+                ops.back() = {CombineFunc::Interpolate, {last.args[0], last.args[1], half}};
+                ops.push_back({CombineFunc::Subtract, {temp, constant(0.25f)}});
+            } else {
+                ops.push_back({CombineFunc::Modulate, {temp, half}});
+            }
+        }
+        return ops;
+    }
+
     struct Slots { bool used = false; float value[3]{}; };
 
     // Maps an op argument to a combiner source, placing constants in the stage slot or the buffer.
@@ -292,6 +393,7 @@ struct Compiler {
         if (arg.kind == Arg::One) value[0] = value[1] = value[2] = 1;
         if (arg.kind == Arg::Constant) for (int i = 0; i < 3; ++i) value[i] = arg.value[i];
         const int count = alpha ? 1 : 3;
+        for (int i = 0; i < count; ++i) if (value[i] < 0 || value[i] > 1) approximate("signed constant");
         const auto matches = [&](const Slots& s) {
             for (int i = 0; i < count; ++i) if (s.value[i] != value[i]) return false;
             return true;
@@ -341,6 +443,55 @@ struct Compiler {
         }
     }
 
+    Range inputRange(const TevStage& s, std::uint8_t input, bool alpha, bool d) {
+        const auto registerRange = [&](int index, int part) {
+            const Range r = ranges[index][part];
+            if (d || r.inUnit()) return r;
+            if (written[index][part]) return Range{};
+            const auto& v = registers[index];
+            if (part) return Range{wrapByte(v[3]), wrapByte(v[3])};
+            return Range{std::min({wrapByte(v[0]), wrapByte(v[1]), wrapByte(v[2])}),
+                         std::max({wrapByte(v[0]), wrapByte(v[1]), wrapByte(v[2])})};
+        };
+        const auto konstRange = [&](std::uint8_t select, bool alphaPart) {
+            if (alphaPart) { const float v = konst(m, select, 3); return Range{v, v}; }
+            const float r = konst(m, select, 0), g = konst(m, select, 1), b = konst(m, select, 2);
+            return Range{std::min({r, g, b}), std::max({r, g, b})};
+        };
+        if (alpha) {
+            if (input < 4) return registerRange(input, 1);
+            if (input == 6) return konstRange(s.konstAlpha, true);
+            return input == 7 ? Range{0, 0} : Range{};
+        }
+        if (input < 8) return registerRange(input / 2, input & 1);
+        if (input == 12) return {1, 1};
+        if (input == 13) return {0.5f, 0.5f};
+        if (input == 14) return konstRange(s.konstColor, false);
+        return input == 15 ? Range{0, 0} : Range{};
+    }
+
+    // Bounds of what a stage leaves in its register: GX saturates only when the stage asks it to.
+    Range stageRange(const TevStage& s, bool alpha) {
+        const auto* in = alpha ? s.alphaIn : s.colorIn;
+        const Range a = inputRange(s, in[0], alpha, false), b = inputRange(s, in[1], alpha, false);
+        const Range d = inputRange(s, in[3], alpha, true);
+        const std::uint8_t op = alpha ? s.alphaOp : s.colorOp, bias = alpha ? s.alphaBias : s.colorBias;
+        const std::uint8_t scale = alpha ? s.alphaScale : s.colorScale;
+        const Range lerp{std::min(a.lo, b.lo), std::max(a.hi, b.hi)};
+        Range out = op == 1 ? Range{d.lo - lerp.hi, d.hi - lerp.lo} : Range{d.lo + lerp.lo, d.hi + lerp.hi};
+        if (op > 1 || bias == 3) {
+            // Compare ops add c or nothing; they are approximated anyway, but later stages read the result.
+            out = {d.lo, d.hi + 1};
+        } else {
+            const float shift = bias == 1 ? 0.5f : bias == 2 ? -0.5f : 0;
+            const float factor = scale == 1 ? 2 : scale == 2 ? 4 : scale == 3 ? 0.5f : 1;
+            out = {(out.lo + shift) * factor, (out.hi + shift) * factor};
+        }
+        const bool clamp = alpha ? s.alphaClamp : s.colorClamp;
+        const float lo = clamp ? 0 : -1024 / 255.0f, hi = clamp ? 1 : 1023 / 255.0f;
+        return {std::clamp(out.lo, lo, hi), std::clamp(out.hi, lo, hi)};
+    }
+
     CombinerProgram run() {
         if (leading) {
             auto& pass = program.stages[program.stageCount++];
@@ -349,18 +500,22 @@ struct Compiler {
         for (unsigned i = 0; i < m.tevStageCount; ++i) {
             const auto& s = m.stages[i];
             const auto colorOps = build(colorInput(s, s.colorIn[0]), colorInput(s, s.colorIn[1]), colorInput(s, s.colorIn[2]),
-                                        colorInput(s, s.colorIn[3]), s.colorOp, s.colorBias, s.colorScale, false);
+                                        colorInput(s, s.colorIn[3], true), s.colorOp, s.colorBias, s.colorScale, false);
             const auto alphaOps = build(alphaInput(s, s.alphaIn[0]), alphaInput(s, s.alphaIn[1]), alphaInput(s, s.alphaIn[2]),
-                                        alphaInput(s, s.alphaIn[3]), s.alphaOp, s.alphaBias, s.alphaScale, true);
+                                        alphaInput(s, s.alphaIn[3], true), s.alphaOp, s.alphaBias, s.alphaScale, true);
             emit(colorOps, alphaOps);
+            const Range results[2]{stageRange(s, false), stageRange(s, true)};
             // Only one previous value survives in the combiner; older register writes are lost.
             const std::uint8_t outputs[2]{static_cast<std::uint8_t>(s.colorReg & 3), static_cast<std::uint8_t>(s.alphaReg & 3)};
             for (int part = 0; part < 2; ++part) {
                 written[outputs[part]][part] = true;
                 live[part] = outputs[part];
+                ranges[outputs[part]][part] = results[part];
             }
         }
         if (live[0] != 0 || live[1] != 0) approximate("output left in a register");
+        // The last stage's value is written out modulo 256, so an unclamped one outside 0..1 wraps.
+        if (!ranges[live[0]][0].inUnit() || !ranges[live[1]][1].inUnit()) approximate("unclamped output");
         if (!program.stageCount) {
             program.stageCount = 1;
             program.stages[0].colorSource[0] = program.stages[0].alphaSource[0] = CombineSource::Primary;

@@ -25,7 +25,14 @@ float konst(const smg::ModelMaterial& m, std::uint8_t select, int component) {
     return 1;
 }
 
-// The GX TEV as documented: every stage computes d +/- lerp(a, b, c), then bias, scale and clamp.
+// Inputs a, b and c take a register's low eight bits.
+float wrapByte(float v) {
+    if (v >= 0 && v <= 1) return v;
+    return static_cast<float>(static_cast<int>(std::lround(v * 255)) & 255) / 255;
+}
+
+// The GX TEV as Dolphin models it: every stage computes d +/- lerp(a, b, c), then bias and scale; it
+// saturates only when its clamp bit is set (else it keeps -1024..1023), and the output is taken modulo 256.
 Rgba gx(const smg::ModelMaterial& m, const Inputs& in) {
     Rgba reg[4]{m.tevColors[3], m.tevColors[0], m.tevColors[1], m.tevColors[2]};
     for (unsigned i = 0; i < m.tevStageCount; ++i) {
@@ -56,23 +63,26 @@ Rgba gx(const smg::ModelMaterial& m, const Inputs& in) {
             default: return 0;
             }
         };
-        const auto combine = [](float a, float b, float c, float d, int op, int bias, int scale) {
+        const auto combine = [](float a, float b, float c, float d, int op, int bias, int scale, bool clamp) {
+            a = wrapByte(a), b = wrapByte(b), c = wrapByte(c);
             const float lerp = a * (1 - c) + b * c;
             float v = op == 1 ? d - lerp : d + lerp;
             v += bias == 1 ? 0.5f : bias == 2 ? -0.5f : 0;
             v *= scale == 1 ? 2 : scale == 2 ? 4 : scale == 3 ? 0.5f : 1;
-            return std::clamp(v, 0.0f, 1.0f);
+            return clamp ? std::clamp(v, 0.0f, 1.0f) : std::clamp(v, -1024 / 255.0f, 1023 / 255.0f);
         };
         Rgba out;
         for (int c = 0; c < 3; ++c)
             out[c] = combine(colorIn(s.colorIn[0], c), colorIn(s.colorIn[1], c), colorIn(s.colorIn[2], c),
-                             colorIn(s.colorIn[3], c), s.colorOp, s.colorBias, s.colorScale);
+                             colorIn(s.colorIn[3], c), s.colorOp, s.colorBias, s.colorScale, s.colorClamp);
         out[3] = combine(alphaIn(s.alphaIn[0]), alphaIn(s.alphaIn[1]), alphaIn(s.alphaIn[2]), alphaIn(s.alphaIn[3]),
-                         s.alphaOp, s.alphaBias, s.alphaScale);
+                         s.alphaOp, s.alphaBias, s.alphaScale, s.alphaClamp);
         for (int c = 0; c < 3; ++c) reg[s.colorReg & 3][c] = out[c];
         reg[s.alphaReg & 3][3] = out[3];
     }
-    return reg[0];
+    Rgba out = reg[0];
+    for (auto& c : out) c = wrapByte(c);
+    return out;
 }
 
 // The PICA200 combiner: every stage saturates, and one constant plus the buffer are available.
@@ -203,6 +213,45 @@ void realMaterial(std::mt19937& rng) {
     }
 }
 
+// Good Egg's starting planet grass: C0 alpha is -0.5, which a register read as d keeps. Clamped to zero,
+// the alpha stage stayed above 0.5 and stage 1 added it to every color, painting the planet white.
+void diskGardenGrass(std::mt19937& rng) {
+    smg::ModelMaterial m;
+    m.textures[0] = 0;
+    m.tevColors[0] = {72 / 255.0f, 56 / 255.0f, 13 / 255.0f, -128 / 255.0f};
+    m.tevColors[1] = {0, 0, 0, 367 / 255.0f};
+    m.tevColors[2] = {1, 1, 1, 1};
+    m.konstColors[0] = {5 / 255.0f, 5 / 255.0f, 0, 1};
+    m.tevStageCount = 2;
+    const std::uint8_t color[2][4]{{14, 2, 10, 15}, {15, 0, 8, 1}};
+    const std::uint8_t alpha[2][4]{{4, 6, 5, 1}, {7, 7, 7, 7}};
+    for (int i = 0; i < 2; ++i) {
+        auto& s = m.stages[i];
+        std::copy(color[i], color[i] + 4, s.colorIn);
+        std::copy(alpha[i], alpha[i] + 4, s.alphaIn);
+        s.channel = 4;
+        s.texMap = s.texCoord = 0;
+        s.konstAlpha = 0x05;
+    }
+    m.stages[0].colorScale = 2;
+    m.stages[0].alphaScale = 1;
+    m.stages[1].colorScale = 1;
+    const auto program = smg::compileTev(m);
+    if (!program.exact) dump(m, program, randomInputs(rng));
+    check(program.exact, "grass with a negative register translates exactly");
+    for (int i = 0; i < 200; ++i) {
+        const auto in = randomInputs(rng);
+        if (!same(gx(m, in), pica(program, in))) dump(m, program, in);
+        check(same(gx(m, in), pica(program, in)), "grass matches GX");
+    }
+    // Lit, opaque grass: the alpha term is 2 (3/8 - 1/2) < 0, so nothing is added and the texture shows.
+    Inputs lit{};
+    lit.texture[0] = {0.3f, 0.3f, 0.2f, 1};
+    lit.raster = {1, 1, 1, 1};
+    const auto out = pica(program, lit);
+    check(std::fabs(out[1] - 2 * 4 * (56 / 255.0f) * 0.3f) < 1e-3f && out[0] < 0.9f, "lit grass keeps its texture");
+}
+
 // d + lerp(a, b, c) with the previous value as both d and c needs it after the first op.
 void previousTwice(std::mt19937& rng) {
     smg::ModelMaterial m;
@@ -236,14 +285,20 @@ void previousTwice(std::mt19937& rng) {
 
 void randomMaterials(std::mt19937& rng) {
     std::uniform_int_distribution<int> colorInput(0, 15), alphaInput(0, 7), small(0, 3), stageCount(1, 4), selection(0, 0x1f);
-    std::uniform_real_distribution<float> unit(0, 1);
-    unsigned exact = 0;
-    constexpr unsigned trials = 4000;
+    std::uniform_real_distribution<float> unit(0, 1), wide(-1.5f, 2.0f);
+    unsigned exact = 0, exactSigned = 0;
+    constexpr unsigned trials = 8000;
     for (unsigned t = 0; t < trials; ++t) {
         smg::ModelMaterial m;
+        // Half the trials use registers as the disc does: signed, past one, and stages that skip the clamp.
+        const bool signedRegisters = t % 2;
         for (int i = 0; i < 4; ++i) {
             m.textures[i] = i;
-            for (int c = 0; c < 4; ++c) { m.tevColors[i][c] = unit(rng); m.konstColors[i][c] = unit(rng); }
+            for (int c = 0; c < 4; ++c) {
+                // Registers hold whole signed steps of 1/255, as J3D stores them.
+                m.tevColors[i][c] = signedRegisters ? std::round(wide(rng) * 255) / 255 : unit(rng);
+                m.konstColors[i][c] = unit(rng);
+            }
         }
         m.tevStageCount = stageCount(rng);
         for (unsigned i = 0; i < m.tevStageCount; ++i) {
@@ -263,11 +318,14 @@ void randomMaterials(std::mt19937& rng) {
             s.channel = small(rng) ? 4 : 0xff;
             s.konstColor = selection(rng);
             s.konstAlpha = selection(rng) | 0x10;
+            s.colorClamp = !signedRegisters || small(rng);
+            s.alphaClamp = !signedRegisters || small(rng);
         }
         const auto program = smg::compileTev(m);
         check(program.stageCount >= 1 && program.stageCount <= 6 && program.unitCount <= 3, "program fits the hardware");
         if (!program.exact) continue;
         ++exact;
+        exactSigned += signedRegisters;
         for (int i = 0; i < 20; ++i) {
             const auto in = randomInputs(rng);
             if (same(gx(m, in), pica(program, in))) continue;
@@ -276,14 +334,16 @@ void randomMaterials(std::mt19937& rng) {
             check(false, "exact program matches GX");
         }
     }
-    std::printf("%u of %u random materials translated exactly\n", exact, trials);
+    std::printf("%u of %u random materials translated exactly, %u with signed registers\n", exact, trials, exactSigned);
     check(exact > trials / 50, "random materials exercise the exact path");
+    check(exactSigned > trials / 100, "signed registers exercise the exact path");
 }
 } // namespace
 
 int runCombinerTests() {
     std::mt19937 rng(1234);
     realMaterial(rng);
+    diskGardenGrass(rng);
     previousTwice(rng);
     randomMaterials(rng);
     std::printf("%u TEV combiner checks passed\n", checks);
