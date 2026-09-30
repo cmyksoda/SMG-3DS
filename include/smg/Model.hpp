@@ -66,6 +66,7 @@ struct ModelShape {
     std::size_t first = 0, count = 0;
     unsigned material = 0;
     std::uint8_t matrixType = 0; // 0 rigid, 1 billboard, 2 Y billboard, 3 skinned
+    int joint = -1;              // the joint whose mesh it is, as MR::hideJoint hides it
 };
 struct ModelJoint {
     std::string name;

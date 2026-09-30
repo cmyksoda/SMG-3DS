@@ -333,6 +333,7 @@ bool readHierarchy(const Reader& inf, unsigned jointCount, Model& model, std::st
         } else if (op == 0x12) {
             if (index >= shapeCount || assigned[index]) return fail(error, "Invalid hierarchy shape");
             model.shapes[index].material = currentMaterial;
+            model.shapes[index].joint = jointStack.empty() ? -1 : jointStack.back();
             assigned[index] = true;
         } else if (op == 1) {
             materialStack.push_back(currentMaterial);

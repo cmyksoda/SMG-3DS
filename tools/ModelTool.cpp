@@ -63,7 +63,8 @@ int main(int argc, char** argv) {
         std::printf("Bounds: (%g, %g, %g) to (%g, %g, %g)\n", model.minimum[0], model.minimum[1], model.minimum[2],
             model.maximum[0], model.maximum[1], model.maximum[2]);
         for (const auto& s : model.shapes)
-            std::printf("Shape: %zu triangles, material %u, matrix type %u\n", s.count / 3, s.material, s.matrixType);
+            std::printf("Shape: %zu triangles, material %u, matrix type %u, joint %s\n", s.count / 3, s.material, s.matrixType,
+                        s.joint >= 0 ? model.joints[s.joint].name.c_str() : "none");
         for (const auto& t : model.textures)
             std::printf("Texture %s: %ux%u format %u wrap %u/%u\n", t.name.c_str(), t.image.width, t.image.height,
                 static_cast<unsigned>(t.format), t.wrapS, t.wrapT);
