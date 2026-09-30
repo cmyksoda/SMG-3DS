@@ -17,12 +17,17 @@ unsigned drawDones = 0;
 std::vector<std::pair<unsigned, bool>> tokens;
 std::string unsupported;
 std::vector<std::uint8_t> displayList;
+struct Primitive { unsigned kind, format, count; const std::uint8_t* vertices; };
+std::vector<Primitive> primitives;
 
 smg::GxCommandProcessor::Host host() {
     return {[](std::uint32_t physical) -> const std::uint8_t* { return displayList.data() + physical; },
             [] { ++drawDones; },
             [](std::uint16_t token, bool interrupt) { tokens.emplace_back(token, interrupt); },
-            [](const char* what, std::uint32_t) { unsupported = what; }};
+            [](const char* what, std::uint32_t) { unsupported = what; },
+            [](std::uint8_t kind, std::uint8_t format, std::uint16_t count, const std::uint8_t* vertices) {
+                primitives.push_back({kind, format, count, vertices});
+            }};
 }
 
 void put32(std::vector<std::uint8_t>& out, std::uint32_t value) {
@@ -68,9 +73,46 @@ void displayLists() {
     put32(call, 8); put32(call, 7);
     gpu->put(call.data(), static_cast<std::uint32_t>(call.size()));
     check(gpu->bp[0x30] == 0xABCDEF, "a called display list's commands run");
-    std::uint8_t draw[] = {0x90, 0x00, 0x03};  // triangles, format 0, three vertices
-    gpu->put(draw, sizeof draw);
-    check(unsupported.find("primitive") != std::string::npos, "a primitive is reported as not the port's yet");
+    delete gpu;
+}
+
+// Vertex formats as GX sets them, by the field positions of the SDK's own private/cp_reg.h.
+void vertices() {
+    auto* gpu = new smg::GxCommandProcessor(host());
+    // Format 1: position direct s16 XYZ with 8 fraction bits, colour 0 direct RGBA8888, texcoord 0 direct f32 ST.
+    gpu->cp[0x50] = 1u << 9 | 1u << 13;             // VCD_LO: POS direct, COL0 direct
+    gpu->cp[0x60] = 1u << 0;                        // VCD_HI: TEX0 direct
+    gpu->cp[0x71] = 1u << 0 | 3u << 1 | 8u << 4     // VAT_A: XYZ, s16, shift 8
+                  | 5u << 14                        //        colour 0 RGBA8888
+                  | 1u << 21 | 4u << 22;            //        texcoord 0 ST, f32
+    check(gpu->vertexSize(1) == 6 + 4 + 8, "a vertex's size follows its descriptor and format");
+    std::vector<std::uint8_t> stream{0x91, 0x00, 0x02};  // triangles in format 1, two vertices (a test needs no whole triangle)
+    const std::uint8_t first[] = {0x01, 0x80, 0xFF, 0x00, 0x00, 0x40,  // x 1.5, y -1.0, z 0.25
+                                  0x10, 0x20, 0x30, 0x40,              // colour
+                                  0x3F, 0x80, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00};  // s 1.0, t 2.0
+    stream.insert(stream.end(), first, first + sizeof first);
+    stream.insert(stream.end(), first, first + sizeof first);
+    gpu->put(stream.data(), static_cast<std::uint32_t>(stream.size()));
+    check(primitives.size() == 1 && primitives[0].kind == 0x90 && primitives[0].format == 1 && primitives[0].count == 2,
+          "a whole primitive is handed over with its kind, format and count");
+    const smg::GxVertex vertex = gpu->readVertex(primitives[0].vertices, 1);
+    check(vertex.position[0] == 1.5f && vertex.position[1] == -1.0f && vertex.position[2] == 0.25f, "s16 positions dequantized by their shift");
+    check(vertex.color[0][0] == 0x10 && vertex.color[0][3] == 0x40, "an RGBA8888 colour read in order");
+    check(vertex.texcoord[0][0] == 1.0f && vertex.texcoord[0][1] == 2.0f, "f32 texture coordinates read as floats");
+    // Format 2: position indexed by u8 into array 0, stride 12, f32 XYZ.
+    gpu->cp[0x50] = 2u << 9;
+    gpu->cp[0x60] = 0;
+    gpu->cp[0x72] = 1u << 0 | 4u << 1;
+    displayList.assign(64, 0);
+    const std::uint8_t second[] = {0x41, 0x20, 0, 0, 0xC0, 0x40, 0, 0, 0x3F, 0, 0, 0};  // 10, -3, 0.5 at element 1
+    std::memcpy(displayList.data() + 16 + 12, second, sizeof second);
+    gpu->cp[0xA0] = 16;
+    gpu->cp[0xB0] = 12;
+    check(gpu->vertexSize(2) == 1, "an index8 attribute takes one byte");
+    const std::uint8_t index = 1;
+    const smg::GxVertex indexed = gpu->readVertex(&index, 2);
+    check(indexed.position[0] == 10.0f && indexed.position[1] == -3.0f && indexed.position[2] == 0.5f,
+          "an indexed position read from its array at base plus index times stride");
     delete gpu;
 }
 } // namespace
@@ -79,6 +121,7 @@ int runGxCommandTests() {
     registerLoads();
     pixelEngine();
     displayLists();
+    vertices();
     std::printf("%u GX command processor checks passed\n", checks);
     return 0;
 }

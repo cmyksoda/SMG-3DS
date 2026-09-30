@@ -25,6 +25,11 @@ smg::GxCommandProcessor& processor() {
             std::fprintf(stderr, "The Wii GPU's command processor: %s (0x%lx)\n", what, static_cast<unsigned long>(detail));
             std::abort();
         },
+        [](std::uint8_t kind, std::uint8_t format, std::uint16_t count, const std::uint8_t*) {
+            std::fprintf(stderr, "The Wii GPU's command processor: drawing is not the port's yet (primitive 0x%02x, %u vertices of %lu bytes in format %u)\n",
+                         kind, count, static_cast<unsigned long>(processor().vertexSize(format)), format);
+            std::abort();
+        },
     });
     return instance;
 }

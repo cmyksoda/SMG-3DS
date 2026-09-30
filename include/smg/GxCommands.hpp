@@ -2,6 +2,13 @@
 #include <cstdint>
 
 namespace smg {
+// One vertex as the GPU reads it, dequantized: the attributes the CP's descriptor names, others left zero.
+struct GxVertex {
+    std::uint8_t matrixIndex = 0, texMatrixIndex[8] = {};
+    float position[3] = {}, normal[3] = {}, texcoord[8][2] = {};
+    std::uint8_t color[2][4] = {};
+};
+
 // The Wii GPU's command processor: the FIFO's big-endian stream, taken byte by byte as GX sends it. It keeps the
 // register loads, follows display lists and reports pixel-engine events; what it cannot take yet goes to `unsupported`.
 class GxCommandProcessor {
@@ -12,10 +19,16 @@ public:
         void (*drawDone)();                 // BP 0x45
         void (*token)(std::uint16_t token, bool interrupt);  // BP 0x47 (no interrupt) and 0x48
         void (*unsupported)(const char* what, std::uint32_t detail);
+        // A whole primitive: its kind (the opcode's top bits: 0x80 quads ... 0xB8 points), vertex format and vertices.
+        void (*primitive)(std::uint8_t kind, std::uint8_t format, std::uint16_t count, const std::uint8_t* vertices);
     };
     explicit GxCommandProcessor(const Host& host) : host_(host) {}
 
     void put(const std::uint8_t* bytes, std::uint32_t count);
+    // Bytes one vertex takes in a vertex format, by the CP's descriptor (VCD) and attribute table (VAT).
+    std::uint32_t vertexSize(std::uint8_t format) const;
+    // One vertex from `at`; indexed attributes are read from the CP's arrays through the host's memory.
+    GxVertex readVertex(const std::uint8_t* at, std::uint8_t format) const;
     std::uint32_t pending() const { return pendingSize_; }
 
     std::uint32_t cp[0x100] = {};
