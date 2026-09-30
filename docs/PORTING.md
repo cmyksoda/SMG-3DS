@@ -34,6 +34,10 @@ completion does not make those interfaces portable to ARM11/PICA200.
   drives the pointer from the gyro in player space. Stylus gesture ownership prevents UI
   presses from generating shots and allows aiming across 50%-transparent buttons.
 - Yaz0 decompression and RARC indexing work independently of host endianness and alignment.
+  Archives are found whatever the case of their names, as the Wii's DVD file system finds them:
+  the disc stores `FloaterOtakingGalaxy.arc` and `CubeBubbleEXAZone.arc` where the game asks for
+  `FloaterOtaKingGalaxy` and `CubeBubbleExAZone`. A 3DS SD card ignores case already; a Linux
+  host, or Azahar's SD folder on one, needs each part of the path matched.
   The bootstrap probes the original star-bit layout archive and the Good Egg scenario table
   if they are present on the SD card.
 - The J3D reader loads every BMD/BDL on the disc: joint hierarchies, envelope skinning
@@ -235,6 +239,17 @@ are not covered by that audit. Forty-nine animation tables required
 repacking unaligned fields; regression tests cover packed offsets and odd record strides.
 The four remaining `.arc` files are U8-format Wii HOME Menu resources, currently unsupported.
 `resource_audit` reports them and returns failure rather than counting them as validated.
+
+`resource_audit --gravity` places the gravity of all 136 scenarios in the 48 galaxies through
+the original creators under ASan and UBSan, and asks every placed gravity for its pull at 48
+points around Mario's start (181,392 pulls, none infinite or NaN). The disc has 1,142 global
+gravity rows, all in `planetobjinfo` tables: 463 planes in boxes, 178 points, 147 cubes, 140
+disks, 75 segments, 34 planes in cylinders, 10 disk tori, 9 planes, 7 cones and 12 wires. Wire
+gravity (59 placements in 22 scenarios, among them Honeybee Kingdom, Sand Clock and Cosmos
+Garden) is the only kind not placed. 63 rows use switch A, 15 switch B, 11 `SW_SLEEP`, and none
+a follower. Every scenario has gravity at Mario's start except twelve hidden-star scenarios
+(`IsHidden`), which place no MarioNo 0 entrance of their own; `Stage::entrance` says so instead
+of starting at the origin.
 
 All 1,758 BMD/BDL models load under ASan and UBSan (5,053,844 triangles), and 6,949 of their
 7,780 materials translate to the combiner exactly. Good Egg scenario 1 places 296 objects
