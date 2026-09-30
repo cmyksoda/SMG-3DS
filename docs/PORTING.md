@@ -99,7 +99,7 @@ The New Nintendo 3DS and New 2DS family is the target: the controls need ZL, ZR 
 C-Stick, and the faster CPU and larger memory are what full Galaxy needs most. Nothing so
 far establishes that full gameplay fits or runs acceptably even there.
 
-## Bringing up NameObj and the scene (decision needed)
+## Bringing up NameObj and the scene
 
 Placed gravity, collision and every actor sit on `NameObj`. Its 13 sources split cleanly:
 
@@ -116,7 +116,7 @@ Three ways forward:
    layout system. Most faithful; weeks of bring-up before anything placed runs.
 2. **Native scene everywhere.** Reimplement the holder and scheduler natively. Fastest,
    but it grows into a second engine that drifts from the original.
-3. **Original objects, native holder (recommended).** Compile the first slice and the
+3. **Original objects, native holder (chosen 2026-09-29).** Compile the first slice and the
    scheduler, and give them a small native `SceneObjHolder` that owns only what the port
    has brought up - `PlanetGravityManager` first, so `GravityCreator` can build a zone's
    real gravity from `planetobjinfo`. It is an explicit, removable boundary like
