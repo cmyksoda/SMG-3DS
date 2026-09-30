@@ -1352,7 +1352,6 @@ for relative, anchor, include in [
     ("libs/JSystem/include/JSystem/J2DGraph/J2DPane.hpp", '#include "JSystem/JSupport/JSUList.hpp"', "<revolution/gx/GXEnum.h>"),
 ]:
     adapt(relative, relative[relative.index("include/"):], [(anchor, f"{anchor}\n#include {include}", 1)])
-adapt("src/JSystem/JKernel/JKRMemArchive.cpp", "JSystem/JKernel/JKRMemArchive.cpp", [], cases=["    case JKR_COMPRESSION_SZS:"])
 # The callback's argument carries a pointer (JAUSeqDataBlockMgr passes a link), which a 64-bit host cannot fit in u32.
 adapt("libs/JSystem/include/JSystem/JAudio2/JASResArcLoader.hpp", "include/JSystem/JAudio2/JASResArcLoader.hpp", [
     ("typedef void (*LoadCallback)(u32, u32);", "typedef void (*LoadCallback)(u32, uintptr_t);", 1),
@@ -1517,3 +1516,18 @@ for relative, firsts in extracted.items():
 for relative in NATIVE:
     if relative not in written and relative not in extracted:
         adapt(relative, relative[len("src/"):], [])
+# Archives: the file entry's flag byte is the high byte of its word. Metrowerks fills bitfields from the top,
+# GCC for a little-endian target from the bottom, so the declarations swap places there.
+adapt("libs/JSystem/include/JSystem/JKernel/JKRArchive.hpp", "include/JSystem/JKernel/JKRArchive.hpp", [
+    ("        /* 0x4 */ u32 mFlag : 8;\n        /* 0x5 */ u32 mNameOffset : 24;",
+     "#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__\n        u32 mNameOffset : 24;\n        u32 mFlag : 8;\n#else\n"
+     "        /* 0x4 */ u32 mFlag : 8;\n        /* 0x5 */ u32 mNameOffset : 24;\n#endif", 1),
+])
+# A memory archive's tables turn native as it takes the archive (compat/smg/NativeResources.hpp).
+adapt("src/JSystem/JKernel/JKRMemArchive.cpp", "JSystem/JKernel/JKRMemArchive.cpp", [
+    ('#include "JSystem/JKernel/JKRMemArchive.hpp"', '#include "JSystem/JKernel/JKRMemArchive.hpp"\n#include <smg/NativeResources.hpp>', 1),
+    ("    } else {\n        mInfoBlock = reinterpret_cast< RarcInfoBlock* >(reinterpret_cast< u8* >(mHeader) + mHeader->mHeaderSize);",
+     "    } else {\n        smgNativeRarc(mHeader);\n        mInfoBlock = reinterpret_cast< RarcInfoBlock* >(reinterpret_cast< u8* >(mHeader) + mHeader->mHeaderSize);", 1),
+    ("    mHeader = reinterpret_cast< RarcHeader* >(pData);\n    mInfoBlock =",
+     "    mHeader = reinterpret_cast< RarcHeader* >(pData);\n    smgNativeRarc(mHeader);\n    mInfoBlock =", 1),
+], cases=["    case JKR_COMPRESSION_SZS:"])

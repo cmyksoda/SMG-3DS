@@ -160,22 +160,6 @@ void NANDMove() { unported("NANDMove"); }
 void NANDOpen() { unported("NANDOpen"); }
 void NANDRead() { unported("NANDRead"); }
 void NANDWrite() { unported("NANDWrite"); }
-// NWC24
-void NWC24CloseLib() { unported("NWC24CloseLib"); }
-void NWC24CommitMsg() { unported("NWC24CommitMsg"); }
-void NWC24GetErrorCode() { unported("NWC24GetErrorCode"); }
-void NWC24GetMsgSize() { unported("NWC24GetMsgSize"); }
-void NWC24GetMyUserId() { unported("NWC24GetMyUserId"); }
-void NWC24InitMsgObj() { unported("NWC24InitMsgObj"); }
-void NWC24OpenLib() { unported("NWC24OpenLib"); }
-void NWC24SetMsgAltName() { unported("NWC24SetMsgAltName"); }
-void NWC24SetMsgAttached() { unported("NWC24SetMsgAttached"); }
-void NWC24SetMsgLedPattern() { unported("NWC24SetMsgLedPattern"); }
-void NWC24SetMsgMBDelay() { unported("NWC24SetMsgMBDelay"); }
-void NWC24SetMsgMBNoReply() { unported("NWC24SetMsgMBNoReply"); }
-void NWC24SetMsgTag() { unported("NWC24SetMsgTag"); }
-void NWC24SetMsgText() { unported("NWC24SetMsgText"); }
-void NWC24SetMsgToId() { unported("NWC24SetMsgToId"); }
 // OS
 void OSCreateAlarm() { unported("OSCreateAlarm"); }
 void OSFillFPUContext() { unported("OSFillFPUContext"); }
@@ -234,8 +218,6 @@ void THPGXYuv2RgbSetup() { unported("THPGXYuv2RgbSetup"); }
 // TPL
 void TPLBind() { unported("TPLBind"); }
 void TPLGet() { unported("TPLGet"); }
-// VF
-void VFInitEx() { unported("VFInitEx"); }
 // WENC
 void WENCGetEncodeData() { unported("WENCGetEncodeData"); }
 // WPAD
