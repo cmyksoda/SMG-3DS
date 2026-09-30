@@ -490,6 +490,9 @@ adapt("src/Game/AreaObj/AreaObj.cpp", "Game/AreaObj/AreaObj.cpp", [
 adapt("libs/RVL_SDK/include/revolution/os.h", "include/revolution/os.h", [
     # Wii low-memory addresses, which Metrowerks pins in place; declared here so each is one object or none.
     ("u32 __OSBusClock = 0x800000F8;\nu32 __MEM2End = 0x80003128;", "extern u32 __OSBusClock;\nextern u32 __MEM2End;", 1),
+    # A Wii physical address is 32 bits; a 64-bit host's pointer is cut to it explicitly.
+    ("#define OSCachedToPhysical(caddr) ((u32)((u8*)(caddr)-OS_BASE_CACHED))",
+     "#define OSCachedToPhysical(caddr) ((u32)(uintptr_t)((u8*)(caddr)-OS_BASE_CACHED))", 1),
     ("""        psq_st inF, 0(tmpPtr), 0x1, 5
         lha out, 0(tmpPtr)
     }
@@ -707,6 +710,140 @@ extract("src/Game/Util/MapUtil.cpp", "Game/Util/MapUtilCore.cpp",
          ("Collision", "s32 checkStrikeBallToMapWithMovingReaction(const TVec3f& rCenter, f32 radius, const CollisionPartsFilterBase* pPartsFilter,"),
          ("Collision", "s32 checkStrikeLineToMap(const TVec3f& rStart, const TVec3f& rDirection, s32 count, const CollisionPartsFilterBase* pPartsFilter,"),
          ("Collision", "const HitInfo* getStrikeInfoMap(u32 index) {"), ("Collision", "u32 getStrikeInfoNumMap() {")])
+
+# J3D's paired-single routines, kept for Metrowerks, with plain C++ for other compilers.
+adapt("src/JSystem/J3DGraphBase/J3DTransform.cpp", "JSystem/J3DGraphBase/J3DTransform.cpp", [
+    ("asm void J3DPSCalcInverseTranspose(", "void J3DPSCalcInverseTranspose(", 1),
+    # The rows are cross products of the source rows, over the determinant; a zero determinant leaves dst alone.
+    ("\tpsq_st   f8, 32(r4), 1, 0\n\tblr\n#endif  // clang-format on\n}", """\tpsq_st   f8, 32(r4), 1, 0
+\tblr
+#else
+    const f32 (*a)[4] = src;
+    const f32 rows[3][3]{{a[1][1] * a[2][2] - a[1][2] * a[2][1], a[1][2] * a[2][0] - a[1][0] * a[2][2], a[1][0] * a[2][1] - a[1][1] * a[2][0]},
+                         {a[2][1] * a[0][2] - a[2][2] * a[0][1], a[2][2] * a[0][0] - a[2][0] * a[0][2], a[2][0] * a[0][1] - a[2][1] * a[0][0]},
+                         {a[0][1] * a[1][2] - a[0][2] * a[1][1], a[0][2] * a[1][0] - a[0][0] * a[1][2], a[0][0] * a[1][1] - a[0][1] * a[1][0]}};
+    const f32 det = a[0][0] * rows[0][0] + a[1][0] * rows[1][0] + a[2][0] * rows[2][0];
+    if (det == 0.0f) {
+        return;
+    }
+    const f32 inverse = 1.0f / det;
+    for (int row = 0; row < 3; row++) {
+        for (int column = 0; column < 3; column++) {
+            dst[row][column] = rows[row][column] * inverse;
+        }
+    }
+#endif  // clang-format on
+}""", 1),
+    ("asm void J3DScaleNrmMtx(", "void J3DScaleNrmMtx(", 1),
+    ("\tstfs   f4, 40(mtx)\n\tblr\n#endif  // clang-format on\n}", """\tstfs   f4, 40(mtx)
+\tblr
+#else
+    for (int row = 0; row < 3; row++) {
+        mtx[row][0] *= scl.x;
+        mtx[row][1] *= scl.y;
+        mtx[row][2] *= scl.z;
+    }
+#endif  // clang-format on
+}""", 1),
+    ("asm void J3DScaleNrmMtx33(", "void J3DScaleNrmMtx33(", 1),
+    ("\tstfs     f5, 0x20(mtx)\n\tblr\n#endif  // clang-format on\n}", """\tstfs     f5, 0x20(mtx)
+\tblr
+#else
+    for (int row = 0; row < 3; row++) {
+        mtx[row][0] *= scale.x;
+        mtx[row][1] *= scale.y;
+        mtx[row][2] *= scale.z;
+    }
+#endif  // clang-format on
+}""", 1),
+    # A 3x4 times a 4x4: all four of mtx1's columns weigh mtx2's rows.
+    ("asm void J3DMtxProjConcat(", "void J3DMtxProjConcat(", 1),
+    ("\tpsq_st   f0, 40(dst), 0, 0\n\tblr\n#endif  // clang-format on\n}", """\tpsq_st   f0, 40(dst), 0, 0
+\tblr
+#else
+    f32 out[3][4];
+    for (int row = 0; row < 3; row++) {
+        for (int column = 0; column < 4; column++) {
+            out[row][column] = mtx1[row][0] * mtx2[0][column] + mtx1[row][1] * mtx2[1][column] + mtx1[row][2] * mtx2[2][column] +
+                               mtx1[row][3] * mtx2[3][column];
+        }
+    }
+    for (int row = 0; row < 3; row++) {
+        for (int column = 0; column < 4; column++) {
+            dst[row][column] = out[row][column];
+        }
+    }
+#endif  // clang-format on
+}""", 1),
+    ("#undef UNIT_R\n}\n#endif  // clang-format on", """#undef UNIT_R
+}
+#else
+// mAB[i] = mA mB[i] for count matrices, as PSMTXConcat does each.
+void J3DPSMtxArrayConcat(Mtx mA, Mtx mB, Mtx mAB, u32 count) {
+    for (u32 i = 0; i < count; i++) {
+        PSMTXConcat(mA, mB, mAB);
+        mB += 3;
+        mAB += 3;
+    }
+}
+#endif  // clang-format on""", 1),
+])
+# Each weighted envelope is its joints' animated matrices times their inverse binds, weighted; its scale flag
+# holds only if every joint in the mix is unscaled.
+adapt("src/JSystem/J3DGraphAnimator/J3DMtxBuffer.cpp", "JSystem/J3DGraphAnimator/J3DMtxBuffer.cpp", [
+    ("void J3DMtxBuffer::calcWeightEnvelopeMtx() {\n    __REGISTER MtxPtr weightAnmMtx;",
+     "#ifdef __MWERKS__\nvoid J3DMtxBuffer::calcWeightEnvelopeMtx() {\n    __REGISTER MtxPtr weightAnmMtx;", 1),
+    ("            psq_st var_f30, 40(weightAnmMtx), 0, 0\n            ps_merge00 var_f30, var_f24, var_f24\n        }\n    }\n}\n",
+     """            psq_st var_f30, 40(weightAnmMtx), 0, 0
+            ps_merge00 var_f30, var_f24, var_f24
+        }
+    }
+}
+#else
+void J3DMtxBuffer::calcWeightEnvelopeMtx() {
+    const u16 max = mJointTree->getWEvlpMtxNum();
+    const u16* indices = mJointTree->getWEvlpMixMtxIndex();
+    const f32* weights = mJointTree->getWEvlpMixWeight();
+    for (u16 i = 0; i < max; i++) {
+        u8* pScale = &mpEvlpScaleFlagArr[i];
+        *pScale = 1;
+        f32 sum[3][4] = {};
+        const u8 mixNum = mJointTree->getWEvlpMixMtxNum(i);
+        for (u8 j = 0; j < mixNum; j++) {
+            const u16 idx = *indices++;
+            const f32 weight = *weights++;
+            Mtx product;
+            PSMTXConcat(mpAnmMtx[idx], mJointTree->getInvJointMtx(idx), product);
+            for (int row = 0; row < 3; row++) {
+                for (int column = 0; column < 4; column++) {
+                    sum[row][column] += product[row][column] * weight;
+                }
+            }
+            *pScale &= mpScaleFlagArr[idx];
+        }
+        MtxPtr weightAnmMtx = mpWeightEvlpMtx[i];
+        for (int row = 0; row < 3; row++) {
+            for (int column = 0; column < 4; column++) {
+                weightAnmMtx[row][column] = sum[row][column];
+            }
+        }
+    }
+}
+#endif
+""", 1),
+])
+# Vertex color index tables: a base pointer plus an index held in the pointer field, through intptr_t so a
+# 64-bit host keeps the whole address.
+adapt("src/JSystem/J3DGraphLoader/J3DAnmLoader.cpp", "JSystem/J3DGraphLoader/J3DAnmLoader.cpp", [
+    ("(void*)((s32)indexPtr0 + (s32)dst->mAnmVtxColorIndexData[0][i].mpData * 2)",
+     "(void*)((intptr_t)indexPtr0 + (intptr_t)dst->mAnmVtxColorIndexData[0][i].mpData * 2)", 2),
+    ("(void*)((s32)indexPtr1 + (s32)dst->mAnmVtxColorIndexData[1][i].mpData * 2)",
+     "(void*)((intptr_t)indexPtr1 + (intptr_t)dst->mAnmVtxColorIndexData[1][i].mpData * 2)", 2),
+])
+# GDSetArrayRaw takes the array's raw address as a u32; Metrowerks converted the null to it.
+adapt("src/JSystem/J3DGraphBase/J3DShape.cpp", "JSystem/J3DGraphBase/J3DShape.cpp", [
+    ("GDSetArrayRaw((GXAttr)(i + GX_VA_POS), nullptr, stride[i]);", "GDSetArrayRaw((GXAttr)(i + GX_VA_POS), 0, stride[i]);", 1),
+])
 
 # Class operator new and delete take size_t, which is unsigned int on ARM where u32 is unsigned long.
 adapt("libs/JSystem/include/JSystem/JAudio2/JASHeapCtrl.hpp", "include/JSystem/JAudio2/JASHeapCtrl.hpp", [

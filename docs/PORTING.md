@@ -243,7 +243,10 @@ in `Game/Player` has source, and so does nearly everything else. The work left i
 first compiled 830 unchanged (52%). On the 3DS `u32`
 is `unsigned long` as on the Wii, so a 64-bit host's mismatches (`JKRDvdRipper`, pointer casts) are
 not target problems. The failures clustered on a few shared headers, and five adaptations took the
-count to 1,208 (75%): Camera 126 of 127, Gravity 14 of 14, MapObj 266 of 317, Player 82 of 107.
+count to 1,208 (75%): Camera 126 of 127, Gravity 14 of 14, MapObj 266 of 317, Player 82 of 107. Giving
+the compat `types.h` back upstream's utility macros (`ARRAY_SIZE`, `ALIGN_NEXT`, `FOURCC`, ...) and the
+Metrowerks intrinsics upstream declares for other compilers (`__memcpy`, `__cntlzw`, `__frsqrte`,
+`__abs`, with bodies in `source/compat/Math.cpp`) took it to 1,355 (84%).
 
 | Blocker | Files | Fix |
 | --- | --- | --- |
@@ -295,8 +298,14 @@ stands in until then.
    124 dropped, 116 land through their Binder, all on the part the ray audit finds (the other 8 have no
    collision below). Most rest within 5 units of the ray's landing; with no friction of its own the
    probe slides on sloped starts, up to 246 units on StarDust's.
-2. **ModelManager and XanimePlayer.** J3D's CPU side (`J3DModel::calc`, joints, envelope matrices)
-   is portable; `J3DModelData` gets a native loader from the port's parsers instead of J3D's in-place
+2. **ModelManager and XanimePlayer.** All 31 of JSystem's J3D sources build as `petari_j3d` on the host
+   and ARM. Its paired-single assembly keeps its Metrowerks branch and gains a plain C++ one:
+   `J3DPSCalcInverseTranspose` (the rows are cross products over the determinant; a zero determinant
+   leaves the destination alone, as the assembly returns early), `J3DScaleNrmMtx`/`33`, `J3DMtxProjConcat`
+   (a 3x4 times a 4x4), `J3DPSMtxArrayConcat` (`PSMTXConcat` per matrix) and
+   `J3DMtxBuffer::calcWeightEnvelopeMtx` (each envelope is its joints' world times inverse bind, weighted),
+   each read from the assembly's register flow and checked against the direct formula (host and ARM).
+   J3D's CPU side (`J3DModel::calc`, joints, envelope matrices) is portable; `J3DModelData` gets a native loader from the port's parsers instead of J3D's in-place
    big-endian loader. `XanimePlayer`/`XanimeCore` blend Mario's animations; the renderer draws what
    the original matrices say.
 3. **MarioActor headless.** `MarioActor`, `Mario` and its state modules on the actor core, input
@@ -444,6 +453,6 @@ across 12 zones; the preview draws 56 rigid models in 172 placements.
 
 The portable math tests check tolerances and conventions, not bit-identical Gekko rounding.
 The native validation app passes 1,069 math, 37 WPad, 179 BCSV, 1,043 J3D model/texture,
-8,810 TEV combiner, 27 original gravity, 27 NameObj, 89 scene and gravity creator, 48 collision, 21 J3D animation, 13 original actor, 7 ETC1 and 8 GPU texture checks on emulated ARM
+8,810 TEV combiner, 27 original gravity, 27 NameObj, 89 scene and gravity creator, 48 collision, 21 J3D animation, 13 original actor, 6 J3D transform, 7 ETC1 and 8 GPU texture checks on emulated ARM
 in Azahar; the GPU checks compare the hardware's ETC1 decoding against ours. Of the disc's
 7,780 materials, 6,987 translate to the combiner exactly. No physical console has been tested.

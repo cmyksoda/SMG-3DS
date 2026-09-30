@@ -68,6 +68,25 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PETARI}/src/Ga
 add_library(petari_gravity STATIC ${GRAVITY_SOURCES})
 target_link_libraries(petari_gravity PUBLIC petari_core)
 
+# JSystem's J3D: the model loader, joints, matrices and materials, as the game builds its models.
+set(J3D "${PETARI}/src/JSystem")
+add_library(petari_j3d STATIC
+  "${J3D}/J3DGraphAnimator/J3DCluster.cpp" "${J3D}/J3DGraphAnimator/J3DJoint.cpp" "${J3D}/J3DGraphAnimator/J3DJointTree.cpp"
+  "${J3D}/J3DGraphAnimator/J3DMaterialAnm.cpp" "${J3D}/J3DGraphAnimator/J3DMaterialAttach.cpp" "${J3D}/J3DGraphAnimator/J3DModel.cpp"
+  "${J3D}/J3DGraphAnimator/J3DModelData.cpp" "${CMAKE_CURRENT_BINARY_DIR}/petari/JSystem/J3DGraphAnimator/J3DMtxBuffer.cpp"
+  "${J3D}/J3DGraphAnimator/J3DShapeTable.cpp" "${J3D}/J3DGraphAnimator/J3DSkinDeform.cpp"
+  "${J3D}/J3DGraphBase/J3DDrawBuffer.cpp" "${J3D}/J3DGraphBase/J3DGD.cpp" "${J3D}/J3DGraphBase/J3DMatBlock.cpp"
+  "${J3D}/J3DGraphBase/J3DMaterial.cpp" "${J3D}/J3DGraphBase/J3DPacket.cpp" "${CMAKE_CURRENT_BINARY_DIR}/petari/JSystem/J3DGraphBase/J3DShape.cpp"
+  "${J3D}/J3DGraphBase/J3DShapeDraw.cpp" "${J3D}/J3DGraphBase/J3DShapeMtx.cpp" "${J3D}/J3DGraphBase/J3DStruct.cpp"
+  "${J3D}/J3DGraphBase/J3DSys.cpp" "${J3D}/J3DGraphBase/J3DTevs.cpp" "${CMAKE_CURRENT_BINARY_DIR}/petari/JSystem/J3DGraphBase/J3DTransform.cpp"
+  "${J3D}/J3DGraphBase/J3DVertex.cpp"
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/JSystem/J3DGraphLoader/J3DAnmLoader.cpp" "${J3D}/J3DGraphLoader/J3DJointFactory.cpp" "${J3D}/J3DGraphLoader/J3DMaterialFactory.cpp"
+  "${J3D}/J3DGraphLoader/J3DMaterialFactory_v21.cpp" "${J3D}/J3DGraphLoader/J3DModelLoaderCalcSize.cpp"
+  "${J3D}/J3DGraphLoader/J3DModelLoader.cpp" "${J3D}/J3DGraphLoader/J3DShapeFactory.cpp")
+target_link_libraries(petari_j3d PUBLIC petari_core)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${J3D}/J3DGraphBase/J3DTransform.cpp"
+  "${J3D}/J3DGraphAnimator/J3DMtxBuffer.cpp" "${J3D}/J3DGraphBase/J3DShape.cpp" "${J3D}/J3DGraphLoader/J3DAnmLoader.cpp")
+
 add_library(petari_scene STATIC
   source/compat/Scene.cpp
   "${PETARI}/src/Game/NameObj/NameObj.cpp"
@@ -211,11 +230,11 @@ if(NINTENDO_3DS)
   if(SMG_BUILD_VALIDATION)
     add_executable(native_validation tests/NativeTests.cpp tests/MathTests.cpp tests/PadTests.cpp tests/BcsvTests.cpp
       tests/ModelTests.cpp tests/CombinerTests.cpp tests/GravityTests.cpp tests/Etc1Tests.cpp tests/GpuTests.cpp
-      tests/NameObjTests.cpp tests/SceneTests.cpp tests/CollisionTests.cpp tests/AnimationTests.cpp tests/ActorTests.cpp)
+      tests/NameObjTests.cpp tests/SceneTests.cpp tests/CollisionTests.cpp tests/AnimationTests.cpp tests/ActorTests.cpp tests/J3DTransformTests.cpp)
     set_target_properties(native_validation PROPERTIES SUFFIX ".elf")
     target_compile_definitions(native_validation PRIVATE SMG_TEST_RUNNER)
     target_link_directories(native_validation PRIVATE "${DEVKITPRO}/libctru/lib")
-    target_link_libraries(native_validation PRIVATE smg_platform petari_gravity petari_scene citro2d citro3d ctru m)
+    target_link_libraries(native_validation PRIVATE smg_platform petari_gravity petari_scene petari_j3d citro2d citro3d ctru m)
     target_compile_options(native_validation PRIVATE -Wall -Wextra -Werror)
     add_custom_command(TARGET native_validation POST_BUILD
       COMMAND "${DEVKITPRO}/tools/bin/3dsxtool" "$<TARGET_FILE:native_validation>"
@@ -288,6 +307,10 @@ else()
   target_link_libraries(actor_tests PRIVATE smg_platform)
   target_compile_options(actor_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME original_actor COMMAND actor_tests)
+  add_executable(j3d_transform_tests tests/J3DTransformTests.cpp)
+  target_link_libraries(j3d_transform_tests PRIVATE petari_j3d)
+  target_compile_options(j3d_transform_tests PRIVATE -Wall -Wextra -Werror)
+  add_test(NAME j3d_transforms COMMAND j3d_transform_tests)
   add_executable(combiner_tests tests/CombinerTests.cpp)
   target_link_libraries(combiner_tests PRIVATE smg_platform)
   target_compile_options(combiner_tests PRIVATE -Wall -Wextra -Werror)
