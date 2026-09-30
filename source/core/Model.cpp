@@ -377,6 +377,10 @@ bool readJoints(const Sections& s, Model& model, std::string& error) {
                 rotation[k] = jnt.s16(at + 16 + k * 2);
                 translation[k] = jnt.f32(at + 24 + k * 4);
             }
+            auto& joint = model.joints[i];
+            std::copy(scale, scale + 3, joint.scale);
+            std::copy(translation, translation + 3, joint.translation);
+            std::copy(rotation, rotation + 3, joint.rotation);
             const auto local = jointMatrix(scale, rotation, translation);
             world[i] = parent >= 0 ? multiply(world[parent], local) : local;
             std::copy(world[i].begin(), world[i].end(), model.joints[i].world);
@@ -388,7 +392,7 @@ bool readJoints(const Sections& s, Model& model, std::string& error) {
     return true;
 }
 
-bool drawMatrices(const Sections& s, const Model& model, std::vector<Mtx34>& result, bool& skinned, std::string& error) {
+bool drawMatrices(const Sections& s, Model& model, std::vector<Mtx34>& result, bool& skinned, bool keepSkin, std::string& error) {
     const auto& drw = s.drw;
     const auto& evp = s.evp;
     const unsigned count = drw.u16(8);
@@ -408,14 +412,20 @@ bool drawMatrices(const Sections& s, const Model& model, std::vector<Mtx34>& res
         total += evp.u8(evp.u32(12) + e);
     }
     result.assign(count, Identity);
+    if (keepSkin) {
+        model.skin.draws.assign(count, {});
+        model.skin.inverseBind.assign(model.joints.size(), Identity);
+    }
     for (unsigned i = 0; i < count; ++i) {
         const bool weighted = drw.u8(drw.u32(12) + i) != 0;
         const unsigned index = drw.u16(drw.u32(16) + i * 2);
         if (!weighted) {
             if (index >= model.joints.size()) return fail(error, "Invalid J3D draw matrix joint");
             result[i] = jointWorld(index);
+            if (keepSkin) model.skin.draws[i].joints = {{static_cast<std::uint16_t>(index), 1.0f}};
             continue;
         }
+        if (keepSkin) model.skin.draws[i].weighted = true;
         if (index >= envelopes) return fail(error, "Invalid J3D envelope index");
         skinned = true;
         Mtx34 sum{};
@@ -427,6 +437,10 @@ bool drawMatrices(const Sections& s, const Model& model, std::vector<Mtx34>& res
             if (joint >= model.joints.size()) return fail(error, "Invalid J3D envelope joint");
             Mtx34 inverse;
             for (int c = 0; c < 12; ++c) inverse[c] = evp.f32(evp.u32(24) + joint * 48 + c * 4);
+            if (keepSkin) {
+                model.skin.draws[i].joints.push_back({static_cast<std::uint16_t>(joint), weight});
+                std::copy(inverse.begin(), inverse.end(), model.skin.inverseBind[joint].begin());
+            }
             const auto skin = multiply(jointWorld(joint), inverse);
             for (int c = 0; c < 12; ++c) sum[c] += skin[c] * weight;
         }
@@ -478,7 +492,7 @@ bool readVertexFormats(const Reader& vtx, std::array<Format, 21>& formats, std::
 }
 
 bool readShapes(const Sections& s, const std::array<Format, 21>& formats, const std::vector<Mtx34>& draw,
-                Model& model, std::size_t& remaining, std::string& error) {
+                Model& model, std::size_t& remaining, bool keepSkin, std::string& error) {
     const auto& shp = s.shp;
     for (unsigned i = 0; i < model.shapes.size(); ++i) {
         auto& shape = model.shapes[i];
@@ -536,8 +550,10 @@ bool readShapes(const Sections& s, const std::array<Format, 21>& formats, const 
                 const std::size_t triangleVertices = command == 0x90 ? count : command == 0x80 ? count / 4 * 6 : (count - 2) * 3;
                 if (triangleVertices > remaining / sizeof(ModelVertex))
                     return fail(error, "Model geometry exceeds decoded memory budget");
-                std::vector<ModelVertex> vertices(count);
-                for (auto& vertex : vertices) {
+                std::vector<ModelVertex> vertices(count), rest(keepSkin ? count : 0);
+                std::vector<std::uint16_t> matrices(keepSkin ? count : 0);
+                for (std::size_t v = 0; v < count; ++v) {
+                    auto& vertex = vertices[v];
                     unsigned matrix = current;
                     for (const auto& d : descriptors) {
                         const unsigned index = d.type == 3 ? shp.u16(at) : shp.u8(at);
@@ -550,12 +566,16 @@ bool readShapes(const Sections& s, const std::array<Format, 21>& formats, const 
                             return fail(error, "Invalid indexed vertex attribute");
                         }
                     }
+                    if (keepSkin) rest[v] = vertex, matrices[v] = static_cast<std::uint16_t>(matrix);
                     transform(draw[matrix], vertex);
                 }
                 const auto triangle = [&](unsigned a, unsigned b, unsigned c) {
-                    model.vertices.push_back(vertices[a]);
-                    model.vertices.push_back(vertices[b]);
-                    model.vertices.push_back(vertices[c]);
+                    for (const unsigned k : {a, b, c}) {
+                        model.vertices.push_back(vertices[k]);
+                        if (!keepSkin) continue;
+                        model.skin.rest.push_back(rest[k]);
+                        model.skin.matrix.push_back(matrices[k]);
+                    }
                 };
                 if (command == 0x90) {
                     for (unsigned v = 0; v < count; v += 3) triangle(v, v + 1, v + 2);
@@ -580,7 +600,7 @@ bool readShapes(const Sections& s, const std::array<Format, 21>& formats, const 
 }
 } // namespace
 
-bool loadModel(Bytes source, Model& output, std::size_t decodedBudget, std::string& error) {
+bool loadModel(Bytes source, Model& output, std::size_t decodedBudget, std::string& error, bool keepSkin) {
     output = {};
     error.clear();
     bool valid = true;
@@ -632,8 +652,8 @@ bool loadModel(Bytes source, Model& output, std::size_t decodedBudget, std::stri
     std::array<Format, 21> formats{};
     std::vector<Mtx34> draw;
     if (!readTextures(s.tex, model, remaining, error) || !readMaterials(s.mat, model, error) ||
-        !readJoints(s, model, error) || !drawMatrices(s, model, draw, model.skinned, error) ||
-        !readVertexFormats(s.vtx, formats, error) || !readShapes(s, formats, draw, model, remaining, error))
+        !readJoints(s, model, error) || !drawMatrices(s, model, draw, model.skinned, keepSkin, error) ||
+        !readVertexFormats(s.vtx, formats, error) || !readShapes(s, formats, draw, model, remaining, keepSkin, error))
         return false;
     if (!valid || model.vertices.empty()) return fail(error, "Invalid or empty J3D model");
     for (unsigned i = 0; i < 3; ++i) model.minimum[i] = model.maximum[i] = model.vertices[0].position[i];
@@ -645,5 +665,42 @@ bool loadModel(Bytes source, Model& output, std::size_t decodedBudget, std::stri
     }
     output = std::move(model);
     return true;
+}
+void poseSkeleton(const Model& model, const std::vector<JointTransform>& local, std::vector<std::array<float, 12>>& world) {
+    const std::size_t count = model.joints.size();
+    world.assign(count, Identity);
+    std::vector<bool> done(count, false);
+    for (std::size_t pass = 0; pass < count; ++pass) {
+        bool progressed = false;
+        for (std::size_t i = 0; i < count; ++i) {
+            const int parent = model.joints[i].parent;
+            if (done[i] || (parent >= 0 && !done[parent])) continue;
+            const JointTransform& t = i < local.size() ? local[i] : JointTransform{};
+            const auto matrix = jointMatrix(t.scale, t.rotation, t.translation);
+            world[i] = parent >= 0 ? multiply(world[parent], matrix) : matrix;
+            done[i] = progressed = true;
+        }
+        if (!progressed) break;
+    }
+}
+
+void skinModel(const Model& model, const std::vector<std::array<float, 12>>& world, std::vector<ModelVertex>& vertices) {
+    const auto& skin = model.skin;
+    std::vector<Mtx34> draws(skin.draws.size(), Identity);
+    for (std::size_t d = 0; d < skin.draws.size(); ++d) {
+        const auto& draw = skin.draws[d];
+        if (!draw.weighted) {
+            if (!draw.joints.empty()) draws[d] = world[draw.joints[0].first];
+            continue;
+        }
+        Mtx34 sum{};
+        for (const auto& [joint, weight] : draw.joints) {
+            const auto m = multiply(world[joint], skin.inverseBind[joint]);
+            for (int c = 0; c < 12; ++c) sum[c] += m[c] * weight;
+        }
+        draws[d] = sum;
+    }
+    vertices = skin.rest;
+    for (std::size_t v = 0; v < vertices.size(); ++v) transform(draws[skin.matrix[v]], vertices[v]);
 }
 } // namespace smg

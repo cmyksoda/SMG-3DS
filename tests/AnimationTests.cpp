@@ -97,6 +97,82 @@ void pipeColors() {
     check(near(materials[0].tevColors[1][0], (100 + 100 * (3 * 0.0625f - 2 * 0.015625f)) / 255.0f), "Hermite between keys");
 }
 
+// A BCK for two joints: joint 0 turns about Y from 0 to a quarter turn over 10 frames (rotations stored at
+// half precision, shift 1, the first key negative); joint 1 holds a translation of 100 along X.
+std::vector<std::uint8_t> turnBck() {
+    Writer w;
+    for (const char* c = "J3D1bck1"; *c; ++c) w.u8(*c);
+    w.u32(0), w.u32(1);
+    while (w.bytes.size() < 0x20) w.u8(0);
+    const std::size_t block = w.bytes.size();
+    w.u32(0x414e4b31), w.u32(0);
+    w.u8(2), w.u8(1), w.u16(10);            // loop, rotation shift 1, 10 frames
+    w.u16(2), w.u16(1), w.u16(7), w.u16(2); // joints; scale, rotation and translation values
+    for (int i = 0; i < 4; ++i) w.u32(0);
+    const auto here = [&] { return static_cast<std::uint32_t>(w.bytes.size() - block); };
+    w.at32(block + 0x14, here());
+    // Per joint X, Y, Z: (scale, rotation, translation), each (key count, first value, key type).
+    const std::uint16_t tables[2][3][9]{
+        {{1, 0, 0, 0, 0, 0, 0, 0, 0}, {1, 0, 0, 2, 1, 0, 0, 0, 0}, {1, 0, 0, 0, 0, 0, 0, 0, 0}},
+        {{1, 0, 0, 0, 0, 0, 1, 1, 0}, {1, 0, 0, 0, 0, 0, 1, 0, 0}, {1, 0, 0, 0, 0, 0, 1, 0, 0}}};
+    for (const auto& joint : tables)
+        for (const auto& axis : joint)
+            for (auto v : axis) w.u16(v);
+    w.pad4();
+    w.at32(block + 0x18, here());
+    w.u32(0x3f800000);                      // scale 1
+    w.at32(block + 0x1c, here());
+    // X holds 0; Y keys (frame, value, tangent): (0, -2, 0) and (10, 8192, 0).
+    for (std::int16_t v : {std::int16_t(0), std::int16_t(0), std::int16_t(-2), std::int16_t(0), std::int16_t(10),
+                           std::int16_t(8192), std::int16_t(0)})
+        w.u16(static_cast<std::uint16_t>(v));
+    w.pad4();
+    w.at32(block + 0x20, here());
+    w.u32(0), w.u32(0x42c80000);            // translations 0 and 100
+    w.at32(block + 4, static_cast<std::uint32_t>(w.bytes.size() - block));
+    w.at32(8, static_cast<std::uint32_t>(w.bytes.size()));
+    return w.bytes;
+}
+
+void jointAnimation() {
+    const auto bytes = turnBck();
+    smg::JointAnimation bck;
+    std::string error;
+    check(bck.load({bytes.data(), bytes.size()}, error), "a BCK loads");
+    check(bck.joints() == 2 && bck.key().mFrameMax == 10, "with its joints and length");
+    std::vector<smg::JointTransform> pose(2);
+    bck.pose(0, pose);
+    check(pose[0].rotation[1] == -4 && pose[1].translation[0] == 100, "keys before the first frame, shifted; a held translation");
+    bck.pose(10, pose);
+    check(pose[0].rotation[1] == 16384, "a quarter turn at the last key");
+
+    // Two joints, the child 100 along X; one vertex rigid on the child, one halfway between both.
+    smg::Model model;
+    model.joints.resize(2);
+    model.joints[1].parent = 0;
+    model.joints[1].translation[0] = 100;
+    model.skin.draws = {{false, {{1, 1.0f}}}, {true, {{0, 0.5f}, {1, 0.5f}}}};
+    model.skin.inverseBind = {{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0}, {1, 0, 0, -100, 0, 1, 0, 0, 0, 0, 1, 0}};
+    model.skin.rest.resize(2);
+    model.skin.rest[0].position[0] = 10;   // 10 past the child, in its own space
+    model.skin.rest[1].position[0] = 50;   // halfway, in model space
+    model.skin.matrix = {0, 1};
+    std::vector<std::array<float, 12>> world;
+    std::vector<smg::JointTransform> local(2);
+    local[1].translation[0] = 100;
+    smg::poseSkeleton(model, local, world);
+    std::vector<smg::ModelVertex> skinned;
+    smg::skinModel(model, world, skinned);
+    check(near(skinned[0].position[0] / 255, 110.0f / 255) && near(skinned[1].position[0] / 255, 50.0f / 255),
+          "at the bind pose each vertex stays put");
+    local[0].rotation[1] = 16384; // the root turns a quarter about Y: +X goes to -Z
+    smg::poseSkeleton(model, local, world);
+    smg::skinModel(model, world, skinned);
+    check(std::fabs(skinned[0].position[2] + 110) < 0.01f && std::fabs(skinned[0].position[0]) < 0.01f,
+          "a rigid vertex turns with its joint");
+    check(std::fabs(skinned[1].position[2] + 50) < 0.01f, "a weighted vertex blends its joints");
+}
+
 void rejected() {
     auto bytes = pipeBrk();
     smg::TevRegAnimation brk;
@@ -113,6 +189,7 @@ void rejected() {
 
 int runAnimationTests() {
     pipeColors();
+    jointAnimation();
     rejected();
     std::printf("%u J3D animation checks passed\n", checks);
     return 0;

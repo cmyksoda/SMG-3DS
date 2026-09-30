@@ -66,9 +66,10 @@ def extract(relative, target, prologue, first_lines, epilogue="", fixes=()):
         space, first = first if isinstance(first, tuple) else (None, first)
         start, end = definition(text, relative, first)
         bodies.append(f"namespace {space} {{\n{text[start:end]}\n}}  // namespace {space}" if space is not None else text[start:end])
-    for before, after in fixes:
+    for fix in fixes:
+        before, after, expected = fix if len(fix) == 3 else (*fix, 1)
         joined = "\n\n".join(bodies)
-        if joined.count(before) != 1:
+        if joined.count(before) != expected:
             raise SystemExit(f"Upstream changed; review {relative}: {before!r}")
         bodies = [body.replace(before, after) for body in bodies]
     text = (f"// Generated from Petari's {relative}: only these functions; see tools/prepare-petari.py.\n"
@@ -536,6 +537,10 @@ extract("src/JSystem/J3DGraphAnimator/J3DAnimation.cpp", "JSystem/J3DGraphAnimat
         ["inline f32 J3DHermiteInterpolation(f32 p1, f32 const* p2, f32 const* p3, f32 const* p4, f32 const* p5, f32 const* p6, f32 const* p7) {",
          "inline f32 J3DHermiteInterpolation(__REGISTER f32 pp1, __REGISTER s16 const* pp2, __REGISTER s16 const* pp3, __REGISTER s16 const* pp4,",
          "f32 J3DGetKeyFrameInterpolation(f32 frame, J3DAnmKeyTableBase* pKeyTable, T* pData) {",
+         "void J3DFrameCtrl::init(s16 endFrame) {",
+         "void J3DFrameCtrl::update() {",
+         "J3DAnmTransform::J3DAnmTransform(s16 frameMax, f32* pScaleData, s16* pRotData, f32* pTransData) : J3DAnmBase(frameMax) {",
+         "void J3DAnmTransformKey::calcTransform(f32 frame, u16 jointNo, J3DTransformInfo* pTransform) const {",
          "J3DAnmTextureSRTKey::J3DAnmTextureSRTKey() {",
          "void J3DAnmTextureSRTKey::calcTransform(f32 frame, u16 jointNo, J3DTextureSRTInfo* pTexSRTInfo) const {",
          "J3DAnmTevRegKey::J3DAnmTevRegKey() {",
@@ -543,7 +548,9 @@ extract("src/JSystem/J3DGraphAnimator/J3DAnimation.cpp", "JSystem/J3DGraphAnimat
          "void J3DAnmTevRegKey::getTevKonstReg(u16 index, GXColor* pColor) const {"],
         fixes=[("    return value;\n#endif\n}",
                 "    return value;\n#else\n    return JMAHermiteInterpolation(pp1, *pp2, *pp3, *pp4, *pp5, *pp6, *pp7);\n#endif\n}"),
-               ("f32 J3DGetKeyFrameInterpolation(f32 frame", "template < typename T >\nf32 J3DGetKeyFrameInterpolation(f32 frame")])
+               ("f32 J3DGetKeyFrameInterpolation(f32 frame", "template < typename T >\nf32 J3DGetKeyFrameInterpolation(f32 frame"),
+               # Rotations are often negative; shifting one left is undefined before C++20 (slw just scales it).
+               ("<< mDecShift", "* (1 << mDecShift)", 8)])
 
 adapt("include/Game/System/WPadButton.hpp", "include/Game/System/WPadButton.hpp", [
     ("#include <revolution.h>", "#include <revolution/kpad.h>", 1),

@@ -432,7 +432,7 @@ int main(int argc, char** argv) {
     if (ec) { std::fprintf(stderr,"Directory traversal: %s\n",ec.message().c_str()); return 2; }
     std::sort(archives.begin(), archives.end());
     std::size_t tables=0, records=0, resources=0, errors=0, modelCount=0, triangles=0, materials=0, exact=0;
-    std::size_t brks=0, brkErrors=0, brkUnmatched=0;
+    std::size_t brks=0, brkErrors=0, brkUnmatched=0, skinChecked=0, skinWrong=0, bcks=0, bckErrors=0;
     std::map<std::string, std::size_t> modelErrors, approximations;
     for (const auto& path : archives) {
         std::vector<std::uint8_t> storage;
@@ -456,7 +456,42 @@ int main(int argc, char** argv) {
         for (const auto& entry : entries) {
             if (!extension(entry.path,".bdl") && !extension(entry.path,".bmd")) continue;
             smg::Model model;
-            if (smg::loadModel({storage.data()+entry.offset,entry.size},model,256u*1024*1024,error)) archiveModels.push_back(std::move(model));
+            if (!smg::loadModel({storage.data()+entry.offset,entry.size},model,256u*1024*1024,error,true)) continue;
+            // The skeleton posed at its own bind pose, then skinned, must give back what the loader baked.
+            std::vector<smg::JointTransform> bind(model.joints.size());
+            for (std::size_t j = 0; j < bind.size(); ++j) {
+                const auto& joint = model.joints[j];
+                bind[j] = {{joint.scale[0], joint.scale[1], joint.scale[2]}, {joint.rotation[0], joint.rotation[1], joint.rotation[2]},
+                           {joint.translation[0], joint.translation[1], joint.translation[2]}};
+            }
+            std::vector<std::array<float, 12>> world;
+            smg::poseSkeleton(model, bind, world);
+            std::vector<smg::ModelVertex> skinned;
+            smg::skinModel(model, world, skinned);
+            float worst = 0;
+            for (std::size_t v = 0; v < skinned.size(); ++v)
+                for (int c = 0; c < 3; ++c) worst = std::max(worst, std::fabs(skinned[v].position[c] - model.vertices[v].position[c]));
+            ++skinChecked;
+            if (worst > 0.01f) {
+                ++skinWrong;
+                std::fprintf(stderr,"SKIN %s :: %s: bind pose off by %g\n",path.c_str(),entry.path.c_str(),worst);
+            }
+            archiveModels.push_back(std::move(model));
+        }
+        for (const auto& entry : entries) {
+            if (!extension(entry.path,".bck")) continue;
+            ++bcks;
+            smg::JointAnimation bck;
+            if (!bck.load({storage.data()+entry.offset,entry.size},error)) {
+                std::fprintf(stderr,"BCK %s :: %s: %s\n",path.c_str(),entry.path.c_str(),error.c_str()); ++bckErrors; continue;
+            }
+            std::vector<smg::JointTransform> pose(bck.joints());
+            bool finite = true;
+            for (int frame = 0; frame <= bck.key().mFrameMax; ++frame) {
+                bck.pose(static_cast<float>(frame), pose);
+                for (const auto& t : pose) finite &= std::isfinite(t.scale[0] + t.scale[1] + t.scale[2] + t.translation[0] + t.translation[1] + t.translation[2]);
+            }
+            if (!finite) { ++bckErrors; std::fprintf(stderr,"BCK %s :: %s poses to infinity\n",path.c_str(),entry.path.c_str()); }
         }
         for (const auto& entry : entries) {
             if (!extension(entry.path,".brk")) continue;
@@ -497,7 +532,9 @@ int main(int argc, char** argv) {
         std::printf("%zu materials, %zu translated to the 3DS combiner exactly\n", materials, exact);
         for (const auto& [reason, count] : approximations) std::printf("%6zu  approximated: %s\n", count, reason.c_str());
         std::printf("%zu BRK files, %zu failed to load, %zu name no material of their archive's models\n", brks, brkErrors, brkUnmatched);
-        errors += failed + brkErrors;
+        std::printf("%zu models reposed at their bind pose and skinned, %zu differ from what the loader baked\n", skinChecked, skinWrong);
+        std::printf("%zu BCK files, %zu failed to load or posed to infinity\n", bcks, bckErrors);
+        errors += failed + brkErrors + skinWrong + bckErrors;
     }
     if (archives.empty()) { std::fprintf(stderr,"No archives found\n"); return 2; }
     return errors == 0 ? 0 : 1;

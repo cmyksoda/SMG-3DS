@@ -71,6 +71,21 @@ struct ModelJoint {
     std::string name;
     int parent = -1;
     float world[12]{}; // bind pose, row-major 3x4
+    float scale[3]{1, 1, 1}, translation[3]{};
+    std::int16_t rotation[3]{}; // the bind pose's own transform, in 1/32768ths of a half turn
+};
+
+// What skinning needs, kept when loadModel is asked for it: each vertex before its draw matrix, which draw
+// matrix that is, and what each draw matrix is made of (one joint, or joints weighted over inverse binds).
+struct ModelSkin {
+    std::vector<ModelVertex> rest;       // per model vertex, before its draw matrix
+    std::vector<std::uint16_t> matrix;   // per model vertex
+    struct Draw {
+        bool weighted = false;
+        std::vector<std::pair<std::uint16_t, float>> joints;
+    };
+    std::vector<Draw> draws;
+    std::vector<std::array<float, 12>> inverseBind; // per joint; identity for joints no envelope uses
 };
 
 struct Model {
@@ -81,7 +96,19 @@ struct Model {
     std::vector<ModelJoint> joints;
     std::array<float, 3> minimum{}, maximum{};
     bool skinned = false; // uses weighted envelopes, so it needs animation to look right
+    ModelSkin skin;       // empty unless loadModel was asked to keep it
 };
 
-bool loadModel(Bytes source, Model& output, std::size_t decodedBudget, std::string& error);
+bool loadModel(Bytes source, Model& output, std::size_t decodedBudget, std::string& error, bool keepSkin = false);
+
+// A joint's own transform, as JNT1 stores it and J3DAnmTransform poses it.
+struct JointTransform {
+    float scale[3]{1, 1, 1};
+    std::int16_t rotation[3]{};
+    float translation[3]{};
+};
+// Each joint's world matrix for a pose, composed down the hierarchy as the loader composes the bind pose.
+void poseSkeleton(const Model& model, const std::vector<JointTransform>& local, std::vector<std::array<float, 12>>& world);
+// Every vertex through its draw matrix for those joints: needs the model's kept skin.
+void skinModel(const Model& model, const std::vector<std::array<float, 12>>& world, std::vector<ModelVertex>& vertices);
 } // namespace smg

@@ -1,4 +1,5 @@
 #include <smg/Animation.hpp>
+#include <cmath>
 #include <cstring>
 
 namespace smg {
@@ -100,6 +101,70 @@ bool TevRegAnimation::load(Bytes source, std::string& error) {
         return true;
     }
     return fail(error, "BRK has no TRK1 block");
+}
+
+bool JointAnimation::load(Bytes source, std::string& error) {
+    const std::uint8_t* d = source.data;
+    if (!d || source.size < 0x20 || std::memcmp(d, "J3D1bck1", 8)) return fail(error, "Not a J3D1 BCK file");
+    const std::uint32_t blocks = be32(d + 12);
+    std::size_t at = 0x20;
+    for (std::uint32_t i = 0; i < blocks; ++i) {
+        if (at > source.size || source.size - at < 8) return fail(error, "Truncated BCK block");
+        const std::uint8_t* block = d + at;
+        const std::size_t size = be32(block + 4);
+        if (size < 8 || size > source.size - at) return fail(error, "Invalid BCK block size");
+        if (std::memcmp(block, "ANK1", 4)) { at += size; continue; }
+        if (size < 0x24) return fail(error, "Truncated ANK1 header");
+        const std::size_t joints = be16(block + 0x0c), counts[3]{be16(block + 0x0e), be16(block + 0x10), be16(block + 0x12)};
+        const std::size_t tables = be32(block + 0x14), offsets[3]{be32(block + 0x18), be32(block + 0x1c), be32(block + 0x20)};
+        const auto region = [&](std::size_t offset, std::size_t bytes) { return offset <= size && bytes <= size - offset; };
+        if (!region(tables, joints * 3 * 18) || !region(offsets[0], counts[0] * 4) || !region(offsets[1], counts[1] * 2) ||
+            !region(offsets[2], counts[2] * 4))
+            return fail(error, "ANK1 tables outside the block");
+        scale_.resize(counts[0]), rotation_.resize(counts[1]), translation_.resize(counts[2]);
+        const auto real = [](const std::uint8_t* p) {
+            const std::uint32_t bits = be32(p);
+            float v;
+            std::memcpy(&v, &bits, 4);
+            return v;
+        };
+        for (std::size_t v = 0; v < counts[0]; ++v) scale_[v] = real(block + offsets[0] + v * 4);
+        for (std::size_t v = 0; v < counts[1]; ++v) rotation_[v] = static_cast<s16>(be16(block + offsets[1] + v * 2));
+        for (std::size_t v = 0; v < counts[2]; ++v) translation_[v] = real(block + offsets[2] + v * 4);
+        for (float v : scale_) if (!std::isfinite(v)) return fail(error, "Invalid ANK1 scale");
+        for (float v : translation_) if (!std::isfinite(v)) return fail(error, "Invalid ANK1 translation");
+        tables_.resize(joints * 3);
+        for (std::size_t t = 0; t < tables_.size(); ++t) {
+            const std::uint8_t* p = block + tables + t * 18;
+            auto& table = tables_[t];
+            table.mScaleInfo = keyTable(p), table.mRotationInfo = keyTable(p + 6), table.mTranslateInfo = keyTable(p + 12);
+            if (!validKeys(table.mScaleInfo, counts[0]) || !validKeys(table.mRotationInfo, counts[1]) ||
+                !validKeys(table.mTranslateInfo, counts[2]))
+                return fail(error, "ANK1 key table names values it does not have");
+        }
+        // J3DAnmKeyLoader_v15::setAnmTransform, pointing at the native copies.
+        key_.field_0x1e = static_cast<u16>(joints);
+        key_.mFrameMax = static_cast<s16>(be16(block + 0x0a));
+        key_.mAttribute = block[8];
+        key_.mDecShift = block[9];
+        key_.mFrame = 0.0f;
+        key_.mAnmTable = tables_.data();
+        key_.mScaleData = scale_.data();
+        key_.mRotData = rotation_.data();
+        key_.mTransData = translation_.data();
+        error.clear();
+        return true;
+    }
+    return fail(error, "BCK has no ANK1 block");
+}
+
+void JointAnimation::pose(float frame, std::vector<JointTransform>& pose) const {
+    for (std::size_t j = 0; j < joints() && j < pose.size(); ++j) {
+        J3DTransformInfo info;
+        key_.calcTransform(frame, static_cast<u16>(j), &info);
+        pose[j] = {{info.mScale.x, info.mScale.y, info.mScale.z}, {info.mRotation.x, info.mRotation.y, info.mRotation.z},
+                   {info.mTranslate.x, info.mTranslate.y, info.mTranslate.z}};
+    }
 }
 
 unsigned TevRegAnimation::apply(float frame, std::vector<ModelMaterial>& materials) {

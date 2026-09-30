@@ -107,6 +107,14 @@ completion does not make those interfaces portable to ARM11/PICA200.
   name materials of their archive's models. Map parts take the BRK named after them at frame 0, as
   `MapObjActor::init`'s `tryStartAllAnim` starts it; a warp pipe stops at its color, `Obj_arg7`
   (Good Egg's are green at 0 and orange at 1). Playing a BRK over time waits for frame control.
+- Joint animation (BCK) runs through JSystem's own `J3DAnmTransformKey::calcTransform` and
+  `J3DFrameCtrl`, from `smg::JointAnimation`'s native copies of the ANK1 block. Rotations are often
+  negative and `calcTransform` shifts them left, which C++ leaves undefined before C++20 (PowerPC's
+  `slw` just scales); the copy multiplies by the same power of two. `loadModel` can keep what the
+  bind pose bakes away (each vertex before its draw matrix, the draw matrices' joints and weights,
+  the inverse binds), and `poseSkeleton` and `skinModel` pose and skin on the CPU. Every one of the
+  disc's 1,758 models, reposed at its own bind pose, skins back to exactly what the loader baked,
+  and all 3,231 BCK files load and pose to finite values on every frame.
 - newlib's `<ctype.h>` defines `_U`, `_L`, `_N`, `_S`, `_P`, `_C`, `_X` and `_B` as macros, and
   Petari uses some of them as member names. ARM builds force-include `compat/smg/NewlibCtype.hpp`,
   which lets libstdc++ read them once and then undefines them.
@@ -334,6 +342,6 @@ across 12 zones; the preview draws 56 rigid models in 172 placements.
 
 The portable math tests check tolerances and conventions, not bit-identical Gekko rounding.
 The native validation app passes 1,069 math, 37 WPad, 179 BCSV, 1,043 J3D model/texture,
-8,607 TEV combiner, 27 original gravity, 27 NameObj, 89 scene and gravity creator, 48 collision, 12 J3D animation, 7 ETC1 and 8 GPU texture checks on emulated ARM
+8,607 TEV combiner, 27 original gravity, 27 NameObj, 89 scene and gravity creator, 48 collision, 19 J3D animation, 7 ETC1 and 8 GPU texture checks on emulated ARM
 in Azahar; the GPU checks compare the hardware's ETC1 decoding against ours. Of the disc's
 7,780 materials, 6,949 translate to the combiner exactly. No physical console has been tested.
