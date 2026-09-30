@@ -288,8 +288,8 @@ if(NINTENDO_3DS)
     endif()
   endforeach()
   # SDK libraries that are software through and through, built from their own C sources: the stand-in for the
-  # GameCube's ARAM in MEM2 (RVL "Dummy ARAM").
-  set(PETARI_SDK_SOURCES "${PETARI}/src/RVL_SDK/aralt/aralt.c")
+  # GameCube's ARAM in MEM2 (RVL "Dummy ARAM") and texture palettes (TPL).
+  set(PETARI_SDK_SOURCES "${PETARI}/src/RVL_SDK/aralt/aralt.c" "${PETARI}/src/RVL_SDK/tpl/TPL.c")
   list(APPEND PETARI_GAME_SOURCES ${PETARI_SDK_SOURCES})
   set_source_files_properties(${PETARI_SDK_SOURCES} PROPERTIES LANGUAGE CXX)
   # The SDK's own GX (C sources that include C++ headers, so built as C++): every GX call the game makes writes the

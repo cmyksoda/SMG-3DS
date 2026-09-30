@@ -108,9 +108,6 @@ void THPGXRestore() { unported("THPGXRestore"); }
 void THPGXSetTexObjFilter() { unported("THPGXSetTexObjFilter"); }
 void THPGXYuv2RgbDraw() { unported("THPGXYuv2RgbDraw"); }
 void THPGXYuv2RgbSetup() { unported("THPGXYuv2RgbSetup"); }
-// TPL
-void TPLBind() { unported("TPLBind"); }
-void TPLGet() { unported("TPLGet"); }
 // WENC
 void WENCGetEncodeData() { unported("WENCGetEncodeData"); }
 // WPAD

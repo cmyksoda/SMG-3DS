@@ -1543,6 +1543,20 @@ adapt("src/nw4r/lyt/lyt_layout.cpp", "nw4r/lyt/lyt_layout.cpp", [
      "            }\n"
      "            if (!detail::TestFileHeader(*pFileHead, 'RLYT')) {\n", 1),
 ])
+# TPL's headers hold GX enums, 4 bytes under Metrowerks' -enum int and 1 under devkitARM's short enums; the file's
+# fields are spelled as the words they are.
+adapt("libs/RVL_SDK/include/revolution/tpl.h", "include/revolution/tpl.h", [
+    ("    GXTlutFmt format;\n    char* data;\n} TPLClutHeader", "    u32 format;\n    char* data;\n} TPLClutHeader", 1),
+    ("    GXTexWrapMode wrapS;\n    GXTexWrapMode wrapT;\n    GXTexFilter minFilter;\n    GXTexFilter magFilter;",
+     "    u32 wrapS;\n    u32 wrapT;\n    u32 minFilter;\n    u32 magFilter;", 1),
+])
+# A palette not yet bound holds offsets from itself, a bound one pointers past it; the Wii told them apart by the
+# 0x80000000 its pointers all sit above, which no 3DS address reaches.
+adapt("src/nw4r/lyt/lyt_texMap.cpp", "nw4r/lyt/lyt_texMap.cpp", [
+    ("SetPaletteFormat(pClut->format);", "SetPaletteFormat(GXTlutFmt(pClut->format));", 1),
+    ("            if (reinterpret_cast< u32 >(p->descriptorArray) < 0x80000000) {",
+     "            if (reinterpret_cast< uintptr_t >(p->descriptorArray) < reinterpret_cast< uintptr_t >(p)) {", 1),
+])
 # Colours packed into a u32 through memory read 0xRRGGBBAA on the Wii and byte-reversed on ARM; these pack and
 # unpack the value the Wii's way, so literals like 0xFF0000FF and u32s bound for the GPU keep their meaning.
 adapt("libs/nw4r/include/nw4r/ut/Color.h", "include/nw4r/ut/Color.h", [
