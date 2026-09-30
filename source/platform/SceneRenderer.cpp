@@ -497,10 +497,12 @@ void SceneRenderer::update(const InputFrame& input, float seconds) {
         if (!loading()) {
             char memory[48];
             std::snprintf(memory, sizeof(memory), "; %.1f MB linear free", linearSpaceFree() / (1024.0 * 1024.0));
+            // A failure mid-stream is overwritten by later progress lines, so count it here.
+            const std::string failed = failed_ ? ", " + std::to_string(failed_) + " failed" : "";
             status_ = std::to_string(models_.size()) + " models, " + std::to_string(instances_.size()) + " placed; skipped " +
-                      std::to_string(skinned_) + " animated" + memory;
+                      std::to_string(skinned_) + " animated" + failed + memory;
             std::snprintf(memory, sizeof(memory), "%zu models, %.1f MB free", models_.size(), linearSpaceFree() / (1024.0 * 1024.0));
-            summary_ = memory;
+            summary_ = memory + failed;
         }
     }
     if (input.camera.pressed) resetCamera();
