@@ -18,6 +18,7 @@
 #include <Game/Util/ObjUtil.hpp>
 #include <cstdio>
 #include <cstdlib>
+#include <algorithm>
 #include <cstring>
 
 namespace {
@@ -144,7 +145,13 @@ bool addBaseMatrixFollowerAreaObj(AreaObj*, const JMapInfoIter& rIter) {
 }
 
 AreaObjMgr* getAreaObjManager(const char* pName) {
-    if (!std::strcmp(pName, "LightArea")) return smg::NativeScene::current().lightAreas(true);
+    smg::NativeScene& scene = smg::NativeScene::current();
+    if (!std::strcmp(pName, "LightArea")) return scene.lightAreas(true);
+    // ViewGroupCtrl reads no manager as it reads an empty one; a stage that places view cubes needs the real one.
+    if (!std::strcmp(pName, "ViewGroupCtrlCube")) {
+        const auto& skipped = scene.skippedAreas();
+        if (std::find(skipped.begin(), skipped.end(), pName) == skipped.end()) return nullptr;
+    }
     stop("the area manager ", pName);
 }
 

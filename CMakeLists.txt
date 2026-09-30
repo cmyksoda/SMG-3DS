@@ -106,8 +106,40 @@ add_library(petari_scene STATIC
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/AreaObj/AreaForm.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/AreaObj/AreaObj.cpp"
   "${PETARI}/src/Game/AreaObj/LightArea.cpp"
-  "${PETARI}/src/Game/AreaObj/LightAreaHolder.cpp")
+  "${PETARI}/src/Game/AreaObj/LightAreaHolder.cpp"
+  source/compat/Actor.cpp
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/LiveActor/LiveActor.cpp"
+  "${PETARI}/src/Game/LiveActor/LiveActorFlag.cpp"
+  "${PETARI}/src/Game/LiveActor/HitSensor.cpp"
+  "${PETARI}/src/Game/LiveActor/HitSensorKeeper.cpp"
+  "${PETARI}/src/Game/LiveActor/HitSensorInfo.cpp"
+  "${PETARI}/src/Game/LiveActor/Binder.cpp"
+  "${PETARI}/src/Game/Map/HitInfo.cpp"
+  "${PETARI}/src/Game/Map/CollisionDirector.cpp"
+  "${PETARI}/src/Game/Map/CollisionCategorizedKeeper.cpp"
+  "${PETARI}/src/Game/Map/CollisionParts.cpp"
+  "${PETARI}/src/Game/LiveActor/LiveActorGroup.cpp"
+  "${PETARI}/src/Game/LiveActor/AllLiveActorGroup.cpp"
+  "${PETARI}/src/Game/LiveActor/SensorHitChecker.cpp"
+  "${PETARI}/src/Game/LiveActor/ClippingDirector.cpp"
+  "${PETARI}/src/Game/LiveActor/ClippingActorHolder.cpp"
+  "${PETARI}/src/Game/LiveActor/ClippingActorInfo.cpp"
+  "${PETARI}/src/Game/LiveActor/ClippingGroupHolder.cpp"
+  "${PETARI}/src/Game/LiveActor/ClippingJudge.cpp"
+  "${PETARI}/src/Game/LiveActor/ViewGroupCtrl.cpp"
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/ObjUtilScene.cpp"
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/LiveActorUtilCore.cpp"
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/ActorSensorUtilCore.cpp"
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/ActorMovementUtilCore.cpp"
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/MapUtilCore.cpp"
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/LiveActor/ShadowRequests.cpp"
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/RVL_SDK/gd/GDBase.cpp")
 target_link_libraries(petari_scene PUBLIC petari_gravity)
+if(NOT NINTENDO_3DS)
+  # UBSan's vptr check needs the type info of every class LiveActor calls through; its model and sound classes
+  # are not brought up, so theirs does not exist yet. The 3DS build has no RTTI at all.
+  set_source_files_properties("${CMAKE_CURRENT_BINARY_DIR}/petari/Game/LiveActor/LiveActor.cpp" PROPERTIES COMPILE_OPTIONS "-fno-sanitize=vptr")
+endif()
 # The native scene owns the light tables it is handed, so it sees their (header-only) type.
 target_include_directories(petari_scene PRIVATE include)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
@@ -118,7 +150,8 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
   "${PETARI}/src/Game/Gravity/GravityCreator.cpp" "${PETARI}/include/Game/Gravity/GravityCreator.hpp"
   "${PETARI}/src/Game/Util/GravityUtil.cpp" "${PETARI}/src/Game/Util/JMapUtil.cpp"
   "${PETARI}/include/Game/Util/JMapUtil.hpp" "${PETARI}/src/Game/Util/StringUtil.cpp"
-  "${PETARI}/src/Game/Util/ObjUtil.cpp" "${PETARI}/src/Game/Util/SystemUtil.cpp"
+  "${PETARI}/src/Game/Util/ObjUtil.cpp" "${PETARI}/src/Game/LiveActor/LiveActor.cpp"
+  "${PETARI}/libs/RVL_SDK/include/revolution/gx/GXVert.h" "${PETARI}/src/Game/Util/SystemUtil.cpp"
   "${PETARI}/include/Game/NameObj/NameObjHolder.hpp" "${PETARI}/include/Game/Util/ObjUtil.hpp"
   "${PETARI}/libs/JSystem/include/JSystem/JSupport/JSUList.hpp"
   "${PETARI}/libs/JSystem/include/JSystem/JKernel/JKRHeap.hpp"
@@ -132,14 +165,20 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
   "${PETARI}/include/Game/AreaObj/AreaForm.hpp" "${PETARI}/src/JSystem/J3DGraphAnimator/J3DAnimation.cpp"
   "${PETARI}/libs/RVL_SDK/include/revolution/os.h"
   "${PETARI}/libs/JSystem/include/JSystem/J3DGraphAnimator/J3DAnimation.hpp"
+  "${PETARI}/src/Game/Util/LiveActorUtil.cpp" "${PETARI}/src/Game/Util/ActorSensorUtil.cpp"
+  "${PETARI}/src/Game/Util/ActorMovementUtil.cpp" "${PETARI}/src/Game/Util/MapUtil.cpp"
+  "${PETARI}/src/Game/LiveActor/ShadowController.cpp" "${PETARI}/src/RVL_SDK/gd/GDBase.c" "${PETARI}/src/Game/Util/ObjUtil.cpp"
   "${PETARI}/libs/nw4r/include/nw4r/math/arithmetic.h" "${PETARI}/libs/JSystem/include/JSystem/JAudio2/JASHeapCtrl.hpp"
   "${PETARI}/include/Game/Player/Mario.hpp" "${PETARI}/libs/nw4r/include/nw4r/ut/LinkList.h"
-  "${PETARI}/libs/JSystem/include/JSystem/JKernel/JKRDvdRipper.hpp")
+  "${PETARI}/libs/JSystem/include/JSystem/JKernel/JKRDvdRipper.hpp"
+  "${PETARI}/libs/JSystem/include/JSystem/JAudio2/JASGadget.hpp"
+  "${PETARI}/libs/JSystem/include/JSystem/JGadget/linklist.hpp"
+  "${PETARI}/libs/RVL_SDK/include/revolution/mem/heapCommon.h" "${PETARI}/libs/JSystem/include/JSystem/JAudio2/JASSeqReader.hpp")
 
 add_library(smg_platform STATIC
   source/core/Input.cpp source/core/Motion.cpp source/core/Settings.cpp source/core/Session.cpp
   source/core/Archive.cpp source/core/Bcsv.cpp source/core/Model.cpp source/core/Texture.cpp source/core/Combiner.cpp
-  source/core/Stage.cpp source/core/StageGravity.cpp source/core/Mesh.cpp source/core/Etc1.cpp source/core/Kcl.cpp source/core/StageCollision.cpp source/core/StageLight.cpp source/core/Animation.cpp
+  source/core/Stage.cpp source/core/StageGravity.cpp source/core/Mesh.cpp source/core/Etc1.cpp source/core/Kcl.cpp source/core/StageCollision.cpp source/core/StageLight.cpp source/core/Animation.cpp source/core/Actors.cpp
   source/compat/NativePad.cpp)
 target_include_directories(smg_platform PUBLIC include)
 target_link_libraries(smg_platform PUBLIC petari_scene)
@@ -172,7 +211,7 @@ if(NINTENDO_3DS)
   if(SMG_BUILD_VALIDATION)
     add_executable(native_validation tests/NativeTests.cpp tests/MathTests.cpp tests/PadTests.cpp tests/BcsvTests.cpp
       tests/ModelTests.cpp tests/CombinerTests.cpp tests/GravityTests.cpp tests/Etc1Tests.cpp tests/GpuTests.cpp
-      tests/NameObjTests.cpp tests/SceneTests.cpp tests/CollisionTests.cpp tests/AnimationTests.cpp)
+      tests/NameObjTests.cpp tests/SceneTests.cpp tests/CollisionTests.cpp tests/AnimationTests.cpp tests/ActorTests.cpp)
     set_target_properties(native_validation PROPERTIES SUFFIX ".elf")
     target_compile_definitions(native_validation PRIVATE SMG_TEST_RUNNER)
     target_link_directories(native_validation PRIVATE "${DEVKITPRO}/libctru/lib")
@@ -245,6 +284,10 @@ else()
   target_link_libraries(animation_tests PRIVATE smg_platform)
   target_compile_options(animation_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME j3d_animation COMMAND animation_tests)
+  add_executable(actor_tests tests/ActorTests.cpp)
+  target_link_libraries(actor_tests PRIVATE smg_platform)
+  target_compile_options(actor_tests PRIVATE -Wall -Wextra -Werror)
+  add_test(NAME original_actor COMMAND actor_tests)
   add_executable(combiner_tests tests/CombinerTests.cpp)
   target_link_libraries(combiner_tests PRIVATE smg_platform)
   target_compile_options(combiner_tests PRIVATE -Wall -Wextra -Werror)

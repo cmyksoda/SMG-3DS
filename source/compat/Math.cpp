@@ -33,6 +33,10 @@ void PSVECNormalize(const Vec* a, Vec* out) { PSVECScale(a, out, 1.0f/PSVECMag(a
 void PSVECCrossProduct(const Vec* a, const Vec* b, Vec* out) {
     *out = {a->y*b->z-a->z*b->y, a->z*b->x-a->x*b->z, a->x*b->y-a->y*b->x};
 }
+void PSMTXCopy(const Mtx src, Mtx dst) {
+    if (src == dst) return;
+    for (int row = 0; row < 3; ++row) for (int col = 0; col < 4; ++col) dst[row][col] = src[row][col];
+}
 void PSMTXMultVec(const Mtx m, const Vec* src, Vec* dst) {
     const Vec v = *src;
     *dst = {m[0][0]*v.x + m[0][1]*v.y + m[0][2]*v.z + m[0][3],

@@ -2,14 +2,20 @@
 #include <smg/Bcsv.hpp>
 #include <Game/Camera/CameraPolygonCodeUtil.hpp>
 #include <Game/Gravity/PlanetGravityManager.hpp>
+#include <Game/LiveActor/AllLiveActorGroup.hpp>
+#include <Game/LiveActor/ClippingDirector.hpp>
+#include <Game/LiveActor/SensorHitChecker.hpp>
 #include <Game/Map/CollisionCode.hpp>
+#include <Game/Map/CollisionDirector.hpp>
 #include <Game/Map/StageSwitch.hpp>
+#include <Game/NameObj/NameObjExecuteHolder.hpp>
 #include <Game/NameObj/NameObjHolder.hpp>
 #include <Game/NameObj/NameObjRegister.hpp>
 #include <Game/Scene/SceneNameObjMovementController.hpp>
 #include <Game/Scene/SceneObjHolder.hpp>
 #include <Game/Util/JMapInfo.hpp>
 #include <Game/Util/JMapUtil.hpp>
+#include <Game/Util/CameraUtil.hpp>
 #include <Game/Util/SceneUtil.hpp>
 #include <Game/Util/SingletonHolder.hpp>
 #include <Game/Util/SystemUtil.hpp>
@@ -24,7 +30,7 @@ smg::NativeScene* sCurrent;
 namespace smg {
 // GameSystemSceneController's capacity.
 NativeScene::NativeScene()
-    : mNameObjHolder(new NameObjHolder(0x1300)), mSceneObjHolder(new SceneObjHolder), mCollisionCode(new CollisionCode) {
+    : mNameObjHolder(new NameObjHolder(0x1300)), mSceneObjHolder(new SceneObjHolder) {
     if (sCurrent) {
         std::fputs("NativeScene: a scene is already running\n", stderr);
         std::abort();
@@ -34,7 +40,11 @@ NativeScene::NativeScene()
     sCurrent = this;
     // GameScene::init creates these first; the rest of its list is not brought up.
     MR::createSceneObj(SceneObj_PlanetGravityManager);
-    // SceneFunction makes the switch container with the scene's other placement holders.
+    // SceneFunction::initForLiveActor, in its order, for the objects brought up.
+    MR::createSceneObj(SceneObj_AllLiveActorGroup);
+    MR::createSceneObj(SceneObj_ClippingDirector);
+    MR::createSceneObj(SceneObj_SensorHitChecker);
+    MR::createSceneObj(SceneObj_CollisionDirector);
     MR::createSceneObj(SceneObj_StageSwitchContainer);
 }
 
@@ -43,6 +53,7 @@ NativeScene::~NativeScene() {
     for (const PlacedGravity& placed : mGravities) forgetGravity(placed);
     forgetAreas();
     forgetLights();
+    forgetActors();
     // The zone switches, which the game leaves to the scene heap with the container.
     if (auto* switches = static_cast<StageSwitchContainer*>(mSceneObjHolder->getObj(SceneObj_StageSwitchContainer))) {
         for (int i = 0; i < switches->mSwitches.size(); ++i) delete switches->mSwitches[i].mSwitch;
@@ -50,14 +61,6 @@ NativeScene::~NativeScene() {
     }
     for (int id = 0; id < SceneObj_NumMax; ++id) delete mSceneObjHolder->getObj(id);
     delete mSceneObjHolder;
-    for (CodeTable* table : {mCollisionCode->mFloorTable, mCollisionCode->mWallTable, mCollisionCode->mSoundTable,
-                             mCollisionCode->mCameraTable}) {
-        delete[] table->mHashTable;
-        delete[] table->mCodeTable;
-        delete[] table->mNameTable;
-        delete table;
-    }
-    delete mCollisionCode;
     SingletonHolder<NameObjRegister>::get()->setCurrentHolder(nullptr);
     delete mNameObjHolder;
     sCurrent = nullptr;
@@ -124,6 +127,34 @@ void NativeScene::movement() {
     }
     moveAreas();
     moveGravities();
+    // By index: an object's movement can connect another, which then waits for the next frame.
+    const std::size_t count = mExecuted.size();
+    for (std::size_t i = 0; i < count; ++i)
+        if (mExecuted[i].moving && mExecuted[i].movementType != -1) mExecuted[i].object->executeMovement();
+    for (std::size_t i = 0; i < count; ++i)
+        if (mExecuted[i].moving && mExecuted[i].calcAnimType != -1) mExecuted[i].object->calcAnim();
+}
+
+void NativeScene::registerExecuted(NameObj* object, int movementType, int calcAnimType, int drawBufferType, int drawType) {
+    mExecuted.push_back({object, movementType, calcAnimType, drawBufferType, drawType, false, false});
+}
+
+void NativeScene::connectExecuted(NameObj* object, bool movement, bool connected) {
+    for (Executed& executed : mExecuted) {
+        if (executed.object != object) continue;
+        (movement ? executed.moving : executed.drawn) = connected;
+        return;
+    }
+}
+
+bool NativeScene::isExecuted(const NameObj* object) const {
+    for (const Executed& executed : mExecuted)
+        if (executed.object == object) return executed.moving;
+    return false;
+}
+
+CollisionCode& NativeScene::collisionCode() {
+    return *MR::getCollisionDirector()->mCode;
 }
 } // namespace smg
 
@@ -142,6 +173,14 @@ NameObj* SceneObjHolder::newEachObj(int id) {
         return new PlanetGravityManager("重力");
     case SceneObj_StageSwitchContainer:
         return new StageSwitchContainer();
+    case SceneObj_AllLiveActorGroup:
+        return new AllLiveActorGroup();
+    case SceneObj_ClippingDirector:
+        return new ClippingDirector();
+    case SceneObj_SensorHitChecker:
+        return new SensorHitChecker("センサー当たり");
+    case SceneObj_CollisionDirector:
+        return new CollisionDirector();
     }
     std::fprintf(stderr, "SceneObjHolder: scene object %d is not brought up\n", id);
     std::abort();
@@ -213,5 +252,54 @@ void termCameraCodeCollection() {
 // SceneNameObjMovementController's version asks for the same sync on its next movement().
 void notifyRequestNameObjMovementOnOff() {
     smg::NativeScene::current().requestMovementSync();
+}
+
+// NameObjExecuteHolder's registration and its connect and disconnect requests, answered by the native list.
+void registerNameObjToExecuteHolder(NameObj* pObj, int movementType, int calcAnimType, int drawBufferType, int drawType) {
+    smg::NativeScene::current().registerExecuted(pObj, movementType, calcAnimType, drawBufferType, drawType);
+}
+
+void connectToSceneTemporarily(NameObj* pObj) {
+    smg::NativeScene::current().connectExecuted(pObj, true, true);
+}
+
+void disconnectToSceneTemporarily(NameObj* pObj) {
+    smg::NativeScene::current().connectExecuted(pObj, true, false);
+}
+
+void connectToDrawTemporarily(NameObj* pObj) {
+    smg::NativeScene::current().connectExecuted(pObj, false, true);
+}
+
+void disconnectToDrawTemporarily(NameObj* pObj) {
+    smg::NativeScene::current().connectExecuted(pObj, false, false);
+}
+
+s32 getCurrentPlacementZoneId() {
+    return smg::NativeScene::current().placementZone();
+}
+} // namespace MR
+
+// CameraDirector's answers for clipping, from the scene's view until the camera runs.
+namespace MR {
+const TPos3f& getCameraViewMtx() {
+    return smg::NativeScene::current().view().view;
+}
+
+f32 getAspect() {
+    return smg::NativeScene::current().view().aspect;
+}
+
+f32 getFarZ() {
+    return smg::NativeScene::current().view().farZ;
+}
+
+f32 getFovy() {
+    return smg::NativeScene::current().view().fovy;
+}
+
+// First-person view is Mario's; without a player it is never on.
+bool isSubjectiveCameraOnForObjClipping() {
+    return false;
 }
 } // namespace MR

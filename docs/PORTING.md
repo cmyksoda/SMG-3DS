@@ -266,13 +266,25 @@ stands in until then.
 
 **Milestones**, each on screen in the preview before the next:
 
-1. **An original LiveActor falls and lands.** Compile `LiveActor`, `LiveActorFlag`, `HitSensor`,
-   `HitSensorKeeper`, `Binder`, `HitInfo`, `CollisionDirector`, `CollisionCategorizedKeeper` and
-   `CollisionParts`, with the `MR::` helpers they call extracted as for the lights. Each placed map
-   part's collision becomes a `CollisionParts` owned by a modelless `LiveActor` of that name; the
-   probe becomes an original `LiveActor` with a `Binder`, moved by `LiveActor::movement` under
-   `MR::calcGravity`. Clipping, effects, sound and shadows are explicit native boundaries (nothing
-   is clipped, nothing plays) until their directors come up.
+1. **An original LiveActor falls and lands (running).** `LiveActor`, `LiveActorFlag`, `HitSensor`,
+   `HitSensorKeeper`, `HitSensorInfo`, `Binder`, `HitInfo`, `CollisionDirector`,
+   `CollisionCategorizedKeeper`, `CollisionParts`, `LiveActorGroup`, `AllLiveActorGroup`,
+   `SensorHitChecker`, the clipping family (`ClippingDirector`, `ClippingJudge`, `ClippingActorHolder`,
+   `ClippingActorInfo`, `ClippingGroupHolder`, `ViewGroupCtrl`) and the SDK's `GDBase` compile as they
+   are. `LiveActor.cpp` is a generated copy without `initSound` and `addToSoundObjHolder`, so a caller
+   fails to link; the `MR::` helpers they call are extracted from `LiveActorUtil`, `ActorSensorUtil`,
+   `ActorMovementUtil`, `MapUtil`, `ObjUtil` and `ShadowController`. What reaches systems not brought
+   up (models, animation keepers, effects, shadows, the star pointer, `ActorLightCtrl`, LOD, the
+   player's position) stops the program by name (`source/compat/Actor.cpp`). `smg::CollisionHost` is a
+   modelless `LiveActor` holding a placed part's `CollisionParts` from its own KCL and PA, as
+   `initActorCollisionParts` builds it, with the files handed over instead of looked up in a
+   `ResourceHolder`. `smg::ProbeActor` is a modelless `LiveActor` with a `Binder` and gravity, moved by
+   `LiveActor::movement` from the scene's list: it lands on a KCL floor in 20 frames under a parallel
+   gravity (host and ARM). Pressed down a unit each frame, the original Binder sets the sphere back
+   about a unit above touching, so contact comes every other frame. On the host, `LiveActor.cpp`
+   builds without UBSan's vptr check, which needs the type info of its unbuilt model and sound
+   classes; the 3DS build has no RTTI. Next: map parts' collision through `CollisionHost` in the
+   preview, and the probe as a `ProbeActor`.
 2. **ModelManager and XanimePlayer.** J3D's CPU side (`J3DModel::calc`, joints, envelope matrices)
    is portable; `J3DModelData` gets a native loader from the port's parsers instead of J3D's in-place
    big-endian loader. `XanimePlayer`/`XanimeCore` blend Mario's animations; the renderer draws what
@@ -298,9 +310,18 @@ stands in until then.
   (demos, pause categories) are not brought up;
 - the scene's `SceneObjHolder`, answering `MR::getSceneObjHolder` and `MR::isExistSceneObj`.
   The class and its own methods (`create`, `getObj`, `isExist`, `MR::createSceneObj`) are the
-  original's, copied out verbatim; `newEachObj` makes only `PlanetGravityManager` (as the game
-  names it, "重力"), which the scene creates first, as `GameScene::init` does. Any other scene
-  object stops the program with a message naming its id.
+  original's, copied out verbatim; `newEachObj` makes `PlanetGravityManager` (as the game
+  names it, "重力"), which the scene creates first, as `GameScene::init` does, then
+  `SceneFunction::initForLiveActor`'s `AllLiveActorGroup`, `ClippingDirector`, `SensorHitChecker` and
+  `CollisionDirector`, and the `StageSwitchContainer`. Any other scene object stops the program with a
+  message naming its id.
+- `NameObjExecuteHolder`'s registration (`MR::registerNameObjToExecuteHolder`) and its connect and
+  disconnect requests for movement and draw. `movement()` runs connected objects' `executeMovement`,
+  then their `calcAnim`, in registration order; the game's `NameObjListExecutor` runs them by category
+  and applies requests on its next pass. `MR::connectToScene` itself is the original.
+- `CameraDirector`'s view for clipping (`MR::getCameraViewMtx`, `getFovy`, `getAspect`, `getFarZ`),
+  set by whoever draws, and `MR::getCurrentPlacementZoneId`. `endActorPlacement` is `GameScene::init`'s
+  `MR::endInitLiveActorSystemInfo`, called once the last placed actor exists.
 
 - the zone placements `StageDataHolder` keeps. `MR::isPlacementLocalStage` and
   `MR::getZonePlacementMtx`, which `JMapUtil` uses to move rows into the galaxy, find a row's
@@ -318,13 +339,14 @@ stands in until then.
   controls, sleep controllers and the wire creator's `RailRider` are freed with the scene.
 - `MR::getPlacedZoneId`, `MR::getZoneNum` and `MR::getZoneNameFromZoneId`, answered from the zones
   and the tables registered for them.
-- `AreaObjContainer`'s light area manager (`MR::getAreaObjManager("LightArea")`; any other manager
-  stops the program), `SwitchWatcherHolder`'s watch on switch-appear switches (validate and invalidate
+- `AreaObjContainer`'s light area manager (`MR::getAreaObjManager("LightArea")`), and no view cube
+  manager for a stage that places no `ViewGroupCtrlCube` (the same to `ViewGroupCtrl` as an empty one;
+  any other manager stops the program), `SwitchWatcherHolder`'s watch on switch-appear switches (validate and invalidate
   as the switch changes), and `SleepControllerHolder`'s control of areas. Areas linked to a map part
   are left out and listed, since they stand relative to the part's moving matrix.
 
-- `CollisionDirector`'s `CollisionCode` (created with the scene, as the director creates it), which
-  `KCollisionServer` reads camera ids through, and `CameraDirector`'s camera-code collection:
+- the original `CollisionDirector`'s `CollisionCode`, which `KCollisionServer` reads camera ids
+  through, and `CameraDirector`'s camera-code collection:
   `MR::initCameraCodeCollection`, `registerCameraCode` and `termCameraCodeCollection` record, per
   part, the codes its collision names, for the camera to read when it runs.
 
@@ -412,6 +434,6 @@ across 12 zones; the preview draws 56 rigid models in 172 placements.
 
 The portable math tests check tolerances and conventions, not bit-identical Gekko rounding.
 The native validation app passes 1,069 math, 37 WPad, 179 BCSV, 1,043 J3D model/texture,
-8,810 TEV combiner, 27 original gravity, 27 NameObj, 89 scene and gravity creator, 48 collision, 21 J3D animation, 7 ETC1 and 8 GPU texture checks on emulated ARM
+8,810 TEV combiner, 27 original gravity, 27 NameObj, 89 scene and gravity creator, 48 collision, 21 J3D animation, 9 original actor, 7 ETC1 and 8 GPU texture checks on emulated ARM
 in Azahar; the GPU checks compare the hardware's ETC1 decoding against ours. Of the disc's
 7,780 materials, 6,987 translate to the combiner exactly. No physical console has been tested.

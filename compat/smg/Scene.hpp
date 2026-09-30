@@ -21,6 +21,7 @@ class StageSwitchCtrl;
 class SwitchIdInfo;
 class JMapInfo;
 class JMapInfoIter;
+class NameObj;
 class NameObjHolder;
 class PlanetGravity;
 class SceneObjHolder;
@@ -109,7 +110,27 @@ public:
     const AreaLightInfo* areaLightAt(const TVec3f& position);
 
     // CollisionDirector's attribute codes, which KCollisionServer reads camera ids through.
-    CollisionCode& collisionCode() { return *mCollisionCode; }
+    CollisionCode& collisionCode();
+
+    // NameObjExecuteHolder until the scheduler runs: what connectToScene registered, and whether its movement
+    // and draw are connected. movement() runs connected objects' movement, then their calcAnim, in the order
+    // they registered; the game's NameObjListExecutor runs them by category, and connects on the next frame.
+    void registerExecuted(NameObj* object, int movementType, int calcAnimType, int drawBufferType, int drawType);
+    void connectExecuted(NameObj* object, bool movement, bool connected);
+    bool isExecuted(const NameObj* object) const;
+    // CameraDirector's view, which clipping reads, until the camera runs: the preview's camera once it sets one.
+    struct View {
+        TPos3f view;
+        f32 fovy = 45, aspect = 5 / 3.0f, farZ = 100000;
+    };
+    void setView(const View& view) { mView = view; }
+    const View& view() const { return mView; }
+    // GameScene::init's MR::endInitLiveActorSystemInfo, once the last placed actor exists: clipping gives
+    // every actor its view group. Actors made later are not judged until they are given one.
+    void endActorPlacement();
+    // StageDataHolder's zone for the placement in progress; the galaxy's outside placement.
+    void setPlacementZone(s32 zone) { mPlacementZone = zone; }
+    s32 placementZone() const { return mPlacementZone; }
     // What CollisionParts hands CameraDirector while a part's collision initializes, kept until the camera runs.
     struct CameraCodes {
         std::string host;
@@ -127,6 +148,7 @@ private:
     void syncAreaSleeps();
     void forgetLights();
     void forgetAreas();
+    void forgetActors();
     struct AppearWatch;
     struct AreaSleep;
     static void forgetGravity(const PlacedGravity& placed);
@@ -151,7 +173,14 @@ private:
     std::vector<ZonePaths> mZonePaths;
     std::vector<PlacedGravity> mGravities;
     std::vector<std::string> mSkippedGravities, mStartStateGravities;
-    CollisionCode* mCollisionCode;
+    struct Executed {
+        NameObj* object;
+        int movementType, calcAnimType, drawBufferType, drawType;
+        bool moving, drawn;
+    };
+    std::vector<Executed> mExecuted;
+    View mView;
+    s32 mPlacementZone = 0;
     std::vector<CameraCodes> mCameraCodes;
     bool mCollectingCameraCodes = false;
 };

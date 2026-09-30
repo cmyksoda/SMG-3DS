@@ -356,20 +356,11 @@ extract("src/Game/Util/StringUtil.cpp", "Game/Util/StringUtilCompare.cpp",
         [("MR", "bool isEqualString(const char* pStr1, const char* pStr2) {")])
 
 adapt("src/Game/Util/GravityUtil.cpp", "Game/Util/GravityUtil.cpp", [
-    ('#include "Game/LiveActor/LiveActor.hpp"\n', "", 1),
     ("#include <cstring>", "#include <cstdint>\n#include <cstring>", 1),
     ("u32 host) NO_INLINE {", "u32 host) {", 1),
     # A u32 holds a pointer on the Wii and the 3DS; 64-bit host tests keep the low half, as the manager compares.
     ("host = (u32)pActor;", "host = (u32)(uintptr_t)pActor;", 1),
-], drop=[
-    "bool calcGravityVector(const LiveActor* pActor, TVec3f* pDest, GravityInfo* pInfo, u32 host) {",
-    "bool calcDropShadowVector(const LiveActor* pActor, TVec3f* pDest, GravityInfo* pInfo, u32 host) {",
-    "bool calcGravityAndDropShadowVector(const LiveActor* pActor, TVec3f* pDest, GravityInfo* pInfo, u32 host) {",
-    "bool calcGravityVectorOrZero(const LiveActor* pActor, TVec3f* pDest, GravityInfo* pInfo, u32 host) {",
-    "bool calcGravityAndDropShadowVectorOrZero(const LiveActor* pActor, TVec3f* pDest, GravityInfo* pInfo, u32 host) {",
-    "bool calcAttractMarioLauncherOrZero(const LiveActor* pActor, TVec3f* pDest, GravityInfo* pInfo, u32 host) {",
-    "bool isZeroGravity(const LiveActor* pActor) {",
-], reason="LiveActor is not brought up")
+])
 
 adapt("src/Game/Gravity/GravityCreator.cpp", "Game/Gravity/GravityCreator.cpp", [
     ('#include "Game/Gravity.hpp"\n#include "Game/Util.hpp"',
@@ -504,6 +495,8 @@ adapt("src/Game/AreaObj/AreaObj.cpp", "Game/AreaObj/AreaObj.cpp", [
 # place; the port's loader (source/core/Animation.cpp) gives these objects native copies instead.
 # OSInitFastCast sets the quantized registers to plain integers; psq_st truncates and saturates.
 adapt("libs/RVL_SDK/include/revolution/os.h", "include/revolution/os.h", [
+    # Wii low-memory addresses, which Metrowerks pins in place; declared here so each is one object or none.
+    ("u32 __OSBusClock = 0x800000F8;\nu32 __MEM2End = 0x80003128;", "extern u32 __OSBusClock;\nextern u32 __MEM2End;", 1),
     ("""        psq_st inF, 0(tmpPtr), 0x1, 5
         lha out, 0(tmpPtr)
     }
@@ -602,6 +595,125 @@ adapt("libs/JSystem/include/JSystem/JKernel/JKRDvdRipper.hpp", "include/JSystem/
                                unsigned long*);""",
      """    static void* loadToMainRAM(JKRDvdFile*, unsigned char*, JKRExpandSwitch, u32, JKRHeap*, EAllocDirection, u32, int*, u32*);""", 1),
 ])
+
+# A template names its dependent base with its arguments; Metrowerks found the bare name.
+adapt("libs/JSystem/include/JSystem/JAudio2/JASGadget.hpp", "include/JSystem/JAudio2/JASGadget.hpp", [
+    ("JASPtrArray() : JASPtrTable(mPtrArray, LEN) {", "JASPtrArray() : JASPtrTable< T >(mPtrArray, LEN) {", 1),
+])
+
+# JGadget declares the standard iterator tags and std::iterator itself, which Metrowerks' library lacked.
+adapt("libs/JSystem/include/JSystem/JGadget/linklist.hpp", "include/JSystem/JGadget/linklist.hpp", [
+    ("""namespace std {
+
+    struct input_iterator_tag {};
+    struct forward_iterator_tag : public input_iterator_tag {};
+    struct bidirectional_iterator_tag : public forward_iterator_tag {};
+
+    template < typename Category, typename T, typename Distance = s32, typename Pointer = T*, typename Reference = T& >
+    class iterator {
+    public:
+        typedef Category iterator_category;
+        typedef T value_type;
+        typedef Distance difference_type;
+        typedef Pointer pointer;
+        typedef Reference reference;
+        iterator& operator=(const iterator& rOther) NO_INLINE {
+            return *this;
+        }
+    };
+
+}  // namespace std""", "#include <iterator>", 1),
+])
+
+# Pointer arithmetic through u32 assumes 32-bit pointers, true on the Wii and the 3DS but not on 64-bit hosts.
+adapt("libs/RVL_SDK/include/revolution/mem/heapCommon.h", "include/revolution/mem/heapCommon.h", [
+    ("typedef u32 UIntPtr;", "typedef uintptr_t UIntPtr;", 1),
+])
+adapt("libs/JSystem/include/JSystem/JAudio2/JASSeqReader.hpp", "include/JSystem/JAudio2/JASSeqReader.hpp", [
+    ("return (u32)mSeqCursor - (u32)mSeqBuff;", "return static_cast< u32 >(mSeqCursor - mSeqBuff);", 1),
+])
+
+# GX display list writing, whose inline writers every J3D-facing header reaches; the Wii's cache flush stays out.
+adapt("src/RVL_SDK/gd/GDBase.c", "RVL_SDK/gd/GDBase.cpp", [
+    ('#include "revolution/gd/GDBase.h"', '#include "revolution/gd/GDBase.h"\n#include <cstddef>\n#include <cstdint>', 1),
+    ("u32 n = ((u32)__GDCurrentDL->ptr & 31);", "u32 n = ((uintptr_t)__GDCurrentDL->ptr & 31);", 1),
+    # C converts void* implicitly; C++ spells it.
+    ("pDL->start = pStart;", "pDL->start = static_cast< u8* >(pStart);", 1),
+], drop=["void GDFlushCurrToMem() {"], reason="the Wii's data cache flush has no counterpart before the renderer draws display lists")
+
+# The Wii's write-gather pipe to its GPU: nothing in the port may write it, so nothing defines it.
+adapt("libs/RVL_SDK/include/revolution/gx/GXVert.h", "include/revolution/gx/GXVert.h", [
+    ("#else\nvolatile PPCWGPipe GXWGFifo;\n#endif", "#else\nextern volatile PPCWGPipe GXWGFifo;\n#endif", 1),
+    # Inline, so a file that includes the writers without calling them emits none.
+    ("    static void func(", "    static inline void func(", 4),
+])
+
+# LiveActor without its sound setup, which needs the audio system: a caller fails to link rather than run.
+adapt("src/Game/LiveActor/LiveActor.cpp", "Game/LiveActor/LiveActor.cpp", [
+    ('#include "Game/AudioLib/AudAnmSoundObject.hpp"\n', "", 1),
+], drop=["void LiveActor::initSound(int param1, bool is2D) {", "void LiveActor::addToSoundObjHolder() {"],
+   reason="sound comes with the audio system")
+
+# Actors: what LiveActor, its sensors and its Binder call from the utility files, which reach the whole game.
+extract("src/Game/Util/LiveActorUtil.cpp", "Game/Util/LiveActorUtilCore.cpp",
+        '#include "Game/LiveActor/ActorLightCtrl.hpp"\n#include "Game/LiveActor/LiveActor.hpp"\n'
+        '#include "Game/Map/CollisionParts.hpp"\n#include "Game/Util/GravityUtil.hpp"\n#include "Game/Util/LiveActorUtil.hpp"\n'
+        '#include "Game/Util/MathUtil.hpp"\n#include "Game/Util/ModelUtil.hpp"\n#include "Game/LiveActor/ClippingActorHolder.hpp"\n'
+        '#include "Game/LiveActor/ClippingDirector.hpp"\n#include "Game/LiveActor/Binder.hpp"\n',
+        [("", "void calcCollisionMtx(TPos3f* pMtx, const LiveActor* pActor) NO_INLINE {"),
+         ("MR", "void calcGravity(LiveActor* pActor) {"), ("MR", "bool isCalcGravity(const LiveActor* pActor) {"),
+         ("MR", "void onBind(LiveActor* pActor) {"), ("MR", "bool isDead(const LiveActor* pActor) {"),
+         ("MR", "void setBaseTRMtx(LiveActor* pActor, MtxPtr pMtx) {"),
+         ("MR", "void setBaseTRMtx(LiveActor* pActor, const TPos3f& rMtx) {"),
+         ("MR", "void setCollisionMtx(LiveActor* pActor) {"), ("MR", "void setCollisionMtx(LiveActor* pActor, CollisionParts* pParts) {"),
+         ("MR", "CollisionParts* getCollisionParts(const LiveActor* pActor) {"),
+         ("MR", "void validateCollisionParts(LiveActor* pActor) {"), ("MR", "void validateCollisionParts(CollisionParts* pParts) {"),
+         ("MR", "void invalidateCollisionParts(LiveActor* pActor) {"), ("MR", "void invalidateCollisionParts(CollisionParts* pParts) {"),
+         ("MR", "void resetAllCollisionMtx(LiveActor* pActor) {"), ("MR", "bool isClipped(const LiveActor* pActor) {"),
+         ("MR", "bool isNoEntryDrawBuffer(const LiveActor* pActor) {"), ("MR", "bool isHiddenModel(const LiveActor* pActor) {"),
+         ("MR", "bool isInvalidClipping(const LiveActor* pActor) {"),
+         ("MR", "bool isOnGround(const LiveActor* pActor) {"), ("MR", "bool isBindedGround(const LiveActor* pActor) {"),
+         ("MR", "void onCalcGravity(LiveActor* pActor) {"), ("MR", "void invalidateClipping(LiveActor* pActor) {"),
+         ("MR", "void calcAnimDirect(LiveActor* pActor) {")])
+extract("src/Game/Util/ActorSensorUtil.cpp", "Game/Util/ActorSensorUtilCore.cpp",
+        '#include "Game/LiveActor/HitSensor.hpp"\n#include "Game/LiveActor/HitSensorKeeper.hpp"\n'
+        '#include "Game/LiveActor/LiveActor.hpp"\n#include "Game/Util/ActorSensorUtil.hpp"\n',
+        [("MR", "bool tryUpdateHitSensorsAll(LiveActor* pActor) {"), ("MR", "void updateHitSensorsAll(LiveActor* pActor) {"),
+         ("MR", "void clearHitSensors(LiveActor* pActor) {"), ("MR", "void setHitSensorApart(HitSensor* pSender, HitSensor* pReceiver) {"),
+         ("MR", "HitSensor* getTaken(const LiveActor* pActor) {"), ("MR", "HitSensor* getTaking(const LiveActor* pActor) {"),
+         ("MR", "LiveActor* getSensorHost(const HitSensor* pSensor) {"),
+         ("MR", "bool isSensorPlayer(const HitSensor* pSensor) {"), ("MR", "bool isSensorRide(const HitSensor* pSensor) {"),
+         ("MR", "bool isSensorMapObj(const HitSensor* pSensor) {"), ("MR", "bool isSensorAutoRush(const HitSensor* pSensor) {"),
+         ("MR", "bool isSensorRush(const HitSensor* pSensor) {"),
+         ("MR", "HitSensor* addHitSensor(LiveActor* pActor, const char* pName, u32 type, u16 groupSize, f32 radius, const TVec3f& rOffset) {"),
+         ("MR", "HitSensor* addHitSensorMapObj(LiveActor* pActor, const char* pName, u16 groupSize, f32 radius, const TVec3f& rOffset) {"),
+         ("MR", "HitSensor* addHitSensorBinder(LiveActor* pActor, const char* pName, u16 groupSize, f32 radius, const TVec3f& rOffset) {")])
+extract("src/Game/Util/ActorMovementUtil.cpp", "Game/Util/ActorMovementUtilCore.cpp",
+        '#include "Game/LiveActor/Binder.hpp"\n#include "Game/LiveActor/LiveActor.hpp"\n#include "Game/Util/ActorMovementUtil.hpp"\n'
+        '#include "Game/Util/ActorSensorUtil.hpp"\n#include "Game/Util/LiveActorUtil.hpp"\n#include "Game/Util/MtxUtil.hpp"\n'
+        '#include "Game/LiveActor/ShadowController.hpp"\n',
+        [("MR", "void resetPosition(LiveActor* pActor) {"), ("MR", "void makeMtxTR(MtxPtr pMtx, const LiveActor* pActor) {"),
+         ("MR", "void makeMtxTRS(MtxPtr pMtx, const LiveActor* pActor) {"),
+         ("MR", "void makeMtxTransRotateY(MtxPtr pMtx, const LiveActor* pActor) {")])
+extract("src/Game/LiveActor/ShadowController.cpp", "Game/LiveActor/ShadowRequests.cpp",
+        '#include "Game/LiveActor/LiveActor.hpp"\n#include "Game/LiveActor/ShadowController.hpp"\n#include "Game/Util/SceneUtil.hpp"\n',
+        [("MR", "void requestCalcActorShadowAppear(LiveActor* pActor) {"), ("MR", "void requestCalcActorShadow(LiveActor* pActor) {")])
+extract("src/Game/Util/ObjUtil.cpp", "Game/Util/ObjUtilScene.cpp",
+        '#include "Game/LiveActor/LiveActor.hpp"\n#include "Game/NameObj/NameObjExecuteHolder.hpp"\n#include "Game/Util/ObjUtil.hpp"\n',
+        ["void MR::connectToScene(LiveActor* pActor, int movementType, int calcAnimType, int drawBufferType, int drawType) {",
+         "void MR::connectToScene(NameObj* pObj, int movementType, int calcAnimType, int drawBufferType, int drawType) {"])
+extract("src/Game/Util/MapUtil.cpp", "Game/Util/MapUtilCore.cpp",
+        '#include "Game/Map/CollisionCategorizedKeeper.hpp"\n#include "Game/Map/CollisionDirector.hpp"\n'
+        '#include "Game/Util/MapUtil.hpp"\n#include "Game/Util/MathUtil.hpp"\n',
+        [("", "u32 getStrikeInfoNumCategory(s32 category) {"),
+         ("MR", "bool isWallPolygon(f32 param1) {"), ("MR", "bool isFloorPolygon(f32 param1) {"),
+         ("MR", "bool isFloorPolygon(const TVec3f& rParam1, const TVec3f& rParam2) {"),
+         ("MR", "bool isWallPolygon(const TVec3f& rParam1, const TVec3f& rParam2) {"),
+         ("Collision", "s32 checkStrikePointToMap(const TVec3f& rPoint, HitInfo* pHit) {"),
+         ("Collision", "s32 checkStrikeBallToMap(const TVec3f& rCenter, f32 radius, const CollisionPartsFilterBase* pPartsFilter,"),
+         ("Collision", "s32 checkStrikeBallToMapWithMovingReaction(const TVec3f& rCenter, f32 radius, const CollisionPartsFilterBase* pPartsFilter,"),
+         ("Collision", "s32 checkStrikeLineToMap(const TVec3f& rStart, const TVec3f& rDirection, s32 count, const CollisionPartsFilterBase* pPartsFilter,"),
+         ("Collision", "const HitInfo* getStrikeInfoMap(u32 index) {"), ("Collision", "u32 getStrikeInfoNumMap() {")])
 
 # Class operator new and delete take size_t, which is unsigned int on ARM where u32 is unsigned long.
 adapt("libs/JSystem/include/JSystem/JAudio2/JASHeapCtrl.hpp", "include/JSystem/JAudio2/JASHeapCtrl.hpp", [
