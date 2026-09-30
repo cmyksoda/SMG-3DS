@@ -1,6 +1,7 @@
 #include <Game/Gravity/DiskGravity.hpp>
 #include <Game/Gravity/ParallelGravity.hpp>
 #include <Game/Gravity/PointGravity.hpp>
+#include <Game/Gravity/SegmentGravity.hpp>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -79,12 +80,26 @@ void diskGravity() {
     disk.setEnableEdgeGravity(false);
     check(!disk.calcGravity(&pull, TVec3f(4500.0f, 0.0f, 0.0f)), "no rim pull when edge gravity is off");
 }
+// Along the segment the pull is toward the nearest point on it; past an end, toward that end.
+void segmentGravity() {
+    SegmentGravity segment;
+    segment.setGravityPoint(0, TVec3f(0.0f, 0.0f, 0.0f));
+    segment.setGravityPoint(1, TVec3f(1000.0f, 0.0f, 0.0f));
+    segment.updateIdentityMtx();
+    TVec3f pull;
+    check(segment.calcGravity(&pull, TVec3f(500.0f, 2000.0f, 0.0f)) && vec(pull, 0, -1, 0), "beside the segment, toward it");
+    check(segment.calcGravity(&pull, TVec3f(-2000.0f, 0.0f, 0.0f)) && vec(pull, 1, 0, 0), "before the start, toward the start");
+    check(segment.calcGravity(&pull, TVec3f(3000.0f, 0.0f, 0.0f)) && vec(pull, -1, 0, 0), "past the end, toward the end");
+    segment.setEdgeValid(1, false);
+    check(!segment.calcGravity(&pull, TVec3f(3000.0f, 0.0f, 0.0f)), "a disabled end has no pull");
+}
 } // namespace
 
 int runGravityTests() {
     pointGravity();
     parallelGravity();
     diskGravity();
+    segmentGravity();
     std::printf("%u original gravity checks passed\n", checks);
     return 0;
 }
