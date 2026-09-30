@@ -1,7 +1,5 @@
-// WiiConnect24, which carries the game's letters to the Wii Message Board. The 3DS has no Message Board, so the
-// library answers as the Wii's does with WiiConnect24 switched off: every call reports it disabled, and the game
-// goes on without sending, as it does on such a console. No SDK header is included: C linkage matches by name,
-// and each of these returns the library's error code.
+// WiiConnect24 carries the game's letters to the Wii Message Board, which the 3DS lacks: every call answers as a Wii
+// with it switched off, and the game goes on without sending. C linkage matches by name, so no SDK header is needed.
 #include <revolution/nwc24/NWC24Types.h>
 
 extern "C" {

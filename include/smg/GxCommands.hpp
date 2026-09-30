@@ -2,10 +2,8 @@
 #include <cstdint>
 
 namespace smg {
-// The Wii GPU's command processor as the port reads it: the FIFO's big-endian command stream, taken byte by byte
-// as GX sends it. Register loads (CP, XF, BP) are kept; display lists are followed through `memory`; the pixel
-// engine's draw-done and token commands are reported. What it cannot take yet (primitives, indexed XF loads, an
-// unknown opcode) goes to `unsupported`, which the port makes a named stop.
+// The Wii GPU's command processor: the FIFO's big-endian stream, taken byte by byte as GX sends it. It keeps the
+// register loads, follows display lists and reports pixel-engine events; what it cannot take yet goes to `unsupported`.
 class GxCommandProcessor {
 public:
     struct Host {

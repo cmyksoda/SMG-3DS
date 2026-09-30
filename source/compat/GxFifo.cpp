@@ -1,7 +1,5 @@
-// The Wii GPU's side of the whole game. The SDK's own GX writes the GPU's registers and its FIFO; the registers
-// are memory GX reads back, and the FIFO's bytes, big-endian as the Wii's write-gather pipe sends them, go to the
-// port's command processor (smg::GxCommandProcessor). Its pixel-engine events set the PE token register and raise
-// the Wii's interrupts; what it cannot take yet stops the program by name.
+// Where the SDK's own GX writes: its register blocks are memory it reads back, and its FIFO feeds the port's command
+// processor, whose pixel-engine events raise the Wii's interrupts; anything it cannot take yet stops by name.
 #include <smg/GxCommands.hpp>
 #include <revolution/os.h>
 #include <revolution/os/OSInterrupt.h>
