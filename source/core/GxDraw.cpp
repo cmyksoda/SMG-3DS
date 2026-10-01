@@ -307,7 +307,10 @@ struct Transformer {
 
 void buildGxDraw(const GxCommandProcessor& gpu, std::uint8_t kind, std::uint8_t format, std::uint16_t count, const std::uint8_t* vertices,
                  const GxFrame& frame, GxDraw& out) {
+    std::vector<GxDrawVertex> triangles = std::move(out.triangles);  // its memory, for the next primitive
+    triangles.clear();
     out = GxDraw{};
+    out.triangles = std::move(triangles);
     readTev(gpu, out);
     readPixel(gpu, out);
     out.program = compileTev(out.material);
@@ -315,9 +318,11 @@ void buildGxDraw(const GxCommandProcessor& gpu, std::uint8_t kind, std::uint8_t 
     if (out.unsupported) return;
 
     Transformer transform{gpu, frame, out};
-    std::vector<GxDrawVertex> drawn(count);
-    std::vector<std::array<float, 2>> screen(count);
-    std::vector<bool> behind(count);
+    // Kept per thread between primitives, so drawing allocates only when a primitive is the largest yet.
+    thread_local std::vector<GxDrawVertex> drawn;
+    thread_local std::vector<std::array<float, 2>> screen;
+    thread_local std::vector<bool> behind;
+    drawn.assign(count, {}), screen.assign(count, {}), behind.assign(count, false);
     const std::uint32_t size = gpu.vertexSize(format);
     for (std::uint16_t i = 0; i < count; ++i) {
         const GxVertex v = gpu.readVertex(vertices + i * size, format);
