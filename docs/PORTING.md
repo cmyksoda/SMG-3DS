@@ -594,7 +594,10 @@ every `GXSetTevOp` draw ran nonsense stages. The visible case was the picture fo
 silhouettes. The adapted `GXSetTevOp` builds each word field by field by name (`smgTevColorWord`, `smgTevAlphaWord`
 in `compat/smg/GxPrivate.h`); a test pins `GX_MODULATE` to the hardware's words. Reversing the field order instead
 would break the SDK's positional initialisers, which GCC rejects. Any other bitfield struct read as an integer has
-the same trap; `io_reg.h`'s `si_comcsr_t` is the only other one in the SDK headers.
+the same trap; `io_reg.h`'s `si_comcsr_t` is the only other one in the SDK headers. JAudio's `JASChannel::MixConfig`
+is the same trap in a union: written as a word (`0x0150` = bus 1, nibbles 5 and 0), read as `upper:8`, `lower0:4`,
+`lower1:4`. On ARM `upper` came out as 0x50, an index far past the DSP's 12-entry bus table, so every voice's sends
+went to buffers that don't exist. The adapted header declares the fields low end first for GCC.
 
 **Weak references and the Wii's whole link.** JSystem declares the functions SMG replaces weak
 (`JASTrack::channelStart`, `JASBank::noteOn`, `JASWaveArc::setFileName`/`load`), and SMG's replacements live in
