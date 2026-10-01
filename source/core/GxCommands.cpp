@@ -193,8 +193,21 @@ std::uint32_t GxCommandProcessor::command(const std::uint8_t* at, std::uint32_t 
         host_.primitive(opcode & 0xF8, opcode & 7, count, at + 3);
         return length;
     }
-    if ((opcode & 0xE7) == 0x20) host_.unsupported("indexed XF loads are not the port's yet", opcode);
-    else host_.unsupported("an opcode the Wii's GPU does not know", opcode);
+    if ((opcode & 0xE7) == 0x20) {  // load XF registers from arrays 12-15 (GXLoadPosMtxIndx and its kin): index, count less one, address
+        if (available < 5) return 0;
+        const std::uint32_t header = word(at + 1), index = header >> 16, count = (header >> 12 & 0xF) + 1, address = header & 0xFFF;
+        const int array = 12 + (opcode >> 3 & 3);
+        const std::uint8_t* from = host_.memory(cp[ArrayBase + array] + index * cp[ArrayStride + array]);
+        if (!from) {
+            host_.unsupported("an indexed XF load from outside memory", opcode);
+            return 5;
+        }
+        // The CPU wrote these (J3D's matrices, GX's light objects): read in its order, as indexed vertex arrays are.
+        for (std::uint32_t i = 0; i < count; ++i)
+            if (address + i < sizeof xf / sizeof *xf) xf[address + i] = word(from + i * 4, true);
+        return 5;
+    }
+    host_.unsupported("an opcode the Wii's GPU does not know", opcode);
     // Only reached when `unsupported` returns (a test's host): nothing past a command of unknown length can be read.
     return available;
 }

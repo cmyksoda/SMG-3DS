@@ -53,6 +53,33 @@ void registerLoads() {
     delete gpu;
 }
 
+// GXLoadPosMtxIndx: array 12 holds matrices the CPU computed, in its own order; the GPU takes a row of words from one.
+void indexedLoads() {
+    auto* gpu = new smg::GxCommandProcessor(host());
+    displayList.assign(0x400, 0);
+    for (std::uint32_t i = 0; i < 12; ++i) {
+        const std::uint32_t value = 0x3F800000 + i;
+        std::memcpy(&displayList[0x200 + 2 * 48 + i * 4], &value, 4);  // matrix 2 of a 48-byte stride, native words
+    }
+    const float light[3] = {1.5f, -2.0f, 0.25f};
+    std::memcpy(&displayList[0x300 + 64], light, sizeof light);  // light 1, from the start of its element
+    std::vector<std::uint8_t> stream;
+    stream.push_back(0x08); stream.push_back(0xAC); put32(stream, 0x200);  // array 12's base and stride
+    stream.push_back(0x08); stream.push_back(0xBC); put32(stream, 48);
+    stream.push_back(0x20); put32(stream, 2u << 16 | 11u << 12 | 0x00C);  // matrix 2's twelve words to XF 0x00C
+    stream.push_back(0x08); stream.push_back(0xAF); put32(stream, 0x300);  // array 15 (lights), as GXLoadLightObjIndx
+    stream.push_back(0x08); stream.push_back(0xBF); put32(stream, 64);
+    stream.push_back(0x38); put32(stream, 1u << 16 | 2u << 12 | 0x60A);   // its three position words to light 0's
+    gpu->put(stream.data(), static_cast<std::uint32_t>(stream.size()));
+    bool rows = true;
+    for (std::uint32_t i = 0; i < 12; ++i) rows = rows && gpu->xf[0x00C + i] == 0x3F800000 + i;
+    check(rows && unsupported.empty(), "an indexed load copies the CPU's matrix words into XF in order");
+    float position[3];
+    std::memcpy(position, &gpu->xf[0x60A], sizeof position);
+    check(position[0] == 1.5f && position[1] == -2.0f && position[2] == 0.25f, "and array D reaches the light objects");
+    delete gpu;
+}
+
 void pixelEngine() {
     auto* gpu = new smg::GxCommandProcessor(host());
     std::vector<std::uint8_t> stream;
@@ -156,6 +183,7 @@ void streams() {
 int runGxCommandTests() {
     streams();
     registerLoads();
+    indexedLoads();
     bpMasksAndCopies();
     pixelEngine();
     displayLists();
