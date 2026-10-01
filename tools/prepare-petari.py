@@ -114,6 +114,8 @@ def scoped_case(text, relative, label):
 def adapt(relative, target, replacements, drop=(), reason="", cases=()):
     """Copy a file with exact replacements; `drop` leaves out whole definitions, found by first line, for `reason`;
     `cases` gives case labels their own scope (scoped_case)."""
+    if relative in written:
+        raise SystemExit(f"{relative} is adapted twice; the second would replace the first: merge them")
     text = (root / relative).read_text()
     for before, after, expected in replacements:
         if text.count(before) != expected:
@@ -1721,6 +1723,15 @@ adapt("src/Game/System/HomeButtonMenuWrapper.cpp", "Game/System/HomeButtonMenuWr
     "void RSO::HBMCalc(const HBMControllerData* pController) {", "void RSO::HBMDraw() {", "HBMSelectBtnNum RSO::HBMGetSelectBtnNum() {",
     "void RSO::HBMSetAdjustFlag(int flag) {", "void RSO::HBMStartBlackOut() {"],
       reason="the port's (source/compat/HomeButtonMenu.cpp)")
+# Metrowerks sized every enum as an int (-enum int); devkitARM's are one byte. These sit in what J3D reads straight from
+# model files (GXVtxAttrFmtList, GXVtxDescList, MAT3's cull modes), so each gets an int-sized value to keep its size.
+adapt("libs/RVL_SDK/include/revolution/gx/GXEnum.h", "include/revolution/gx/GXEnum.h", [
+    ("  GX_VA_NULL = 0xff\n} GXAttr;", "  GX_VA_NULL = 0xff,\n  GX_ATTR_INT_SIZED = 0x7FFFFFFF\n} GXAttr;", 1),
+    ("  GX_INDEX16\n\n} GXAttrType;", "  GX_INDEX16,\n  GX_ATTR_TYPE_INT_SIZED = 0x7FFFFFFF\n} GXAttrType;", 1),
+    ("  GX_RGBA8 = 5\n} GXCompType;", "  GX_RGBA8 = 5,\n  GX_COMP_TYPE_INT_SIZED = 0x7FFFFFFF\n} GXCompType;", 1),
+    ("  GX_TEX_ST = 1\n} GXCompCnt;", "  GX_TEX_ST = 1,\n  GX_COMP_CNT_INT_SIZED = 0x7FFFFFFF\n} GXCompCnt;", 1),
+    ("  GX_CULL_ALL\n} GXCullMode;", "  GX_CULL_ALL,\n  GX_CULL_MODE_INT_SIZED = 0x7FFFFFFF\n} GXCullMode;", 1),
+])
 # MSL's own wide-string functions, built as C over newlib's headers (compat/smg/MslWide.h stands in for MSL's).
 adapt("src/MSL_C/wstring.c", "MSL_C/wstring.c", [('#include "size_t.h"\n#include "wchar_t.h"\n', "#include <smg/MslWide.h>\n", 1)])
 adapt("src/MSL_C/wmem.c", "MSL_C/wmem.c", [('#include "wchar_io.h"\n#include "cstring"\n', "#include <smg/MslWide.h>\n", 1)])
