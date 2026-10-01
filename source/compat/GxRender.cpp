@@ -36,6 +36,26 @@ constexpr u32 ReadbackFlags = GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0
 constexpr u32 DisplayTransferFlags = GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | GX_TRANSFER_RAW_COPY(0) |
                                      GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) | GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB8) |
                                      GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO);
+// The target's rows of 8x8 tiles (240 RGBA8 pixels wide) into a 256-wide texture's, in the transfer's 16-byte units.
+constexpr u32 TargetTileRow = 240 * 8 * 4, ScratchTileRow = 256 * 8 * 4;
+
+bool sCopiesStayOnGpu = false;
+
+// What a texture read of each EFB copy format (the PE's numbering) names: one channel reads as I4/I8, two as IA4/IA8.
+std::uint8_t copyReadFormat(std::uint8_t copy) {
+    switch (copy) {
+    case 0: case 2: case 3: case 4: case 5: case 6: return copy;
+    default: return 1;
+    }
+}
+
+unsigned textureSide(float texels) {
+    unsigned side = 8;
+    while (side < texels && side < 1024) side <<= 1;
+    return side;
+}
+
+GPU_TEXTURE_WRAP_PARAM wrapMode(unsigned gx) { return gx == 1 ? GPU_REPEAT : gx == 2 ? GPU_MIRRORED_REPEAT : GPU_CLAMP_TO_EDGE; }
 
 [[noreturn]] void stop(const char* what) {
     std::fprintf(stderr, "The Wii GPU's drawing: %s is not the port's yet\n", what);
@@ -57,6 +77,19 @@ struct Renderer {
     // A texture by where and how GX fetches it.
     using Key = std::tuple<u32, u16, u16, u8, u8, u8, u8, u8>;
     std::map<Key, C3D_Tex> textures;
+    // EFB copies kept on the PICA (gpuCopy), by the Wii address they were copied to: RGBA8 at about the screen's
+    // resolution, holding what a read in `readFormat` would give.
+    struct GpuCopy {
+        C3D_Tex texture{};
+        C3D_RenderTarget* target = nullptr;
+        unsigned width = 0, height = 0;
+        std::uint8_t readFormat = 0;
+    };
+    std::map<u32, GpuCopy> gpuCopies;
+    C3D_Tex scratch{};  // the target taken whole as a texture
+    bool scratchReady = false;
+    // The first GPU copy of each format and size is checked against the CPU's copy of the same pixels (noteGpuCopy).
+    std::vector<u64> checkedKinds;
     GxFrame frame;
     bool indirectNoted = false;
 
@@ -102,6 +135,13 @@ struct Renderer {
     }
 
     C3D_Tex& texture(const GxTextureMap& map) {
+        if (auto copy = gpuCopies.find(map.address); copy != gpuCopies.end()) {
+            GpuCopy& g = copy->second;
+            if (map.width != g.width || map.height != g.height || map.format != g.readFormat) stop("a GPU-kept EFB copy read as another texture");
+            C3D_TexSetFilter(&g.texture, map.magFilter ? GPU_LINEAR : GPU_NEAREST, (map.minFilter & 4) ? GPU_LINEAR : GPU_NEAREST);
+            C3D_TexSetWrap(&g.texture, wrapMode(map.wrapS), wrapMode(map.wrapT));
+            return g.texture;
+        }
         const Key key{map.address, map.width, map.height, map.format, map.wrapS, map.wrapT, map.minFilter, map.magFilter};
         if (auto found = textures.find(key); found != textures.end()) return found->second;
         if (map.format == 8 || map.format == 9 || map.format == 10) stop("a palette texture");
@@ -244,10 +284,214 @@ struct Renderer {
         GxTextureCopy copy;
         if (const char* why = readTextureCopy(gpu, command, copy)) stop(why);
         if (!inFrame) begin();
-        const Efb efb{readEfb(false), 400.0f / frame.width, 240.0f / frame.height, PE_CONTROL_GET_PIXTYPE(gpu.bp[0x43])};
-        encodeTextureCopy(copy, efbPixel, &efb, static_cast<std::uint8_t*>(OSPhysicalToCached(copy.address)));
+        if (!sCopiesStayOnGpu || !gpuCopy(gpu, copy)) {
+            dropGpuCopy(copy.address);
+            const Efb efb = efbView(gpu);
+            encodeTextureCopy(copy, efbPixel, &efb, static_cast<std::uint8_t*>(OSPhysicalToCached(copy.address)));
+        }
         forget(copy.address, textureCopySize(copy));
         if (copy.clear) C3D_RenderTargetClear(target, C3D_CLEAR_ALL, copyClearColor(gpu), copyClearDepth(gpu)), fresh[0] = fresh[1] = false;
+    }
+
+    Efb efbView(const GxCommandProcessor& gpu) {
+        return {readEfb(false), 400.0f / frame.width, 240.0f / frame.height, PE_CONTROL_GET_PIXTYPE(gpu.bp[0x43])};
+    }
+
+    void dropGpuCopy(u32 address) {
+        const auto found = gpuCopies.find(address);
+        if (found == gpuCopies.end()) return;
+        C3D_RenderTargetDelete(found->second.target);
+        C3D_TexDelete(&found->second.texture);
+        gpuCopies.erase(found);
+    }
+
+    // An EFB copy the game makes for its own GPU textures (JUTTexture::capture) stays in the PICA's memory: the target is
+    // copied whole into a texture, which a quad then draws into the copy's texture through the combiner, with the copy's
+    // vertical filter and its format's channels. The Wii's memory is not written, so only the GPU sees this copy.
+    bool gpuCopy(const GxCommandProcessor& gpu, const GxTextureCopy& copy) {
+        int rows[3];
+        std::uint8_t weights[3];
+        unsigned taps = 0;
+        for (int i = 0; i < 7; ++i) {
+            if (!copy.filter[i]) continue;
+            if (taps == 3) return false;  // the PICA samples three textures at once
+            rows[taps] = i - 3, weights[taps++] = copy.filter[i];
+        }
+        const bool noAlpha = PE_CONTROL_GET_PIXTYPE(gpu.bp[0x43]) == 0;
+        if (!taps || copyStages(copy, taps, noAlpha) > CombinerProgram::MaxStages) return false;
+        const unsigned width = textureSide(std::min(float(copy.texWidth), copy.width * 400.0f / frame.width));
+        const unsigned height = textureSide(std::min(float(copy.texHeight), copy.height * 240.0f / frame.height));
+        GpuCopy& g = gpuCopies[copy.address];
+        if (g.target && (g.texture.width != width || g.texture.height != height)) {
+            C3D_RenderTargetDelete(g.target);
+            C3D_TexDelete(&g.texture);
+            g.target = nullptr;
+        }
+        if (!g.target) {
+            // Render targets live in VRAM; with none left, the copy is the CPU's after all.
+            if (!C3D_TexInitVRAM(&g.texture, width, height, GPU_RGBA8)) return gpuCopies.erase(copy.address), false;
+            g.target = C3D_RenderTargetCreateFromTex(&g.texture, GPU_TEXFACE_2D, 0, C3D_DEPTHTYPE(-1));
+            if (!g.target) stop("an EFB copy's texture as a render target");
+        }
+        g.width = copy.texWidth, g.height = copy.texHeight, g.readFormat = copyReadFormat(copy.format);
+        if (!scratchReady) {
+            if (!C3D_TexInitVRAM(&scratch, 256, 512, GPU_RGBA8) && !C3D_TexInit(&scratch, 256, 512, GPU_RGBA8))
+                stop("an EFB copy with no memory to take the target into");
+            C3D_TexSetFilter(&scratch, GPU_LINEAR, GPU_LINEAR);
+            C3D_TexSetWrap(&scratch, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+            scratchReady = true;
+        }
+        roomFor(18);
+        flushVertices();
+        // Queued behind the draws so far (inside a frame citro3d's "sync" copy does not wait), as the pass is behind it.
+        C3D_SyncTextureCopy(static_cast<u32*>(target->frameBuf.colorBuf), GX_BUFFER_DIM(TargetTileRow / 16, 0), static_cast<u32*>(scratch.data),
+                            GX_BUFFER_DIM(TargetTileRow / 16, (ScratchTileRow - TargetTileRow) / 16), TargetTileRow * 50, GX_TRANSFER_RAW_COPY(1));
+
+        // Three bands, so the taps that reach past the copy's first and last rows can be clamped as the PE clamps them.
+        const float step = copy.halfScale ? 2.0f : 1.0f, edge = 2.0f / float(copy.texHeight);
+        const float bands[4] = {0, std::min(edge, 0.5f), std::max(1 - edge, 0.5f), 1};
+        const float top = copy.clampTop ? float(copy.y) : 0, bottom = copy.clampBottom ? float(copy.y + copy.height) : frame.height;
+        GxDrawVertex* out = vertices + used;
+        const auto corner = [&](float u, float v) {
+            GxDrawVertex vertex{};
+            vertex.position[0] = 2 * u - 1, vertex.position[1] = 2 * v - 1, vertex.position[2] = -0.5f, vertex.position[3] = 1;
+            for (unsigned tap = 0; tap < taps; ++tap) {
+                const float ex = float(copy.x) + u * float(copy.width);
+                const float ey = std::clamp(float(copy.y) + v * float(copy.height) + float(rows[tap]) * step, top, bottom);
+                // The EFB pixel on the screen, then where the target holds it: the screen turned a quarter, as the LCD is.
+                const float sx = std::clamp(ex * 400.0f / frame.width, 0.5f, 399.5f), sy = std::clamp(ey * 240.0f / frame.height, 0.5f, 239.5f);
+                vertex.texcoord[tap][0] = (240.0f - sy) / 256.0f, vertex.texcoord[tap][1] = (512.0f - sx) / 512.0f;
+            }
+            return vertex;
+        };
+        unsigned n = 0;
+        for (int band = 0; band < 3; ++band) {
+            const GxDrawVertex a = corner(0, bands[band]), b = corner(1, bands[band]), c = corner(1, bands[band + 1]), d = corner(0, bands[band + 1]);
+            for (const GxDrawVertex& v : {a, b, c, a, c, d}) out[n++] = v;
+        }
+
+        C3D_FrameDrawOn(g.target);
+        C3D_BindProgram(&program);
+        C3D_AttrInfo* attributes = C3D_GetAttrInfo();
+        AttrInfo_Init(attributes);
+        AttrInfo_AddLoader(attributes, 0, GPU_FLOAT, 4);
+        AttrInfo_AddLoader(attributes, 1, GPU_UNSIGNED_BYTE, 4);
+        for (int unit = 0; unit < 3; ++unit) AttrInfo_AddLoader(attributes, 2 + unit, GPU_FLOAT, 2);
+        C3D_BufInfo* buffers = C3D_GetBufInfo();
+        BufInfo_Init(buffers);
+        BufInfo_Add(buffers, out, sizeof(GxDrawVertex), 5, 0x43210);
+        copyCombiner(copy, taps, weights, noAlpha);
+        C3D_AlphaTest(false, GPU_ALWAYS, 0);
+        C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
+        C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
+        C3D_CullFace(GPU_CULL_NONE);
+        C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
+        for (int unit = 0; unit < 3; ++unit) C3D_TexBind(unit, &scratch);
+        C3D_DrawArrays(GPU_TRIANGLES, 0, static_cast<int>(n));
+        used += n;
+        C3D_FrameDrawOn(target);
+        noteGpuCopy(gpu, copy);
+        return true;
+    }
+
+    // Once per format and size, the GPU's copy is read back and set against encodeTextureCopy's from the same target,
+    // as drawn and mirrored each way: the log shows the PICA's orientation and channels agree (or how they don't).
+    void noteGpuCopy(const GxCommandProcessor& gpu, const GxTextureCopy& copy) {
+        const u64 kind = u64(copy.format) | u64(copy.intensity) << 4 | u64(copy.halfScale) << 5 | u64(copy.texWidth) << 8 | u64(copy.texHeight) << 24;
+        if (std::find(checkedKinds.begin(), checkedKinds.end(), kind) != checkedKinds.end()) return;
+        checkedKinds.push_back(kind);
+        flushVertices(), pause(), resume();  // the GPU has drawn the copy's quad
+        const Efb efb = efbView(gpu);
+        std::vector<std::uint8_t> bytes(textureCopySize(copy));
+        encodeTextureCopy(copy, efbPixel, &efb, bytes.data());
+        Image expected;
+        std::string error;
+        if (!decodeGxImage({bytes.data(), bytes.size()}, static_cast<GxFormat>(copyReadFormat(copy.format)), copy.texWidth, copy.texHeight, {},
+                           GxPalette::IA8, expected, error))
+            return void(std::fprintf(stderr, "The Wii GPU's drawing: checking a GPU copy: %s\n", error.c_str()));
+        const C3D_Tex& texture = gpuCopies[copy.address].texture;
+        GSPGPU_InvalidateDataCache(texture.data, texture.size);
+        const auto* texels = static_cast<const u32*>(texture.data);
+        const unsigned w = texture.width, h = texture.height;
+        const auto morton = [](unsigned x, unsigned y) {
+            return (x & 1) | (y & 1) << 1 | (x & 2) << 1 | (y & 2) << 2 | (x & 4) << 2 | (y & 4) << 3;
+        };
+        double differ[4] = {};
+        constexpr int Grid = 24;
+        for (int gy = 0; gy < Grid; ++gy) {
+            for (int gx = 0; gx < Grid; ++gx) {
+                const float u = (gx + 0.5f) / Grid, v = (gy + 0.5f) / Grid;
+                const u32 want = expected.pixels[unsigned(v * copy.texHeight) * copy.texWidth + unsigned(u * copy.texWidth)];
+                for (int mirror = 0; mirror < 4; ++mirror) {
+                    const unsigned x = unsigned((mirror & 1 ? 1 - u : u) * w), row = unsigned((mirror & 2 ? v : 1 - v) * h);
+                    const u32 got = texels[((row / 8) * (w / 8) + x / 8) * 64 + morton(x & 7, row & 7)];
+                    for (int shift = 0; shift < 32; shift += 8) differ[mirror] += std::abs(int(want >> shift & 255) - int(got >> shift & 255));
+                }
+            }
+        }
+        for (double& d : differ) d /= Grid * Grid * 4;
+        std::fprintf(stderr, "The Wii GPU's drawing: GPU EFB copy (format %u%s%s, %ux%u in %ux%u) differs from the CPU's by %.1f as drawn, "
+                     "%.1f mirrored across, %.1f upside down, %.1f both\n", copy.format, copy.intensity ? " intensity" : "", copy.halfScale ? " half" : "",
+                     copy.texWidth, copy.texHeight, w, h, differ[0], differ[1], differ[2], differ[3]);
+    }
+
+    // Combiner stages a copy needs: its taps, alpha made one for an EFB without it, then what its format keeps.
+    static unsigned copyStages(const GxTextureCopy& copy, unsigned taps, bool noAlpha) {
+        const std::uint8_t f = copy.format;
+        const bool usesIntensity = f <= 3 || f == 8;
+        return taps + noAlpha + (usesIntensity && copy.intensity ? 3 : f <= 3 || f >= 7 ? 1 : 0) + (f == 4 && !noAlpha);
+    }
+
+    // The taps summed in 64ths, then the format as encodeTextureCopy writes it: the PE's intensity (studio-range Y, by a
+    // dot product) or one channel for every component, or colour; RGB565 reads back with alpha one.
+    void copyCombiner(const GxTextureCopy& copy, unsigned taps, const std::uint8_t* weights, bool noAlpha) {
+        const GPU_TEVSRC units[3] = {GPU_TEXTURE0, GPU_TEXTURE1, GPU_TEXTURE2};
+        const auto byte = [](float value) { return u32(std::lround(std::clamp(value, 0.0f, 1.0f) * 255)); };
+        const auto gray = [&](float value) { const u32 b = byte(value); return b | b << 8 | b << 16 | b << 24; };
+        unsigned stage = 0;
+        for (; stage < taps; ++stage) {
+            C3D_TexEnv* env = C3D_GetTexEnv(int(stage));
+            C3D_TexEnvInit(env);
+            C3D_TexEnvSrc(env, C3D_Both, units[stage], GPU_CONSTANT, stage ? GPU_PREVIOUS : GPU_PRIMARY_COLOR);
+            C3D_TexEnvFunc(env, C3D_Both, stage ? GPU_MULTIPLY_ADD : GPU_MODULATE);
+            C3D_TexEnvColor(env, gray(weights[stage] / 64.0f));
+        }
+        const auto next = [&] {
+            C3D_TexEnv* env = C3D_GetTexEnv(int(stage++));
+            C3D_TexEnvInit(env);
+            C3D_TexEnvSrc(env, C3D_Both, GPU_PREVIOUS, GPU_CONSTANT, GPU_CONSTANT);
+            return env;
+        };
+        const auto opaque = [&] {
+            C3D_TexEnv* env = next();
+            C3D_TexEnvSrc(env, C3D_Alpha, GPU_CONSTANT);
+            C3D_TexEnvColor(env, 0xFF000000);
+        };
+        if (noAlpha) opaque();
+        const std::uint8_t f = copy.format;
+        const bool usesIntensity = f <= 3 || f == 8, pairs = f == 2 || f == 3;
+        if (usesIntensity && copy.intensity) {
+            // DOT3 gives 4 * sum((a - 1/2)(b - 1/2)): with a = c/2 + 1/2 and b = w/2 + 1/2 that is sum(c * w).
+            C3D_TexEnv* half = next();
+            C3D_TexEnvFunc(half, C3D_RGB, GPU_MULTIPLY_ADD);
+            C3D_TexEnvColor(half, gray(0.5f));
+            C3D_TexEnv* dot = next();
+            C3D_TexEnvFunc(dot, C3D_RGB, GPU_DOT3_RGB);
+            C3D_TexEnvColor(dot, byte(0.5f + 66 / 512.0f) | byte(0.5f + 129 / 512.0f) << 8 | byte(0.5f + 25 / 512.0f) << 16);
+            C3D_TexEnv* bias = next();
+            C3D_TexEnvFunc(bias, C3D_Both, GPU_ADD);
+            C3D_TexEnvColor(bias, pairs ? gray(16 / 255.0f) & 0x00FFFFFF : gray(16 / 255.0f));
+            if (!pairs) C3D_TexEnvOpAlpha(bias, GPU_TEVOP_A_SRC_R);
+        } else if (usesIntensity || f >= 7) {
+            const GPU_TEVOP_RGB rgb = f == 7 ? GPU_TEVOP_RGB_SRC_ALPHA : f == 9 ? GPU_TEVOP_RGB_SRC_G : f == 10 ? GPU_TEVOP_RGB_SRC_B : GPU_TEVOP_RGB_SRC_R;
+            const GPU_TEVOP_A alpha = f == 7 || pairs ? GPU_TEVOP_A_SRC_ALPHA : f == 9 ? GPU_TEVOP_A_SRC_G : f == 10 ? GPU_TEVOP_A_SRC_B : GPU_TEVOP_A_SRC_R;
+            C3D_TexEnv* pick = next();
+            C3D_TexEnvOpRgb(pick, rgb);
+            C3D_TexEnvOpAlpha(pick, alpha);
+        }
+        if (f == 4 && !noAlpha) opaque();
+        for (; stage < CombinerProgram::MaxStages; ++stage) C3D_TexEnvInit(C3D_GetTexEnv(int(stage)));
+        C3D_TexEnvBufUpdate(C3D_Both, 0);
     }
 
     // What has been drawn so far, read back from the target once the GPU has finished it; depth (D24S8) moves as raw
@@ -309,6 +553,8 @@ void gxRenderPrimitive(const GxCommandProcessor& gpu, std::uint8_t kind, std::ui
     const PortMemory memory;
     renderer().draw(gpu, kind, format, count, vertices);
 }
+
+void gxRenderCopiesStayOnGpu(bool stay) { sCopiesStayOnGpu = stay; }
 
 std::uint32_t gxRenderPeek(const GxCommandProcessor& gpu, unsigned x, unsigned y, bool depth) {
     const PortMemory memory;

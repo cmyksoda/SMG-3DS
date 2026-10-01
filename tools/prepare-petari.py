@@ -1428,6 +1428,14 @@ adapt("src/JSystem/JUtility/JUTException.cpp", "JSystem/JUtility/JUTException.cp
     ("    panic_f_va(file, line, format, args);\n    va_end();", "    panic_f_va(file, line, format, args);\n    va_end(args);", 1),
     ("    if (isnan(value)) {", "    if (std::isnan(value)) {", 1), ("    } else if (isinf(value)) {", "    } else if (std::isinf(value)) {", 1),
 ])
+# A JUTTexture's image is the GPU's own (the game reads it only by loading the texture), so its copies of the EFB stay
+# in the PICA's memory instead of being encoded texel by texel on the CPU (docs/PORTING.md, "EFB copies on the GPU").
+adapt("src/JSystem/JUtility/JUTTexture.cpp", "JSystem/JUtility/JUTTexture.cpp", [
+    ('#include "JSystem/JUtility/JUTTexture.hpp"\n', '#include "JSystem/JUtility/JUTTexture.hpp"\n#include <smg/GxRender.hpp>\n', 1),
+    ("        GXCopyTex(mImage, clear);\n        GXPixModeSync();",
+     "        smg::gxRenderCopiesStayOnGpu(true);\n        GXCopyTex(mImage, clear);\n        smg::gxRenderCopiesStayOnGpu(false);\n"
+     "        GXPixModeSync();", 1),
+])
 # VPanic walks the PowerPC back chain and takes over the Wii's video; the port's is in source/compat.
 adapt("src/nw4r/db/db_assert.cpp", "nw4r/db/db_assert.cpp", [
     ("        __declspec(weak) void Panic(", "        void VPanic(const char*, int, const char*, va_list, bool);\n\n        void Panic(", 1),

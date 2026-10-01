@@ -580,6 +580,23 @@ it painted its colour over the file select's planets. A compare whose c is zero 
 exactly. One the PICA can't decide adds nothing and is counted as an approximation: the effect is left out rather
 than spread over the screen. 27 of the disc's 7,780 materials still need a real comparison.
 
+**EFB copies on the GPU.** Encoding a copy texel by texel was the port's largest cost: in the file-select level the
+game copies the whole screen every frame (`CaptureScreenDirector`'s RGB565 capture, `ScreenAlphaCapture`'s A8 one for
+`MR::fillSilhouetteColor`), and a sampling profile of the title put 55% of the 3DS's CPU in the encoder and in decoding
+its result back for the PICA, at 1 to 4 frames a second. Every such copy goes through `JUTTexture::capture`, whose
+image the game only ever loads as a texture, so that function (adapted) has the renderer keep its copies on the PICA:
+the target is taken whole into a 256x512 texture by a raw texture copy (its rows of tiles regapped from 240 to 256
+pixels), and a quad draws the copy's rectangle into a VRAM texture of the copy's own (about screen resolution), its
+combiner summing up to three of the vertical filter's taps and turning the result into what the copy format's read
+gives: intensity as the PE's studio-range Y (a DOT3 stage), one channel for every component, or colour with alpha one
+for RGB565. A draw that binds the destination address gets that texture. The Wii's memory is not written, so the CPU
+never sees these copies; every other copy (the Message Board photo, `captureDolTexture`) is encoded into memory as
+before, which also forgets any GPU copy at its address. The first copy of each kind is read back and set against the
+CPU's encoding of the same pixels (the log says by how much, and that a mirrored or upside-down reading would differ
+more). Not reproduced: the EFB pixel formats' reduced precision, and filters with more than three taps (those copies
+stay the CPU's). Inside a frame citro3d's "sync" transfers only queue, so `readEfb` (CPU copies, `GXPeekZ`/`ARGB`)
+ends the frame without showing it, reads, and begins again: on hardware the old readback ran before the GPU had drawn.
+
 **More byte-order traps.** Data the GPU reads must hold the Wii's bytes even when the source wrote it as wider
 integers: `MainLoopFramework`'s `clearZTexData` (Z24X8 texels as `u32`s) cleared every frame to near on ARM, and every
 3D draw then failed its depth test. The SDK's GX read `GXColor` arguments through `u32` casts (TEV, konst, fog, light
