@@ -27,17 +27,6 @@ void ARCReadDir() { unported("ARCReadDir"); }
 void LCDisable() { unported("LCDisable"); }
 void LCEnable() { unported("LCEnable"); }
 // NAND
-void NANDCheck() { unported("NANDCheck"); }
-void NANDClose() { unported("NANDClose"); }
-void NANDCreate() { unported("NANDCreate"); }
-void NANDDelete() { unported("NANDDelete"); }
-void NANDGetHomeDir() { unported("NANDGetHomeDir"); }
-void NANDGetLength() { unported("NANDGetLength"); }
-void NANDInitBanner() { unported("NANDInitBanner"); }
-void NANDMove() { unported("NANDMove"); }
-void NANDOpen() { unported("NANDOpen"); }
-void NANDRead() { unported("NANDRead"); }
-void NANDWrite() { unported("NANDWrite"); }
 // OS
 void OSFillFPUContext() { unported("OSFillFPUContext"); }
 void OSGetCurrentContext() { unported("OSGetCurrentContext"); }

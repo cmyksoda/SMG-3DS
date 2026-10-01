@@ -295,7 +295,7 @@ if(NINTENDO_3DS)
       list(APPEND PETARI_BUILT_ELSEWHERE "${source}")
     endforeach()
   endforeach()
-  set(PETARI_GAME_SOURCES source/compat/Sdk.cpp source/compat/GameScene.cpp source/compat/HomeButtonMenu.cpp source/compat/OsThreads.cpp source/compat/OsMemory.cpp source/compat/GameHeap.cpp source/compat/Dvd.cpp source/compat/Video.cpp source/compat/OsReset.cpp source/compat/GxRender.cpp source/compat/SystemConfig.cpp source/compat/Wpad.cpp source/compat/NativeResources.cpp source/compat/GxFifo.cpp source/compat/Nwc24.cpp source/compat/WiiAudio.cpp source/compat/Nw4rDb.cpp source/compat/DolTables.cpp source/compat/Kpad.cpp
+  set(PETARI_GAME_SOURCES source/compat/Sdk.cpp source/compat/Nand.cpp source/compat/GameScene.cpp source/compat/HomeButtonMenu.cpp source/compat/OsThreads.cpp source/compat/OsMemory.cpp source/compat/GameHeap.cpp source/compat/Dvd.cpp source/compat/Video.cpp source/compat/OsReset.cpp source/compat/GxRender.cpp source/compat/SystemConfig.cpp source/compat/Wpad.cpp source/compat/NativeResources.cpp source/compat/GxFifo.cpp source/compat/Nwc24.cpp source/compat/WiiAudio.cpp source/compat/Nw4rDb.cpp source/compat/DolTables.cpp source/compat/Kpad.cpp
     "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/LiveActor/RailRiderCamera.cpp"
     "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/LiveActor/LiveActorSound.cpp")
   foreach(source ${PETARI_GAME_CANDIDATES})
