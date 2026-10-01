@@ -204,7 +204,27 @@ void audioArchive() {
 }
 } // namespace
 
+// A sound animation as Balloonfish.arc's appearance.bas has it: one sound, ID 0x0009020B at frame 80, pitch 1.
+void soundAnimation() {
+    Bytes b;
+    b.push_back(0), b.push_back(1), b.push_back(0), b.push_back(0), put32(b, 0);
+    float values[3] = {80.0f, 80.0f, 1.0f};
+    put32(b, 0x0009020B);
+    for (float v : values) { std::uint32_t w; std::memcpy(&w, &v, 4); put32(b, w); }
+    put32(b, 0x80);  // plays at intervals
+    for (unsigned byte : {0x7Fu, 0u, 0u, 0x40u, 0u, 0u, 0u, 0u}) b.push_back(static_cast<std::uint8_t>(byte));
+    put32(b, 0);
+    check(!smg::nativeSoundAnimation(b.data(), b.size()), "a sound animation turns native");
+    float on, pitch;
+    std::memcpy(&on, b.data() + 8 + 4, 4), std::memcpy(&pitch, b.data() + 8 + 0xC, 4);
+    check(n16(b.data()) == 1 && n32(b.data() + 8) == 0x0009020B && on == 80.0f && pitch == 1.0f && n32(b.data() + 8 + 0x10) == 0x80 &&
+              b[8 + 0x14] == 0x7F && b[8 + 0x17] == 0x40, "its count, sound ID, frames, pitch and flags read natively; its bytes stay");
+    Bytes cut(b.begin(), b.begin() + 20);
+    check(smg::nativeSoundAnimation(cut.data(), cut.size()) != nullptr, "a cut-off one is refused");
+}
+
 int runAudioDataTests() {
+    soundAnimation();
     audioArchive();
     speaker();
     meTable();

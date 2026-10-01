@@ -22,6 +22,9 @@ const char* nativeRemixSequence(std::uint8_t* data, std::size_t size);
 const char* nativeSpeakerTable(std::uint8_t* data, std::size_t size);
 // Its waves (.csw, SpkWave): the file's size, a count, offsets, then per wave its byte size, loop points and PCM16.
 const char* nativeSpeakerWaves(std::uint8_t* data, std::size_t size);
+// A sound animation (an actor archive's .bas, JAUSoundAnimation): a count, a control word the game leaves null, then
+// 0x20-byte sounds (a sound ID, note-on and note-off frames, a pitch, flags, bytes, a word).
+const char* nativeSoundAnimation(std::uint8_t* data, std::size_t size);
 // JAudio2's audio archive (SMR.szs, read by JAUAudioArcInterpreter): its command stream stays big-endian for the
 // interpreter, and what each command points at turns native for its parser: the sound table (BST), sound names
 // (BSTN), sequence collection (BSC), wave systems (WSYS) and instrument banks (IBNK, version 1). Sequences and wave

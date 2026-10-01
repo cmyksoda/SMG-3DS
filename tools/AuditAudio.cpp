@@ -4,9 +4,11 @@
 #include <JSystem/JAudio2/JASBNKParser.hpp>
 #include <JSystem/JAudio2/JASWSParser.hpp>
 #include <JSystem/JAudio2/JAUSeqCollection.hpp>
+#include <JSystem/JAudio2/JAUSoundAnimator.hpp>
 #include <JSystem/JAudio2/JAUSoundTable.hpp>
 #include <smg/Archive.hpp>
 #include <smg/AudioData.hpp>
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -371,6 +373,46 @@ void smallFiles(Audit& a, const fs::path& path, const char* (*convert)(std::uint
         ++a.counts[suffix];
     }
 }
+// Sound animations (.bas) in every actor's archive, read back through JAUSoundAnimation as the animator reads them.
+void soundAnimations(Audit& a, const fs::path& root) {
+    std::vector<fs::path> archives;
+    for (const auto& entry : fs::recursive_directory_iterator(root))
+        if (entry.is_regular_file() && entry.path().extension() == ".arc") archives.push_back(entry.path());
+    std::sort(archives.begin(), archives.end());
+    for (const auto& path : archives) {
+        const Bytes archive = expand(readFile(path));
+        std::vector<smg::ArchiveEntry> entries;
+        std::string error;
+        if (!smg::indexRarc({archive.data(), archive.size()}, entries, error)) continue;
+        for (const auto& entry : entries) {
+            if (entry.path.size() < 4 || entry.path.substr(entry.path.size() - 4) != ".bas") continue;
+            const std::uint8_t* original = archive.data() + entry.offset;
+            Bytes copy(original, original + entry.size);
+            a.where = path.filename().string() + " " + entry.path;
+            ++a.files;
+            if (const char* why = smg::nativeSoundAnimation(copy.data(), copy.size())) {
+                ++a.refused;
+                std::printf("%s: refused: %s\n", a.where.c_str(), why);
+                continue;
+            }
+            a.before = original, a.after = copy.data();
+            // JAUSoundAnimation holds a pointer, so its records sit at 8 only where pointers are 32-bit; read them there.
+            const auto& animation = *reinterpret_cast<const JAUSoundAnimation*>(copy.data());
+            const auto* sounds = reinterpret_cast<const JAUSoundAnimationSound*>(copy.data() + 8);
+            a.half(animation.mNumSounds, "sound count");
+            for (unsigned i = 0; i < animation.mNumSounds; ++i) {
+                const JAUSoundAnimationSound& sound = sounds[i];
+                a.same(u32(sound.getSoundID()), be32(original + a.at(&sound)), "sound ID");
+                a.word(sound.mNoteOnTime, "note-on frame"), a.word(sound.mNoteOffTime, "note-off frame"), a.word(sound.mBasePitch, "pitch");
+                a.word(sound.mFlags, "flags"), a.byte(sound.mBaseVolume, "volume"), a.word(sound._1C, "last word");
+                a.plausible(sound.getSoundID().getSectionID() < 3 && std::isfinite(sound.mNoteOnTime) && sound.mNoteOnTime >= -1 &&
+                                std::isfinite(sound.mBasePitch) && sound.mBasePitch > 0 && sound.mBasePitch < 16,
+                            "a sound's section, frame and pitch");
+            }
+            ++a.counts[".bas"];
+        }
+    }
+}
 } // namespace
 
 int auditAudio(const fs::path& root) {
@@ -383,6 +425,7 @@ int auditAudio(const fs::path& root) {
     smallFiles(a, root / "AudioRes/Info/JaiRemixSeq.arc", smg::nativeRemixSequence, ".brs");
     smallFiles(a, root / "AudioRes/SpkRes/SpkRes.arc", smg::nativeSpeakerTable, ".bct");
     smallFiles(a, root / "AudioRes/SpkRes/SpkRes.arc", smg::nativeSpeakerWaves, ".csw");
+    soundAnimations(a, root);
     for (const auto& [what, count] : a.counts) std::printf("  %s: %zu\n", what.c_str(), count);
     std::printf("%zu files, %zu refused, %zu fields compared, %zu differ, %zu implausible\n", a.files, a.refused, a.fields, a.wrong,
                 a.implausible);

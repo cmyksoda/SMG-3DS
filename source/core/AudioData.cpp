@@ -5,6 +5,7 @@
 
 namespace smg {
 namespace {
+std::uint32_t be16(const std::uint8_t* at) { return std::uint32_t(at[0]) << 8 | at[1]; }
 std::uint32_t be32(const std::uint8_t* at) { return std::uint32_t(at[0]) << 24 | std::uint32_t(at[1]) << 16 | std::uint32_t(at[2]) << 8 | at[3]; }
 void swap16(std::uint8_t* at) { std::swap(at[0], at[1]); }
 void swap32(std::uint8_t* at) { std::swap(at[0], at[3]), std::swap(at[1], at[2]); }
@@ -83,6 +84,19 @@ const char* nativeSpeakerTable(std::uint8_t* data, std::size_t size) {
     for (int i = 0; i < 4; ++i) swap32(data + 4 * i);
     for (std::size_t i = 0; i < count; ++i) swap16(data + entries + 8 * i), swap16(data + entries + 8 * i + 4), swap16(data + entries + 8 * i + 6);
     for (std::size_t i = 0; i < count; ++i) swap32(data + names + 4 * i);
+    return nullptr;
+}
+
+const char* nativeSoundAnimation(std::uint8_t* data, std::size_t size) {
+    if (size < 8) return "is shorter than its header";
+    const std::size_t count = be16(data);
+    if (!fits(8, 0x20 * count, size)) return "has more sounds than it holds";
+    if (be32(data + 4) != 0) return "has a control the game would call through";
+    swap16(data), swap32(data + 4);
+    for (std::size_t i = 0; i < count; ++i) {
+        std::uint8_t* sound = data + 8 + 0x20 * i;
+        for (int field : {0x0, 0x4, 0x8, 0xC, 0x10, 0x1C}) swap32(sound + field);
+    }
     return nullptr;
 }
 
