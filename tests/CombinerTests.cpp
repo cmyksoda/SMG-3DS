@@ -70,6 +70,8 @@ Rgba gx(const smg::ModelMaterial& m, const Inputs& in) {
             float v = op == 1 ? d - lerp : d + lerp;
             v += bias == 1 ? 0.5f : bias == 2 ? -0.5f : 0;
             v *= scale == 1 ? 2 : scale == 2 ? 4 : scale == 3 ? 0.5f : 1;
+            // Compares by component (RGB8, A8) only; the R8, GR16 and BGR24 ones compare across components.
+            if (op >= 8) v = d + ((op & 1 ? a == b : a > b) ? c : 0);
             return clamp ? std::clamp(v, 0.0f, 1.0f) : std::clamp(v, -1024 / 255.0f, 1023 / 255.0f);
         };
         Rgba out;
@@ -329,6 +331,30 @@ void previousTwice(std::mt19937& rng) {
     }
 }
 
+// FallOutFieldDraw's fill: alpha is TEXA > K0.a ? A0 : 0, and with A0 zero the alpha test after it passes nothing.
+void compareWithoutC(std::mt19937& rng) {
+    smg::ModelMaterial m;
+    m.textures[0] = 0;
+    m.tevStageCount = 1;
+    m.tevColors[0] = {0.5f, 0, 0, 0};
+    m.konstColors[0] = {0, 0, 0, 1 / 255.0f};
+    auto& s = m.stages[0];
+    const std::uint8_t color[4]{2, 15, 15, 15}, alpha[4]{4, 6, 1, 7};
+    std::copy(color, color + 4, s.colorIn);
+    std::copy(alpha, alpha + 4, s.alphaIn);
+    s.alphaOp = 14;  // GX_TEV_COMP_A8_GT
+    s.konstAlpha = 0x1c;
+    s.texMap = s.texCoord = 0;
+    s.channel = 0xff;
+    const auto program = smg::compileTev(m);
+    check(program.exact, "a compare that adds nothing translates exactly");
+    for (int i = 0; i < 200; ++i) {
+        const auto in = randomInputs(rng);
+        const Rgba out = pica(program, in);
+        check(same(gx(m, in), out) && out[3] == 0, "and leaves alpha zero, as GX does");
+    }
+}
+
 void randomMaterials(std::mt19937& rng) {
     std::uniform_int_distribution<int> colorInput(0, 15), alphaInput(0, 7), small(0, 3), stageCount(1, 4), selection(0, 0x1f);
     std::uniform_real_distribution<float> unit(0, 1), wide(-1.5f, 2.0f);
@@ -392,6 +418,7 @@ int runCombinerTests() {
     diskGardenGrass(rng);
     marioEyeLid(rng);
     previousTwice(rng);
+    compareWithoutC(rng);
     randomMaterials(rng);
     std::printf("%u TEV combiner checks passed\n", checks);
     return 0;

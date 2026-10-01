@@ -211,7 +211,12 @@ struct Compiler {
         std::vector<Op> ops;
         const Arg temp = kind(Arg::Temp, alpha ? CombineOperand::Alpha : CombineOperand::Color);
         const bool subtract = op == 1;
-        if (op > 1) approximate("compare op"); // compare modes
+        if (op > 1) {
+            // A compare adds c or nothing to d, so without c it is d whatever it finds. The PICA can't compare: else
+            // nothing is added, leaving an effect out rather than spreading it over the screen.
+            if (!zero(c)) approximate("compare op");
+            return build(kind(Arg::Zero), kind(Arg::Zero), kind(Arg::Zero), d, 0, 0, 0, alpha);
+        }
         Form form;
         Arg x, y;
         if (zero(c) || (a == b)) { form = Single; x = a; }
