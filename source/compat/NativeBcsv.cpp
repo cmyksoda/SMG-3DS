@@ -138,10 +138,18 @@ const char* smgNativeBcsvProblem(const void* table) {
 
 const void* smgNativeBcsv(void* table) {
     auto* header = static_cast<u32*>(table);
+    // A table repacked once says so in its own header, then where its copy is: every later attach takes that copy, as
+    // the Wii's took the table itself, instead of a new one each time (each Toad's animation table filled a scene heap).
+    constexpr u32 RepackedMark = 0x534D4752;  // "SMGR", plausible in neither byte order
+    const void* copy;
+    if (header[0] == RepackedMark) return std::memcpy(&copy, header + 2, sizeof copy), copy;
     if (plausible(header[0], header[1], header[2], header[3])) return table;
     if (const char* problem = smgNativeBcsvProblem(table)) {
-        if (std::strstr(problem, "repacking")) return repacked(static_cast<const u8*>(table));
-        stop(problem);
+        if (!std::strstr(problem, "repacking")) stop(problem);
+        copy = repacked(static_cast<const u8*>(table));
+        header[0] = RepackedMark;
+        std::memcpy(header + 2, &copy, sizeof copy);
+        return copy;
     }
     Span spans[64];
     u32 spanCount;

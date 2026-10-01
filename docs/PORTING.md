@@ -421,7 +421,9 @@ structures native in place where original code first reads them, recognising dat
 archives are first (at `JKRMemArchive`'s mount); `JKRArchive::SDIFileEntry`'s `mFlag:8 / mNameOffset:24`
 also swaps declaration order, since Metrowerks fills bitfields from the top and GCC on ARM from the bottom.
 BCSV tables turn at `JMapInfo::attach` (in place, or as a repacked copy where ARM can't load a field where it
-sits). Since session 4, `smg::SwapPlan` (`include/smg/SwapPlan.hpp`) is the shared tool for the rest: a converter
+sits). A table repacked once marks its original's header with its copy's address, so every later attach
+takes the same copy, as the Wii's attached the table itself; before that each attach made a new copy, and the Star
+Festival's Toads, each attaching their animation table, filled a 20 MB scene heap. Since session 4, `smg::SwapPlan` (`include/smg/SwapPlan.hpp`) is the shared tool for the rest: a converter
 walks a file exactly as its reader does and plans every field once (kept bytes, half or word); bytes two readers
 would take differently, fields past the end, or words ARM can't load where they sit fail the plan, and the file stays
 as it was with the reason. Layouts (BRLYT, BRLAN, TPL, BRFNT: `source/core/Layout.cpp`, turned where

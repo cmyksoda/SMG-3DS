@@ -1,4 +1,5 @@
 #include <smg/Bcsv.hpp>
+#include <smg/NativeResources.hpp>
 #include <JSystem/JGadget/hashcode.hpp>
 #include <cmath>
 #include <cstdio>
@@ -79,6 +80,14 @@ int runBcsvTests() {
     check(packedAttached.attach(packedDisc.data()) && packedAttached.mData!=reinterpret_cast<const JMapData*>(packedDisc.data()),"odd-stride table attaches as a copy");
     check(packedAttached.getValue(1,"flag",&integer) && integer==7 && packedAttached.getValue(1,"speed",&real) && real==-2.5f,"repacked copy reads as the port's loader");
     check(packedAttached.getValue(1,"name",&string) && std::strcmp(string,"BCD")==0,"repacked copy keeps its strings");
+    // Every later attach takes that same copy: the Wii allocated nothing here, and a scene attaches a table per actor.
+    static unsigned copiesMade=0;
+    void* (*const allocator)(const void*,u32)=smgBcsvAllocator;
+    smgBcsvAllocator=[](const void*,u32 size){ ++copiesMade; return std::malloc(size); };
+    JMapInfo attachedAgain;
+    check(attachedAgain.attach(packedDisc.data()) && attachedAgain.mData==packedAttached.mData && copiesMade==0,"a repacked table is repacked once");
+    check(attachedAgain.getValue(1,"speed",&real) && real==-2.5f,"the second attach reads the first copy");
+    smgBcsvAllocator=allocator;
     std::free(const_cast<JMapData*>(packedAttached.mData));
     // The game's own loading hands JMapInfo the disc's big-endian table; attaching turns it native in place.
     std::vector<std::uint32_t> disc((bytes.size()+3)/4);
