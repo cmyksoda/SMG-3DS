@@ -1,13 +1,21 @@
 // resource_audit FILES --j3d: every BMD, BDL and BMT on the disc turned native, then read back through J3D's own
 // structs (the joint, shape and material init data, texture matrices, fog, ResTIMG, GX's vertex lists) as its loader
-// and factories read them, and compared with a big-endian read of the original.
+// and factories read them, and compared with a big-endian read of the original. BTI textures and JParticle containers
+// (Particles.jpc, through JParticle's block structs) too.
 #include <JSystem/J3DGraphAnimator/J3DAnimation.hpp>
 #include <JSystem/J3DGraphLoader/J3DJointFactory.hpp>
 #include <JSystem/J3DGraphLoader/J3DMaterialFactory.hpp>
 #include <JSystem/J3DGraphLoader/J3DShapeFactory.hpp>
+#include <JSystem/JParticle/JPABaseShape.hpp>
+#include <JSystem/JParticle/JPAChildShape.hpp>
+#include <JSystem/JParticle/JPADynamicsBlock.hpp>
+#include <JSystem/JParticle/JPAExTexShape.hpp>
+#include <JSystem/JParticle/JPAExtraShape.hpp>
+#include <JSystem/JParticle/JPAFieldBlock.hpp>
 #include <JSystem/JUtility/JUTTexture.hpp>
 #include <smg/Archive.hpp>
 #include <smg/J3D.hpp>
+#include <smg/Jpa.hpp>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -417,6 +425,84 @@ void bti(Audit& a, const std::string& where, const std::uint8_t* data, std::size
     ++a.counts["BTI textures"];
 }
 
+// A JPAC 2-10 container: every block read through its JParticle struct, as the loader and the blocks take them.
+void jpc(Audit& a, const std::string& where, const std::uint8_t* data, std::size_t size) {
+    Bytes copy(data, data + size);
+    a.where = where;
+    ++a.files;
+    if (const char* why = smg::nativeJpc(copy.data(), copy.size())) {
+        ++a.refused;
+        std::printf("%s: refused: %s\n", where.c_str(), why);
+        return;
+    }
+    a.before = data, a.after = copy.data();
+    const std::uint8_t* c = copy.data();
+    const auto u32 = [&](std::size_t at) { std::uint32_t v; std::memcpy(&v, c + at, 4); return v; };
+    const auto u16 = [&](std::size_t at) { std::uint16_t v; std::memcpy(&v, c + at, 2); return v; };
+    a.plausible(u32(4) == tag("2-10"), "the loader's version check");
+    std::size_t at = 0x10;
+    for (unsigned r = 0, resources = u16(8); r < resources; ++r) {
+        const unsigned blocks = u16(at + 2), textureTable = c[at + 6];
+        a.same(u16(at), be16(data + at), "a resource's user index"), a.same(blocks, be16(data + at + 2), "its block count");
+        at += 8;
+        for (unsigned b = 0; b < blocks; ++b) {
+            const std::uint32_t kind = u32(at), length = u32(at + 4);
+            a.plausible(length >= 8 && at + length <= size, "a block's size");
+            if (kind == tag("BEM1")) {
+                const auto& d = *reinterpret_cast<const JPADynamicsBlockData*>(c + at);
+                a.field(d.mFlags, "dynamics flags"), a.field(d.mResUserWork, "user work"), a.field(d.mEmitterScl.z, "emitter scale");
+                a.field(d.mEmitterDir.x, "emitter direction"), a.field(d.mInitialVelOmni, "omni velocity"), a.field(d.mRate, "rate");
+                a.field(d.mMoment, "moment"), a.field(d.mEmitterRot.z, "emitter rotation"), a.field(d.mMaxFrame, "max frame");
+                a.field(d.mLifeTime, "life time"), a.field(d.mDivNumber, "divisions"), a.field(d.mRateStep, "rate step");
+                ++a.counts["JPA dynamics blocks"];
+            } else if (kind == tag("BSP1")) {
+                const auto& d = *reinterpret_cast<const JPABaseShapeData*>(c + at);
+                a.field(d.mFlags, "shape flags"), a.field(d.mClrPrmAnmOffset, "colour key offset"), a.field(d.mBaseSizeY, "base size");
+                a.field(d.mBlendModeCfg, "blend config"), a.field(d.mClrAnmFrmMax, "colour frames"), a.field(d.mClrEnv.a, "env alpha");
+                if (d.mClrFlg & 2)
+                    for (unsigned k = 0; k < d.mClrPrmKeyNum; ++k)
+                        a.field(reinterpret_cast<const JPAClrAnmKeyData*>(c + at + d.mClrPrmAnmOffset)[k].index, "a colour key's frame");
+                ++a.counts["JPA base shapes"];
+            } else if (kind == tag("ESP1")) {
+                const auto& d = *reinterpret_cast<const JPAExtraShapeData*>(c + at);
+                a.field(d.mScaleOutRandom, "scale randomness"), a.field(d.mScaleAnmCycleY, "scale cycle"), a.field(d.mRotateDirection, "rotation");
+                ++a.counts["JPA extra shapes"];
+            } else if (kind == tag("SSP1")) {
+                const auto& d = *reinterpret_cast<const JPAChildShapeData*>(c + at);
+                a.field(d.mInheritRGB, "inherited colour"), a.field(d.mTiming, "child timing"), a.field(d.mRate, "child rate"), a.field(d.mRotSpeed, "rotation speed");
+                ++a.counts["JPA child shapes"];
+            } else if (kind == tag("ETX1")) {
+                const auto& d = *reinterpret_cast<const JPAExTexShapeData*>(c + at);
+                a.field(d.mFlags, "extra texture flags"), a.field(d.mIndTexMtx[1][2], "indirect matrix");
+                ++a.counts["JPA extra textures"];
+            } else if (kind == tag("FLD1")) {
+                const auto& d = *reinterpret_cast<const JPAFieldBlockData*>(c + at);
+                a.field(d.mFlags, "field flags"), a.field(d.mDir.y, "field direction"), a.field(d.mDisTime, "field end"), a.field(d.mCycle, "field cycle");
+                ++a.counts["JPA fields"];
+            } else if (kind == tag("KFA1")) {
+                for (unsigned k = 0; k < 4u * c[at + 9]; ++k) a.same(u32(at + 0xC + 4 * k), be32(data + at + 0xC + 4 * k), "a key frame value");
+                ++a.counts["JPA key blocks"];
+            } else if (kind == tag("TDB1")) {
+                for (unsigned k = 0; k < textureTable; ++k) a.same(u16(at + 8 + 2 * k), be16(data + at + 8 + 2 * k), "a texture number");
+                ++a.counts["JPA texture tables"];
+            } else {
+                a.plausible(false, "a block's tag");
+            }
+            at += length;
+        }
+    }
+    at = u32(0xC);
+    for (unsigned t = 0, textures = u16(0xA); t < textures; ++t) {
+        const auto& timg = *reinterpret_cast<const ResTIMG*>(c + at + 0x20);
+        a.plausible(u32(at) == tag("TEX1"), "a texture's tag");
+        a.field(timg.mWidth, "texture width"), a.field(timg.mHeight, "texture height"), a.field(timg.mImageDataOffset, "image offset");
+        a.plausible(timg.mWidth && timg.mWidth <= 1024 && timg.mHeight && timg.mHeight <= 1024, "a particle texture's size");
+        at += u32(at + 4);
+        ++a.counts["JPA textures"];
+    }
+    ++a.counts["JPC particle containers"];
+}
+
 std::string lower(std::string s) {
     for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     return s;
@@ -446,6 +532,8 @@ int auditJ3D(const fs::path& root) {
             const std::string ext = name.size() > 4 ? name.substr(name.size() - 4) : "";
             if ((ext == ".bmd" || ext == ".bdl" || ext == ".bmt") && entry.size >= 8 && std::memcmp(source.data + entry.offset, "J3D2", 4) == 0)
                 auditFile(a, fs::relative(path, root).string() + " " + entry.path, source.data + entry.offset, entry.size);
+            if (ext == ".jpc" && entry.size >= 0x10)
+                jpc(a, fs::relative(path, root).string() + " " + entry.path, source.data + entry.offset, entry.size);
             if (ext == ".bti" && entry.size >= 0x20)
                 bti(a, fs::relative(path, root).string() + " " + entry.path, source.data + entry.offset, entry.size);
             if (entry.size >= 0x28 && std::memcmp(source.data + entry.offset, "J3D1", 4) == 0)

@@ -1,4 +1,5 @@
 #pragma once
+#include <smg/SwapPlan.hpp>
 #include <cstddef>
 #include <cstdint>
 
@@ -11,6 +12,8 @@ const char* nativeJ3DModel(std::uint8_t* data, std::size_t size);
 // A J3D animation file (BCK, BTK, BRK, BPK key animations; BTP, BVA full ones) turned native in place for
 // J3DAnmLoaderDataBase and the animation objects that read its tables and values every frame.
 const char* nativeJ3DAnimation(std::uint8_t* data, std::size_t size);
+// A ResTIMG header (0x20) at `at`, planned field by field; its texels and palette stay the GPU's.
+void planResTimg(SwapPlan& plan, std::size_t at);
 // A BTI texture (a ResTIMG header, then the GPU's image and palette) with its header turned native.
 const char* nativeBti(std::uint8_t* data, std::size_t size);
 } // namespace smg
