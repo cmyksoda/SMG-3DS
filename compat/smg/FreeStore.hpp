@@ -33,5 +33,6 @@ public:
     ~PortMemory();
     PortMemory(const PortMemory&) = delete;
     PortMemory& operator=(const PortMemory&) = delete;
+    static bool active();  // on this thread
 };
 } // namespace smg

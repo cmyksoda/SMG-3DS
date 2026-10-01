@@ -38,6 +38,8 @@ add_library(petari_core STATIC
   source/compat/NativeBcsv.cpp
   source/compat/GameRandom.cpp
   source/compat/Os.cpp
+  source/compat/PortMemory.cpp
+  source/core/SwapPlan.cpp
   "${CMAKE_CURRENT_BINARY_DIR}/petari/RVL_SDK/gd/GDBase.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/MathUtil.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/MtxUtil.cpp"
@@ -56,7 +58,7 @@ add_library(petari_core STATIC
   "${PETARI}/src/Game/System/WPadButton.cpp"
   "${PETARI}/src/Game/System/WPadStick.cpp"
   "${PETARI}/src/Game/Util/TriggerChecker.cpp")
-target_include_directories(petari_core PUBLIC compat)
+target_include_directories(petari_core PUBLIC compat include)
 # Upstream headers are compiled as they are; their warnings are not ours to fail on.
 target_include_directories(petari_core SYSTEM PUBLIC "${CMAKE_CURRENT_BINARY_DIR}/petari/include" "${PETARI}/include"
   "${PETARI}/libs/RVL_SDK/include" "${PETARI}/libs/JSystem/include" "${PETARI}/libs/nw4r/include"
@@ -236,7 +238,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
 add_library(smg_platform STATIC
   source/core/Input.cpp source/core/Motion.cpp source/core/Settings.cpp source/core/Session.cpp
   source/core/Archive.cpp source/core/Bcsv.cpp source/core/Model.cpp source/core/Texture.cpp source/core/Combiner.cpp
-  source/core/Stage.cpp source/core/StageGravity.cpp source/core/Mesh.cpp source/core/Etc1.cpp source/core/Kcl.cpp source/core/StageCollision.cpp source/core/StageLight.cpp source/core/Animation.cpp source/core/Actors.cpp source/core/J3DImage.cpp source/core/Dol.cpp source/core/GxCommands.cpp source/core/Bmg.cpp source/core/Kpad.cpp source/core/Layout.cpp source/core/GxDraw.cpp source/core/WiiDsp.cpp source/core/AudioData.cpp source/core/SwapPlan.cpp)
+  source/core/Stage.cpp source/core/StageGravity.cpp source/core/Mesh.cpp source/core/Etc1.cpp source/core/Kcl.cpp source/core/StageCollision.cpp source/core/StageLight.cpp source/core/Animation.cpp source/core/Actors.cpp source/core/J3DImage.cpp source/core/Dol.cpp source/core/GxCommands.cpp source/core/Bmg.cpp source/core/Kpad.cpp source/core/Layout.cpp source/core/GxDraw.cpp source/core/WiiDsp.cpp source/core/AudioData.cpp)
 target_include_directories(smg_platform PUBLIC include)
 target_link_libraries(smg_platform PUBLIC petari_scene petari_anim)
 target_compile_options(smg_platform PRIVATE -Wall -Wextra -Werror)

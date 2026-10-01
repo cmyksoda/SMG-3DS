@@ -38,6 +38,11 @@ public:
     void halves(std::size_t at, std::size_t count) {
         for (std::size_t i = 0; i < count; ++i) half(at + 2 * i);
     }
+    // An integer half its reader loads on its own, wherever the file put it: ARMv6 loads halves from any address with
+    // unaligned access on, as the 3DS runs and devkitARM's -munaligned-access assumes. Words and floats can't.
+    void looseHalves(std::size_t at, std::size_t count) {
+        for (std::size_t i = 0; i < count; ++i) set(at + 2 * i, Half0), set(at + 2 * i + 1, Half1);
+    }
     void word(std::size_t at) {
         if (at % 4) fail("has a word at 0x%zx that ARM cannot load there", at);
         set(at, Word0), set(at + 1, Word1), set(at + 2, Word2), set(at + 3, Word3);

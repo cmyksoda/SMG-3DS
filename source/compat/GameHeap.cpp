@@ -11,10 +11,8 @@
 extern "C" bool smgInWiiArena(const void* memory);
 
 namespace {
-thread_local int sPortDepth = 0;
-
 void* allocate(std::size_t size) {
-    if (JKRHeap::sCurrentHeap && sPortDepth == 0) return JKRHeap::alloc(size, 4, nullptr);
+    if (JKRHeap::sCurrentHeap && !smg::PortMemory::active()) return JKRHeap::alloc(size, 4, nullptr);
     if (void* memory = std::malloc(size ? size : 1)) return memory;
     std::abort();
 }
@@ -34,9 +32,6 @@ void* besideInItsHeap(const void* beside, u32 size) {
 }
 const bool sBcsvAllocatorSet = (smgBcsvAllocator = besideInItsHeap, true);
 } // namespace
-
-smg::PortMemory::PortMemory() { ++sPortDepth; }
-smg::PortMemory::~PortMemory() { --sPortDepth; }
 
 void* operator new(std::size_t size) { return allocate(size); }
 void* operator new[](std::size_t size) { return allocate(size); }
