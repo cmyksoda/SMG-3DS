@@ -3,6 +3,7 @@
 // written anew here over the port's memory.
 #include <smg/WiiDsp.hpp>
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 
 static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__, "voice blocks are read as a little-endian CPU wrote them");
@@ -433,7 +434,9 @@ void WiiDsp::addVoice(unsigned id) {
             if (Buffer* to = bufferFor(destination)) {
                 v.w[Channels + 4 * c + 2] = static_cast<u16>(addWithRamp(*to, input, shl16(current), step) >> 16);
             } else {
-                note("a voice sent to a mixing buffer the port doesn't know");
+                if (!unknownBuffer_[0])
+                    std::snprintf(unknownBuffer_, sizeof unknownBuffer_, "a voice sent to mixing buffer 0x%04X", destination);
+                note(unknownBuffer_);
             }
         }
     }

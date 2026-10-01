@@ -58,6 +58,7 @@ private:
     Host host_;
     std::deque<std::pair<std::uint32_t, bool>> outbox_;
     const char* unsupported_ = nullptr;
+    char unknownBuffer_[64] = {};
     State state_ = State::Rom;
 
     // The ROM's boot: which of its parameters the next mail is.
