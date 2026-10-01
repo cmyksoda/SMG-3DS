@@ -1951,6 +1951,11 @@ adapt("src/RVL_SDK/gx/GXTev.c", "RVL_SDK/gx/GXTev.c", [
     ("    rgba = *(u32*)(&color);", "    rgba = smgColorWord(color);", 2),
     ("    sRG = *(u32*)(&color);\n    sBA = *((u32*)(&color) + 1);",
      "    sRG = (u32)(u16)color.r << 16 | (u16)color.g;\n    sBA = (u32)(u16)color.b << 16 | (u16)color.a;", 1),
+    # GXSetTevOp's presets are bitfield structs read as register words; GCC packs bitfields from the other end.
+    ("    tevReg = ((*ctmp & ~0xFF000000) | (tevReg & 0xFF000000));",
+     "    tevReg = ((smgTevColorWord((const tev_color_env_t*)ctmp) & ~0xFF000000) | (tevReg & 0xFF000000));", 1),
+    ("    tevReg = ((*atmp & ~0xFF00000F) | (tevReg & 0xFF00000F));",
+     "    tevReg = ((smgTevAlphaWord((const tev_alpha_env_t*)atmp) & ~0xFF00000F) | (tevReg & 0xFF00000F));", 1),
 ])
 adapt("src/RVL_SDK/gx/GXPixel.c", "RVL_SDK/gx/GXPixel.c", [inc, ("    rgba = *(u32*)(&color);", "    rgba = smgColorWord(color);", 1)])
 adapt("src/RVL_SDK/gx/GXTransform.c", "RVL_SDK/gx/GXTransform.c", [(gx_writers, gx_writers_c, 1), (gx_matrices, gx_matrices_c, 1)])

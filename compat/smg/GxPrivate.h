@@ -25,3 +25,14 @@ void __GXCleanGPFifo(void);
 void __GXInitRevisionBits(void);
 // A colour as the word the Wii's load of its bytes gave, R on top; the SDK reads GXColors through u32 casts.
 static inline u32 smgColorWord(GXColor c) { return (u32)c.r << 24 | (u32)c.g << 16 | (u32)c.b << 8 | c.a; }
+// A TEV preset's register word, field by field: the SDK's tables are bitfields, which Metrowerks packed from the top bit
+// and GCC on ARM packs from the bottom.
+#include <private/tev_reg.h>
+static inline u32 smgTevColorWord(const tev_color_env_t* e) {
+    return (u32)e->rid << 24 | (u32)e->dest << 22 | (u32)e->shift << 20 | (u32)e->clamp << 19 | (u32)e->sub << 18 | (u32)e->bias << 16 |
+           (u32)e->sela << 12 | (u32)e->selb << 8 | (u32)e->selc << 4 | (u32)e->seld;
+}
+static inline u32 smgTevAlphaWord(const tev_alpha_env_t* e) {
+    return (u32)e->rid << 24 | (u32)e->dest << 22 | (u32)e->shift << 20 | (u32)e->clamp << 19 | (u32)e->sub << 18 | (u32)e->bias << 16 |
+           (u32)e->sela << 13 | (u32)e->selb << 10 | (u32)e->selc << 7 | (u32)e->seld << 4 | (u32)e->swap << 2 | (u32)e->mode;
+}

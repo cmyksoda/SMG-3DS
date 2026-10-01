@@ -1,4 +1,5 @@
 #include <smg/GxDraw.hpp>
+#include <smg/GxPrivate.h>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -129,6 +130,14 @@ void lighting() {
     setFloat(gpu, 0x600 + 12, 10);
     smg::gxLitChannel(gpu, origin, facing, vertex, c);
     check(c[0] == 10 && c[2] == 30 && c[3] == (0x80 * (0x80 + 1) >> 8), "the colour can come from the vertex while the alpha is lit");
+}
+
+// GXSetTevOp's tables: register words built from bitfields, which have to come out as the hardware's.
+void tevOpTables() {
+    const tev_color_env_t modulate = {0xC0, 0, 0, 1, 0, 0, 15, 8, 10, 15};  // GX_MODULATE, stage 0: ZERO, TEXC, RASC, ZERO
+    const tev_alpha_env_t alpha = {0xC1, 0, 0, 1, 0, 0, 7, 4, 5, 7, 0, 0};    // ZERO, TEXA, RASA, ZERO
+    check(smgTevColorWord(&modulate) == 0xC008F8AF && smgTevAlphaWord(&alpha) == 0xC108F2F0,
+          "GX_MODULATE's table entries turn into the hardware's register words");
 }
 
 void clearQuad() {
@@ -276,6 +285,7 @@ void layoutMaterial() {
 }
 
 int runGxDrawTests() {
+    tevOpTables();
     clearQuad();
     indirect();
     lighting();
