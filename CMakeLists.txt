@@ -267,7 +267,15 @@ if(NINTENDO_3DS)
     COMMAND "${DEVKITPRO}/tools/bin/picasso" -o "${CMAKE_CURRENT_BINARY_DIR}/gx.shbin" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/gx.v.pica"
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/embed-binary.py" "${CMAKE_CURRENT_BINARY_DIR}/gx.shbin" "${GX_SHADER}" gxShader
     DEPENDS shaders/gx.v.pica tools/embed-binary.py VERBATIM)
+  # A weak reference nothing defines links as a call that does nothing and returns its first argument: a silent stop.
+  # Only the toolchain's own optional hooks may stay undefined; anything else fails the link by name.
+  function(smg_no_missing_weak target)
+    add_custom_command(TARGET ${target} POST_BUILD
+      COMMAND sh -c "missing=$(\"$0\" -C \"$1\" | grep -E '^ +[wv] ' | grep -vE ' (__cxa_pure_virtual|__deregister_frame_info|__register_frame_info|__gnu_Unwind_Find_exidx|__syscall_tls_[a-z]+|userAppInit|userAppExit)$'); [ -z \"$missing\" ] || { printf 'Weak references nothing defines in %s:\\n%s\\n' \"$1\" \"$missing\" >&2; exit 1; }"
+        "${CMAKE_NM}" "$<TARGET_FILE:${target}>" VERBATIM)
+  endfunction()
   add_executable(SMG-3DS source/platform/Main.cpp source/platform/TouchUi.cpp source/platform/SceneRenderer.cpp "${MODEL_SHADER}")
+  smg_no_missing_weak(SMG-3DS)
   set_target_properties(SMG-3DS PROPERTIES SUFFIX ".elf")
   target_include_directories(SMG-3DS PRIVATE "${DEVKITPRO}/libctru/include" "${CMAKE_CURRENT_BINARY_DIR}")
   target_link_directories(SMG-3DS PRIVATE "${DEVKITPRO}/libctru/lib")
@@ -339,18 +347,27 @@ if(NINTENDO_3DS)
   target_include_directories(msl_wide PRIVATE compat)
   target_compile_options(msl_wide PRIVATE -w)
   set_source_files_properties(source/compat/GxRender.cpp PROPERTIES OBJECT_DEPENDS "${GX_SHADER}")
+  # SMG's replacements for JSystem functions override weak definitions and answer weak references, and a weak
+  # reference never pulls a library member in: they are linked whole, as the Wii's linker took every object.
+  set(PETARI_OVERWRITES ${PETARI_GAME_SOURCES})
+  list(FILTER PETARI_OVERWRITES INCLUDE REGEX "/Overwrite[A-Za-z]*\\.cpp$")
+  list(REMOVE_ITEM PETARI_GAME_SOURCES ${PETARI_OVERWRITES})
+  add_library(petari_overwrites OBJECT ${PETARI_OVERWRITES})
   add_library(petari_game STATIC ${PETARI_GAME_SOURCES})
-  target_link_libraries(petari_game PUBLIC petari_scene petari_anim smg_pica)
-  target_include_directories(petari_game PRIVATE include "${CMAKE_CURRENT_BINARY_DIR}")
-  target_compile_options(petari_game PRIVATE -Wno-narrowing -ffunction-sections -fdata-sections)
+  foreach(library petari_game petari_overwrites)
+    target_link_libraries(${library} PUBLIC petari_scene petari_anim smg_pica)
+    target_include_directories(${library} PRIVATE include "${CMAKE_CURRENT_BINARY_DIR}")
+    target_compile_options(${library} PRIVATE -Wno-narrowing -ffunction-sections -fdata-sections)
+  endforeach()
 
   add_executable(mario_probe source/probe/MarioProbe.cpp)
+  smg_no_missing_weak(mario_probe)
   set_target_properties(mario_probe PROPERTIES SUFFIX ".elf")
   target_include_directories(mario_probe PRIVATE "${DEVKITPRO}/libctru/include")
   target_link_directories(mario_probe PRIVATE "${DEVKITPRO}/libctru/lib")
   # The game and the port's libraries call each other: GNU ld rescans the group until nothing more resolves. The
   # boundary stops come after it, for what the game does not define.
-  target_link_libraries(mario_probe PRIVATE -Wl,--start-group smg_platform petari_game petari_scene petari_anim petari_j3d
+  target_link_libraries(mario_probe PRIVATE petari_overwrites -Wl,--start-group smg_platform petari_game petari_scene petari_anim petari_j3d
     petari_gravity petari_core msl_wide smg_pica -Wl,--end-group petari_game_boundaries citro2d citro3d ctru m)
   target_link_options(mario_probe PRIVATE -Wl,--gc-sections "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/mario_probe.map" -Wl,--wrap=abort)
   add_custom_command(TARGET mario_probe POST_BUILD
@@ -363,6 +380,7 @@ if(NINTENDO_3DS)
       tests/NameObjTests.cpp tests/SceneTests.cpp tests/CollisionTests.cpp tests/AnimationTests.cpp tests/ActorTests.cpp tests/J3DTransformTests.cpp tests/J3DSkeletonTests.cpp
       tests/GxCommandTests.cpp tests/BmgTests.cpp tests/ColorTests.cpp tests/LayoutTests.cpp tests/WideTests.cpp tests/GxDrawTests.cpp tests/GxCopyTests.cpp tests/WiiDspTests.cpp tests/AudioDataTests.cpp)
     set_target_properties(native_validation PROPERTIES SUFFIX ".elf")
+    smg_no_missing_weak(native_validation)
     target_compile_definitions(native_validation PRIVATE SMG_TEST_RUNNER)
     target_link_directories(native_validation PRIVATE "${DEVKITPRO}/libctru/lib")
     target_link_libraries(native_validation PRIVATE smg_native_scene smg_native_pad smg_platform petari_gravity petari_scene petari_j3d msl_wide citro2d citro3d ctru m)
