@@ -19,40 +19,6 @@ void aptCallback(APT_HookType type, void*) {
         suspendInput = true;
 }
 
-struct Motion {
-    bool ready = false;
-    float dpsPerRaw = 0;
-    bool start() {
-        float rawPerDps = 0;
-        ready = R_SUCCEEDED(HIDUSER_EnableAccelerometer()) && R_SUCCEEDED(HIDUSER_EnableGyroscope()) &&
-                R_SUCCEEDED(HIDUSER_GetGyroscopeRawToDpsCoefficient(&rawPerDps)) && rawPerDps > 0;
-        dpsPerRaw = ready ? 1.0f / rawPerDps : 0;
-        return ready;
-    }
-    void stop() {
-        HIDUSER_DisableGyroscope();
-        HIDUSER_DisableAccelerometer();
-    }
-};
-
-smg::RawInput readInput(const Motion& motion) {
-    smg::RawInput input = smg::readHidInput();
-    if (motion.ready) {
-        angularRate rate;
-        accelVector accel;
-        hidGyroRead(&rate);
-        hidAccelRead(&accel);
-        // libctru declares the ring entry as {x, z, y}; keep the ring's own order.
-        input.gyro[0] = rate.x * motion.dpsPerRaw;
-        input.gyro[1] = rate.z * motion.dpsPerRaw;
-        input.gyro[2] = rate.y * motion.dpsPerRaw;
-        input.accel[0] = accel.x;
-        input.accel[1] = accel.y;
-        input.accel[2] = accel.z;
-        input.motion = true;
-    }
-    return input;
-}
 } // namespace
 
 int main() {
@@ -66,7 +32,7 @@ int main() {
     C2D_Prepare();
     smg::TouchUi ui;
     if (!ui.init()) { ui.shutdown(); C2D_Fini(); C3D_Fini(); gfxExit(); return 1; }
-    Motion motion;
+    smg::HidMotion motion;
     motion.start();
     smg::Settings settings;
     smg::loadSettings(SettingsPath, settings);
@@ -79,7 +45,8 @@ int main() {
     aptHook(&hook, aptCallback, nullptr);
     u64 previousTime = osGetTime();
     while (aptMainLoop()) {
-        const auto raw = readInput(motion);
+        smg::RawInput raw = smg::readHidInput();
+        motion.read(raw);
         if ((raw.held & (smg::Start | smg::Select)) == (smg::Start | smg::Select)) break;
         const u64 now = osGetTime();
         double elapsed = now >= previousTime ? (now - previousTime) / 1000.0 : 0.0;
@@ -90,7 +57,7 @@ int main() {
         pad.update(frame, elapsed);
         session.updateNerve();
         scene.update(frame, static_cast<float>(elapsed));
-        ui.draw(frame, input.settings(), pad, scene, session.booted(), session.assetStatus().c_str(), motion.ready);
+        ui.draw(frame, input.settings(), pad, scene, session.booted(), session.assetStatus().c_str(), motion.ready());
     }
     aptUnhook(&hook);
     motion.stop(); // also undoes a partial start
