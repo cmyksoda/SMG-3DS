@@ -592,6 +592,17 @@ in `compat/smg/GxPrivate.h`); a test pins `GX_MODULATE` to the hardware's words.
 would break the SDK's positional initialisers, which GCC rejects. Any other bitfield struct read as an integer has
 the same trap; `io_reg.h`'s `si_comcsr_t` is the only other one in the SDK headers.
 
+**Weak references and the Wii's whole link.** JSystem declares the functions SMG replaces weak
+(`JASTrack::channelStart`, `JASBank::noteOn`, `JASWaveArc::setFileName`/`load`), and SMG's replacements live in
+`Game/AudioLib/OverwriteJAudio.cpp`. The Wii's linker took every object, so the strong versions always won. GNU ld
+extracts a library member only for a strong undefined symbol: the overwrite file sat unused in the game library,
+and the two functions nothing else defined stayed *undefined weak*. On ARM a call to an undefined weak function
+links as a no-op whose "result" is its first argument. Every sequenced note stored its own track as its channel,
+and each note-off "freed" that fake channel, nulling the track's call stack, so the file-select music returned to
+address 0. It was found with a GDB hardware watchpoint (Azahar's stub takes them) on the stack slot. The overwrite
+files now link whole, and each 3DS executable's link fails by name on any undefined weak symbol outside the
+toolchain's optional hooks (`smg_no_missing_weak` in `CMakeLists.txt`).
+
 **Sound animations.** An actor archive's `.bas` (`JAUSoundAnimation`) is read in place by `JAUSoundAnimator`, so it
 turns native at mount like the BTI, KCL and JPC files: a count, a control word the game leaves null, then 0x20-byte
 sounds. The records sit at offset 8 only where pointers are 32-bit, so the 64-bit host audit reads them there by
