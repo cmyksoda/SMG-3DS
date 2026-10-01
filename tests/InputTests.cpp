@@ -158,6 +158,10 @@ void stickPointer() {
     raw = {};
     raw.held = smg::R;
     check(near(input.update(raw).pointer.x, 199.5f), "R recenters the C-stick pointer");
+    smg::Input slow(withPointer(smg::PointerMode::CStick));
+    raw = {};
+    raw.cstickX = 140;
+    check(near(slow.update(raw, 1.0f).pointer.x, 199.5f + 105, 1), "a one-second frame still moves the pointer, a quarter second's worth");
 }
 
 void stylusPointer() {

@@ -141,7 +141,8 @@ void Input::beginGesture(const RawInput& raw) {
 }
 
 const InputFrame& Input::update(const RawInput& raw, float seconds) {
-    const float dt = std::isfinite(seconds) && seconds > 0 && seconds <= 0.25f ? seconds : 0.0f;
+    // A slow frame moves the pointer by at most a quarter second's worth: its rates are one moment's, not the frame's.
+    const float dt = std::isfinite(seconds) && seconds > 0 ? std::min(seconds, 0.25f) : 0.0f;
     if (!raw.touching) {
         gesture_ = Gesture::None;
         gestureOption_ = -1;
