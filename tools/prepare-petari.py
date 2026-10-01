@@ -1908,8 +1908,21 @@ static void WriteMTXPS4x2(const f32 mtx[3][4], volatile void*) {
 #endif
 
 """
+# GXColor and GXColorS10 arguments were read through u32 casts, giving their bytes in the Wii's order only there.
+inc = ('#include "revolution/gx/GXRegs.h"\n', '#include "revolution/gx/GXRegs.h"\n#include <smg/GxPrivate.h>\n', 1)
+adapt("src/RVL_SDK/gx/GXTev.c", "RVL_SDK/gx/GXTev.c", [
+    ('#include "revolution/gx/GXTev.h"\n', '#include "revolution/gx/GXTev.h"\n#include <smg/GxPrivate.h>\n', 1),
+    ("    rgba = *(u32*)(&color);", "    rgba = smgColorWord(color);", 2),
+    ("    sRG = *(u32*)(&color);\n    sBA = *((u32*)(&color) + 1);",
+     "    sRG = (u32)(u16)color.r << 16 | (u16)color.g;\n    sBA = (u32)(u16)color.b << 16 | (u16)color.a;", 1),
+])
+adapt("src/RVL_SDK/gx/GXPixel.c", "RVL_SDK/gx/GXPixel.c", [inc, ("    rgba = *(u32*)(&color);", "    rgba = smgColorWord(color);", 1)])
 adapt("src/RVL_SDK/gx/GXTransform.c", "RVL_SDK/gx/GXTransform.c", [(gx_writers, gx_writers_c, 1), (gx_matrices, gx_matrices_c, 1)])
 adapt("src/RVL_SDK/gx/GXLight.c", "RVL_SDK/gx/GXLight.c", [
+    inc,
+    ("    obj->Color = *(u32*)(&color);", "    obj->Color = smgColorWord(color);", 1),
+    ("(*(u32*)(&amb_color)) >> 8", "smgColorWord(amb_color) >> 8", 2), ("*(u32*)(&amb_color))", "smgColorWord(amb_color))", 2),
+    ("(*(u32*)(&mat_color)) >> 8", "smgColorWord(mat_color) >> 8", 2), ("*(u32*)(&mat_color))", "smgColorWord(mat_color))", 2),
     ("#else\nstatic inline void WriteLightObjPS(const GXLightObjInt* lt_obj, void* dest);\n#endif",
      "#else\n// Three reserved words, the colour, then the attenuation, position and direction, as the asm stores them.\n"
      "static inline void WriteLightObjPS(const GXLightObjInt* lt_obj, void*) {\n"

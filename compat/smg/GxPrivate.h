@@ -21,3 +21,5 @@ void __GXSetDirtyState(void);
 void __GXSendFlushPrim(void);
 void __GXCleanGPFifo(void);
 void __GXInitRevisionBits(void);
+// A colour as the word the Wii's load of its bytes gave, R on top; the SDK reads GXColors through u32 casts.
+static inline u32 smgColorWord(GXColor c) { return (u32)c.r << 24 | (u32)c.g << 16 | (u32)c.b << 8 | c.a; }
