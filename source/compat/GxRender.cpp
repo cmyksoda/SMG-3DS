@@ -17,6 +17,8 @@
 #include <string>
 #include <tuple>
 
+extern "C" void smgHeartbeat();  // source/compat/GameScene.cpp
+
 namespace smg {
 namespace {
 constexpr std::size_t VertexBytes = 2u << 20;
@@ -184,5 +186,8 @@ void gxRenderPrimitive(const GxCommandProcessor& gpu, std::uint8_t kind, std::ui
 void gxRenderCopy(const GxCommandProcessor& gpu, std::uint32_t command) {
     const PortMemory memory;
     renderer().copy(gpu, command);
+    // Every 300th frame the game's state is logged (source/compat/GameScene.cpp), from the thread that draws.
+    static unsigned frames = 0;
+    if (++frames % 300 == 0) smgHeartbeat();
 }
 } // namespace smg
