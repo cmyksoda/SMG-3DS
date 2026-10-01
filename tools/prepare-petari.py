@@ -1370,6 +1370,14 @@ adapt("src/Game/System/MainLoopFramework.cpp", "Game/System/MainLoopFramework.cp
     ("C_MTXOrtho(proj, 0f, efbHeight, 0f, fbWidth, 0f, 1f);", "C_MTXOrtho(proj, 0.0f, efbHeight, 0.0f, fbWidth, 0.0f, 1.0f);", 1),
     ("GXSetViewport(0f, 0f, fbWidth, efbHeight, 0f, 1f);", "GXSetViewport(0.0f, 0.0f, fbWidth, efbHeight, 0.0f, 1.0f);", 1),
     ("    if (mCombinationRatio > 1f) {\n        mCombinationRatio = 1f;", "    if (mCombinationRatio > 1.0f) {\n        mCombinationRatio = 1.0f;", 1),
+    # The clear's Z24X8 texels are GPU data, so they keep the Wii's bytes: an AR block of 00 FF pairs, then GB of FF,
+    # which is Z 0xFFFFFF. As little-endian words they read Z 0x00FFFF, near, and every frame cleared to it.
+    ("u32 clearZTexData[] ATTRIBUTE_ALIGN(32) = {0x00FF00FF, 0x00FF00FF, 0x00FF00FF, 0x00FF00FF, 0x00FF00FF, 0x00FF00FF, 0x00FF00FF, 0x00FF00FF,\n"
+     "                                           0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF};",
+     "u8 clearZTexData[] ATTRIBUTE_ALIGN(32) = {0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF,\n"
+     "                                          0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF,\n"
+     "                                          0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,\n"
+     "                                          0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};", 1),
 ])
 # An explicit specialization has to come before the code that uses the member; Metrowerks took it after.
 galaxy_map_destructors = "".join(f"template <>\ninline MR::Vector< MR::AssignableArray< {icon}* > >::~Vector() {{\n}}\n\n"
