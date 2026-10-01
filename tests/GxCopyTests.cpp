@@ -1,0 +1,182 @@
+#include <smg/GxCopy.hpp>
+#include <smg/Texture.hpp>
+#include <private/pe_reg.h>
+#include <cstdio>
+#include <cstdlib>
+#include <string>
+#include <vector>
+
+namespace {
+unsigned checks = 0;
+void check(bool pass, const char* message) {
+    ++checks;
+    if (!pass) { std::printf("FAIL: %s\n", message); std::exit(1); }
+}
+
+// The registers as GXSetTexCopySrc, GXSetTexCopyDst, GXSetCopyFilter and GXCopyTex leave them; returns PE_COPY_CMD.
+struct Copy {
+    unsigned x = 0, y = 0, width = 16, height = 8, format = 7, ccv = 2, rowBytes = 0;
+    bool half = false, clear = false, clampTop = false, clampBottom = false;
+    unsigned taps[7] = {0, 0, 21, 22, 21, 0, 0};  // the SDK's "no vertical filter": six-bit taps can't pass rows through
+};
+std::uint32_t issue(smg::GxCommandProcessor& gpu, const Copy& c, std::uint32_t address) {
+    std::uint32_t source = 0, size = 0, base = 0, stride = 0, f0 = 0, f1 = 0, command = 0;
+    PE_COPY_SRC_ADDR_SET_X(source, c.x); PE_COPY_SRC_ADDR_SET_Y(source, c.y);
+    PE_COPY_SRC_SIZE_SET_X(size, c.width - 1); PE_COPY_SRC_SIZE_SET_Y(size, c.height - 1);
+    PE_COPY_DST_BASE_SET_BASE(base, address >> 5);
+    PE_COPY_DST_STRIDE_SET_STRIDE(stride, c.rowBytes >> 5);
+    PE_COPY_VFILTER0_SET_COEFF0(f0, c.taps[0]); PE_COPY_VFILTER0_SET_COEFF1(f0, c.taps[1]);
+    PE_COPY_VFILTER0_SET_COEFF2(f0, c.taps[2]); PE_COPY_VFILTER0_SET_COEFF3(f0, c.taps[3]);
+    PE_COPY_VFILTER1_SET_COEFF4(f1, c.taps[4]); PE_COPY_VFILTER1_SET_COEFF5(f1, c.taps[5]);
+    PE_COPY_VFILTER1_SET_COEFF6(f1, c.taps[6]);
+    PE_COPY_CMD_SET_TEX_FORMAT(command, c.format & 7); PE_COPY_CMD_SET_TEX_FORMATH(command, c.format >> 3);
+    PE_COPY_CMD_SET_CCV(command, c.ccv); PE_COPY_CMD_SET_MIP_MAP_FILTER(command, c.half);
+    PE_COPY_CMD_SET_CLEAR(command, c.clear);
+    PE_COPY_CMD_SET_CLAMP_TOP(command, c.clampTop); PE_COPY_CMD_SET_CLAMP_BOTTOM(command, c.clampBottom);
+    gpu.bp[0x49] = source, gpu.bp[0x4A] = size, gpu.bp[0x4B] = base, gpu.bp[0x4D] = stride, gpu.bp[0x53] = f0, gpu.bp[0x54] = f1;
+    return command;
+}
+
+// A 64x64 EFB whose every channel says where it is.
+using Pixel = std::array<std::uint8_t, 4>;
+Pixel pattern(const void*, int x, int y) {
+    x = x < 0 ? 0 : x > 63 ? 63 : x, y = y < 0 ? 0 : y > 63 ? 63 : y;
+    return {static_cast<std::uint8_t>(x * 4), static_cast<std::uint8_t>(y * 4), static_cast<std::uint8_t>((x ^ y) * 4),
+            static_cast<std::uint8_t>(x + 2 * y)};
+}
+// What the SDK's three taps make of an EFB pixel's neighbourhood, for checking texels against.
+Pixel filtered(smg::EfbPixel pixel, int x, int y) {
+    Pixel out;
+    for (int c = 0; c < 4; ++c) {
+        const unsigned sum = 21 * pixel(nullptr, x, y - 1)[c] + 22 * pixel(nullptr, x, y)[c] + 21 * pixel(nullptr, x, y + 1)[c];
+        out[c] = static_cast<std::uint8_t>(sum > 255 * 64 ? 255 : sum >> 6);
+    }
+    return out;
+}
+Pixel white(const void*, int, int) { return {255, 255, 255, 255}; }
+Pixel row3(const void*, int, int y) { return {0, 0, 0, static_cast<std::uint8_t>(y == 3 ? 255 : 0)}; }
+Pixel checker(const void*, int x, int y) { return {0, 0, 0, static_cast<std::uint8_t>((x & 1) * 100 + (y & 1) * 50)}; }
+
+std::vector<std::uint8_t> make(smg::GxCommandProcessor& gpu, const Copy& c, smg::EfbPixel pixel, smg::GxTextureCopy& copy) {
+    const char* why = smg::readTextureCopy(gpu, issue(gpu, c, 0x1000), copy);
+    check(!why, why ? why : "a texture copy reads");
+    std::vector<std::uint8_t> out(smg::textureCopySize(copy), 0xEE);
+    smg::encodeTextureCopy(copy, pixel, nullptr, out.data());
+    return out;
+}
+
+void readsTheSdkCopy() {
+    smg::GxCommandProcessor gpu({});
+    Copy c;
+    c.width = 640, c.height = 456, c.rowBytes = 80 * 32;  // GX_CTF_A8
+    smg::GxTextureCopy copy;
+    check(!smg::readTextureCopy(gpu, issue(gpu, c, 0x8000), copy), "the screen's alpha capture reads");
+    check(copy.width == 640 && copy.height == 456 && copy.texWidth == 640 && copy.format == 7 && !copy.intensity && copy.address == 0x8000,
+          "its rectangle, format and destination are the SDK's");
+    check(copy.filter[2] == 21 && copy.filter[3] == 22 && copy.filter[4] == 21 && !copy.filter[0], "and its filter's taps");
+    check(smg::textureCopySize(copy) == 640 * 456, "an A8 copy fills whole 8x4 tiles");
+}
+
+void a8Tiles() {
+    smg::GxCommandProcessor gpu({});
+    Copy c;
+    c.x = 8, c.y = 4, c.rowBytes = 2 * 32;
+    smg::GxTextureCopy copy;
+    const auto out = make(gpu, c, pattern, copy);
+    bool ok = out.size() == 2 * 2 * 32;
+    for (unsigned y = 0; y < 8; ++y)
+        for (unsigned x = 0; x < 16; ++x)
+            ok = ok && out[(y / 4) * 64 + (x / 8) * 32 + (y % 4) * 8 + x % 8] == filtered(pattern, int(8 + x), int(4 + y))[3];
+    check(ok, "an A8 copy writes each texel's alpha in 8x4 tiles");
+}
+
+void intensity() {
+    smg::GxCommandProcessor gpu({});
+    Copy c;
+    c.format = 1, c.ccv = 3, c.rowBytes = 64;
+    smg::GxTextureCopy copy;
+    auto out = make(gpu, c, white, copy);
+    check(copy.intensity && out[0] == 235 && out[127] == 235, "an I8 copy of white is the pixel engine's Y, 235");
+    c.ccv = 2;
+    out = make(gpu, c, white, copy);
+    check(!copy.intensity && out[0] == 255, "an R8 copy keeps red as it is");
+}
+
+void filters() {
+    smg::GxCommandProcessor gpu({});
+    Copy c;
+    c.y = 4, c.rowBytes = 64;
+    smg::GxTextureCopy copy;
+    auto out = make(gpu, c, row3, copy);
+    check(out[0] == (21 * 255) >> 6 && out[8] == 0, "the SDK's unfiltered copy still blends the row above its first");
+    c.clampTop = true;
+    out = make(gpu, c, row3, copy);
+    check(out[0] == 0, "unless it clamps at the top");
+    c = Copy{};
+    c.rowBytes = 32, c.half = true, c.width = 16;
+    out = make(gpu, c, checker, copy);
+    check(copy.texWidth == 8 && copy.texHeight == 4 && out[0] == 75 && out[31] == 75, "the box filter averages each 2x2");
+}
+
+void roundTrips() {
+    smg::GxCommandProcessor gpu({});
+    const struct { unsigned format; smg::GxFormat texture; unsigned rowBytes; } cases[] = {
+        {6, smg::GxFormat::RGBA8, 4 * 64}, {4, smg::GxFormat::RGB565, 4 * 32}, {5, smg::GxFormat::RGB5A3, 4 * 32},
+        {3, smg::GxFormat::IA8, 4 * 32}, {0, smg::GxFormat::I4, 2 * 32}};
+    for (const auto& k : cases) {
+        Copy c;
+        c.format = k.format, c.rowBytes = k.rowBytes;
+        smg::GxTextureCopy copy;
+        const auto out = make(gpu, c, pattern, copy);
+        smg::Image image;
+        std::string error;
+        check(smg::decodeGxImage({out.data(), out.size()}, k.texture, 16, 8, {}, smg::GxPalette::IA8, image, error), "a copied texture decodes");
+        bool ok = true;
+        for (unsigned y = 0; y < 8; ++y)
+            for (unsigned x = 0; x < 16; ++x) {
+                const Pixel p = filtered(pattern, int(x), int(y));
+                const std::uint32_t got = image.pixels[y * 16 + x];
+                const int r = got >> 24, g = got >> 16 & 0xFF, b = got >> 8 & 0xFF, a = got & 0xFF;
+                const auto close = [](int v, int want, int bits) { return std::abs(v - want) <= (256 >> bits); };
+                switch (k.format) {
+                case 6: ok = ok && r == p[0] && g == p[1] && b == p[2] && a == p[3]; break;
+                case 4: ok = ok && close(r, p[0], 5) && close(g, p[1], 6) && close(b, p[2], 5) && a == 255; break;
+                case 5: ok = ok && close(r, p[0], 4) && close(g, p[1], 4) && close(b, p[2], 4) && close(a, p[3], 3); break;
+                case 3: ok = ok && r == p[0] && a == p[3]; break;
+                case 0: ok = ok && close(r, p[0], 4); break;
+                }
+            }
+        check(ok, "and reads back as the EFB's pixels, to the format's precision");
+    }
+}
+
+void refusals() {
+    smg::GxCommandProcessor gpu({});
+    smg::GxTextureCopy copy;
+    Copy c;
+    c.rowBytes = 64;
+    std::uint32_t command = issue(gpu, c, 0x1000);
+    gpu.bp[0x43] = 3;  // PE_CONTROL's pixel type: Z
+    check(smg::readTextureCopy(gpu, command, copy), "a depth copy is refused by name");
+    gpu.bp[0x43] = 0;
+    c.format = 11;
+    check(smg::readTextureCopy(gpu, issue(gpu, c, 0x1000), copy), "so is an RG8 copy");
+    c.format = 7, c.rowBytes = 32;
+    check(smg::readTextureCopy(gpu, issue(gpu, c, 0x1000), copy), "and one whose rows of tiles overlap");
+}
+} // namespace
+
+int runGxCopyTests() {
+    readsTheSdkCopy();
+    a8Tiles();
+    intensity();
+    filters();
+    roundTrips();
+    refusals();
+    std::printf("%u GX copy checks passed\n", checks);
+    return 0;
+}
+
+#ifndef SMG_TEST_RUNNER
+int main() { return runGxCopyTests(); }
+#endif
