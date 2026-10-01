@@ -145,6 +145,17 @@ u32 PSMTXInverse(const Mtx m, Mtx out) {
     for (int row = 0; row < 3; ++row) for (int col = 0; col < 4; ++col) out[row][col] = r[row][col];
     return 1;
 }
+// The 3x3 part's inverse transposed, for normals; the SDK's paired-single version stores no translation and returns
+// 0, writing nothing, for a singular matrix.
+u32 PSMTXInvXpose(const Mtx m, Mtx out) {
+    Mtx inverse;
+    if (!PSMTXInverse(m, inverse)) return 0;
+    for (int row = 0; row < 3; ++row) {
+        for (int col = 0; col < 3; ++col) out[row][col] = inverse[col][row];
+        out[row][3] = 0;
+    }
+    return 1;
+}
 void PSMTXQuat(Mtx m, const Quaternion* q) {
     const f32 n = q->x*q->x + q->y*q->y + q->z*q->z + q->w*q->w;
     const f32 s = n > 0 ? 2.0f / n : 0.0f;

@@ -7,6 +7,8 @@
 #include <cstdlib>
 #include <cstring>
 
+extern "C" u32 PSMTXInvXpose(const Mtx, Mtx);  // source/compat/Math.cpp; the SDK's header leaves it out
+
 namespace {
 unsigned checks = 0;
 void check(bool value, const char* name) {
@@ -49,6 +51,10 @@ void sdkMatrices() {
     check(isIdentity, "inverse times matrix is identity");
     const Mtx flat{{1, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 1, 0}};
     check(PSMTXInverse(flat, inverse) == 0, "singular matrix reports failure");
+    Mtx normals;
+    check(PSMTXInvXpose(moved, normals) == 1 && near(normals[0][0], 1) && near(normals[1][1], 0.5f) && near(normals[2][2], 1) &&
+              near(normals[1][3], 0) && near(normals[0][1], 0), "the inverse transpose scales normals back and keeps no translation");
+    check(PSMTXInvXpose(flat, normals) == 0, "and refuses a singular matrix");
     Vec shifted{1, 1, 1};
     PSMTXMultVecSR(moved, &shifted, &shifted);
     check(vec(shifted, 1, 2, 1), "rotation-and-scale product ignores translation");
