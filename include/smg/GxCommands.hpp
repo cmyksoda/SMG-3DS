@@ -26,12 +26,16 @@ public:
     };
     explicit GxCommandProcessor(const Host& host) : host_(host) {}
 
-    void put(const std::uint8_t* bytes, std::uint32_t count);
+    // Bytes in the FIFO's order. Each stream (a thread, for the port) assembles its own commands, so two writers'
+    // bytes never mix inside a command; whole commands reach the GPU's state in the order they complete.
+    static constexpr unsigned Streams = 4;
+    void put(unsigned stream, const std::uint8_t* bytes, std::uint32_t count);
+    void put(const std::uint8_t* bytes, std::uint32_t count) { put(0, bytes, count); }
     // Bytes one vertex takes in a vertex format, by the CP's descriptor (VCD) and attribute table (VAT).
     std::uint32_t vertexSize(std::uint8_t format) const;
     // One vertex from `at`; indexed attributes are read from the CP's arrays through the host's memory.
     GxVertex readVertex(const std::uint8_t* at, std::uint8_t format) const;
-    std::uint32_t pending() const { return pendingSize_; }
+    std::uint32_t pending(unsigned stream = 0) const { return pendingSize_[stream]; }
 
     std::uint32_t cp[0x100] = {};
     std::uint32_t xf[0x1100] = {};
@@ -47,7 +51,7 @@ private:
 
     Host host_;
     std::uint32_t bpMask_ = 0xFFFFFF;  // BP 0xFE: the bits the next BP load changes
-    std::uint8_t pending_[0x10000];
-    std::uint32_t pendingSize_ = 0;
+    std::uint8_t pending_[Streams][0x10000];
+    std::uint32_t pendingSize_[Streams] = {};
 };
 } // namespace smg

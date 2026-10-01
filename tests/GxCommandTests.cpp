@@ -140,7 +140,21 @@ void bpMasksAndCopies() {
     delete gpu;
 }
 
+// Two writers: a command half-written in one stream waits there while another stream's whole command applies.
+void streams() {
+    auto* gpu = new smg::GxCommandProcessor(host());
+    const std::uint8_t xf[] = {0x10, 0x00, 0x00, 0x10, 0x00, 0x12, 0x34, 0x56, 0x78};  // one XF word at 0x1000
+    const std::uint8_t bp[] = {0x61, 0x28, 0x00, 0x00, 0x01};
+    gpu->put(0, xf, 3);
+    gpu->put(1, bp, sizeof bp);
+    check(gpu->bp[0x28] == 1 && gpu->xf[0x1000] == 0, "a whole command from another stream applies while one waits half-written");
+    gpu->put(0, xf + 3, sizeof xf - 3);
+    check(gpu->xf[0x1000] == 0x12345678 && gpu->pending(0) == 0 && gpu->pending(1) == 0, "and the waiting one applies once its stream completes it");
+    delete gpu;
+}
+
 int runGxCommandTests() {
+    streams();
     registerLoads();
     bpMasksAndCopies();
     pixelEngine();

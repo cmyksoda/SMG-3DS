@@ -199,20 +199,23 @@ std::uint32_t GxCommandProcessor::command(const std::uint8_t* at, std::uint32_t 
     return available;
 }
 
-void GxCommandProcessor::put(const std::uint8_t* bytes, std::uint32_t count) {
-    if (pendingSize_ + count > sizeof pending_) {
-        host_.unsupported("a command longer than the FIFO's staging", pendingSize_ + count);
+void GxCommandProcessor::put(unsigned stream, const std::uint8_t* bytes, std::uint32_t count) {
+    if (stream >= Streams) return host_.unsupported("a FIFO stream past the processor's", stream);
+    std::uint8_t* pending = pending_[stream];
+    std::uint32_t& size = pendingSize_[stream];
+    if (size + count > sizeof pending_[stream]) {
+        host_.unsupported("a command longer than the FIFO's staging", size + count);
         return;
     }
-    std::memcpy(pending_ + pendingSize_, bytes, count);
-    pendingSize_ += count;
+    std::memcpy(pending + size, bytes, count);
+    size += count;
     std::uint32_t read = 0;
-    while (read < pendingSize_) {
-        const std::uint32_t used = command(pending_ + read, pendingSize_ - read);
+    while (read < size) {
+        const std::uint32_t used = command(pending + read, size - read);
         if (!used) break;
         read += used;
     }
-    std::memmove(pending_, pending_ + read, pendingSize_ - read);
-    pendingSize_ -= read;
+    std::memmove(pending, pending + read, size - read);
+    size -= read;
 }
 } // namespace smg
