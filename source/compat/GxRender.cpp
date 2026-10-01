@@ -21,7 +21,9 @@ extern "C" void smgHeartbeat();  // source/compat/GameScene.cpp
 
 namespace smg {
 namespace {
-constexpr std::size_t VertexBytes = 2u << 20;
+constexpr std::size_t VertexBytes = 2u << 20, CommandBytes = 1u << 20;
+// Room a draw's commands need at most, in words: when less is left, the frame is ended and begun again (see roomFor).
+constexpr u32 DrawCommandWords = 0x800;
 constexpr u32 DisplayTransferFlags = GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | GX_TRANSFER_RAW_COPY(0) |
                                      GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) | GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB8) |
                                      GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO);
@@ -46,7 +48,7 @@ struct Renderer {
     bool scissorNoted = false, indirectNoted = false;
 
     void init() {
-        C3D_Init(C3D_DEFAULT_CMDBUF_SIZE);
+        C3D_Init(CommandBytes);
         target = C3D_RenderTargetCreate(240, 400, GPU_RB_RGBA8, GPU_RB_DEPTH24_STENCIL8);
         C3D_RenderTargetSetOutput(target, GFX_TOP, GFX_LEFT, DisplayTransferFlags);
         shader = DVLB_ParseFile(reinterpret_cast<u32*>(gxShader), sizeof gxShader);
@@ -127,6 +129,7 @@ struct Renderer {
         }
         if (d.triangles.empty()) return;
         if (!inFrame) begin();
+        roomFor(d.triangles.size());
         if ((used + d.triangles.size()) * sizeof(GxDrawVertex) > VertexBytes) stop("a frame with more vertices than the port's buffer");
         GxDrawVertex* out = vertices + used;
         for (std::size_t i = 0; i < d.triangles.size(); ++i) {
@@ -156,6 +159,21 @@ struct Renderer {
         for (unsigned unit = 0; unit < d.program.unitCount; ++unit) C3D_TexBind(unit, &texture(d.textures[d.program.units[unit].texture]));
         C3D_DrawArrays(GPU_TRIANGLES, 0, static_cast<int>(d.triangles.size()));
         used += d.triangles.size();
+    }
+
+    // A Wii frame's commands can outgrow citro3d's buffer (or its vertices the port's): the frame is ended and begun
+    // again on the same target with its display output held back, so no part-drawn frame is shown.
+    void roomFor(std::size_t vertexCount) {
+        u32* buffer;
+        u32 size, offset;
+        GPUCMD_GetBuffer(&buffer, &size, &offset);
+        if (size - offset >= DrawCommandWords && (used + vertexCount) * sizeof(GxDrawVertex) <= VertexBytes) return;
+        C3D_RenderTargetDetachOutput(target);
+        C3D_FrameEnd(0);
+        C3D_FrameBegin(C3D_FRAME_SYNCDRAW);  // waits for the GPU, so the vertex buffer can start over
+        C3D_FrameDrawOn(target);
+        C3D_RenderTargetSetOutput(target, GFX_TOP, GFX_LEFT, DisplayTransferFlags);
+        used = 0;
     }
 
     // PE_COPY_CMD: opcode 1 copies to the display, 0 to a texture; bit 11 clears the EFB after.
