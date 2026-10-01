@@ -1548,6 +1548,12 @@ adapt("src/Game/Map/FileSelector.cpp", "Game/Map/FileSelector.cpp", [
     ('    JKRMemArchive* pArchive = MR::receiveArchive("/LayoutData/MiiFont.arc");\n',
      '    JKRMemArchive* pArchive = MR::receiveArchive("/LayoutData/MiiFont.arc");\n    if (pArchive == nullptr) {\n        return;\n    }\n', 1),
 ])
+# A BDL's material display lists carry texture numbers in their image-pointer BP commands, which J3D reads back from
+# the list: big-endian GPU data, so the number is its three data bytes in that order.
+adapt("src/JSystem/J3DGraphBase/J3DTevs.cpp", "JSystem/J3DGraphBase/J3DTevs.cpp", [
+    ("    u32 var_r31 = *(u32*)((u8*)pDL + 1);\n    return var_r31 & 0xFFFFFF;",
+     "    const u8* command = static_cast< const u8* >(pDL);\n    return u16(command[3] << 8 | command[4]);", 1),
+])
 # No Wii Remote strap reminder (Jaxi's call: the 3DS has no strap): the logo scene goes straight to its wait for the
 # system archive, and the strap's layout is never made.
 adapt("src/Game/Scene/LogoScene.cpp", "Game/Scene/LogoScene.cpp", [

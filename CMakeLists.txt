@@ -93,7 +93,7 @@ add_library(petari_j3d STATIC
   "${J3D}/J3DGraphBase/J3DDrawBuffer.cpp" "${J3D}/J3DGraphBase/J3DGD.cpp" "${CMAKE_CURRENT_BINARY_DIR}/petari/JSystem/J3DGraphBase/J3DMatBlock.cpp"
   "${J3D}/J3DGraphBase/J3DMaterial.cpp" "${J3D}/J3DGraphBase/J3DPacket.cpp" "${CMAKE_CURRENT_BINARY_DIR}/petari/JSystem/J3DGraphBase/J3DShape.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/JSystem/J3DGraphBase/J3DShapeDraw.cpp" "${J3D}/J3DGraphBase/J3DShapeMtx.cpp" "${J3D}/J3DGraphBase/J3DStruct.cpp"
-  "${J3D}/J3DGraphBase/J3DSys.cpp" "${J3D}/J3DGraphBase/J3DTevs.cpp" "${CMAKE_CURRENT_BINARY_DIR}/petari/JSystem/J3DGraphBase/J3DTransform.cpp"
+  "${J3D}/J3DGraphBase/J3DSys.cpp" "${CMAKE_CURRENT_BINARY_DIR}/petari/JSystem/J3DGraphBase/J3DTevs.cpp" "${CMAKE_CURRENT_BINARY_DIR}/petari/JSystem/J3DGraphBase/J3DTransform.cpp"
   "${J3D}/J3DGraphBase/J3DVertex.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/JSystem/J3DGraphLoader/J3DAnmLoader.cpp" "${J3D}/J3DGraphLoader/J3DJointFactory.cpp" "${J3D}/J3DGraphLoader/J3DMaterialFactory.cpp"
   "${J3D}/J3DGraphLoader/J3DMaterialFactory_v21.cpp" "${J3D}/J3DGraphLoader/J3DModelLoaderCalcSize.cpp"
