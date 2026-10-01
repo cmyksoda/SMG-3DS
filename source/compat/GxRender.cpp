@@ -14,6 +14,7 @@
 #include <revolution/os.h>
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -56,7 +57,7 @@ struct Renderer {
     using Key = std::tuple<u32, u16, u16, u8, u8, u8, u8, u8>;
     std::map<Key, C3D_Tex> textures;
     GxFrame frame;
-    bool scissorNoted = false, indirectNoted = false;
+    bool indirectNoted = false;
 
     void init() {
         C3D_Init(CommandBytes);
@@ -135,11 +136,12 @@ struct Renderer {
             std::fprintf(stderr, "The Wii GPU's drawing: indirect texture offsets are left out (the PICA has no dependent reads)\n");
             indirectNoted = true;
         }
-        if (!scissorNoted && (d.scissor[0] > 0 || d.scissor[1] > 0 || d.scissor[2] < frame.width || d.scissor[3] < frame.height)) {
-            std::fprintf(stderr, "The Wii GPU's drawing: a scissor inside the EFB is drawn unscissored for now\n");
-            scissorNoted = true;
-        }
-        if (d.triangles.empty()) return;
+        // GX's scissor in screen pixels, then on the target turned a quarter as the LCD is (citro3d's convention).
+        const int x0 = std::clamp(static_cast<int>(std::lround(d.scissor[0] * 400.0f / frame.width)), 0, 400);
+        const int x1 = std::clamp(static_cast<int>(std::lround(d.scissor[2] * 400.0f / frame.width)), 0, 400);
+        const int y0 = std::clamp(static_cast<int>(std::lround(d.scissor[1] * 240.0f / frame.height)), 0, 240);
+        const int y1 = std::clamp(static_cast<int>(std::lround(d.scissor[3] * 240.0f / frame.height)), 0, 240);
+        if (d.triangles.empty() || x1 <= x0 || y1 <= y0) return;
         if (!inFrame) begin();
         roomFor(d.triangles.size());
         if ((used + d.triangles.size()) * sizeof(GxDrawVertex) > VertexBytes) stop("a frame with more vertices than the port's buffer");
@@ -168,6 +170,8 @@ struct Renderer {
                          (pixel.depthWrite ? GPU_WRITE_DEPTH : 0);
         C3D_DepthTest(pixel.depthTest, pixel.depthTest ? pixel.depthFunc : GPU_ALWAYS, static_cast<GPU_WRITEMASK>(mask));
         C3D_CullFace(GPU_CULL_NONE);  // culled in EFB space already
+        if (x0 == 0 && y0 == 0 && x1 == 400 && y1 == 240) C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
+        else C3D_SetScissor(GPU_SCISSOR_NORMAL, 240 - y1, 400 - x1, 240 - y0, 400 - x0);
         for (unsigned unit = 0; unit < d.program.unitCount; ++unit) C3D_TexBind(unit, &texture(d.textures[d.program.units[unit].texture]));
         C3D_DrawArrays(GPU_TRIANGLES, 0, static_cast<int>(d.triangles.size()));
         fresh[0] = fresh[1] = false;
