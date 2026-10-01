@@ -33,6 +33,10 @@ completion does not make those interfaces portable to ARM11/PICA200.
   `Settings` holds the remappable Switch-style layout and pointer options; `MotionTracker`
   drives the pointer from the gyro in player space. Stylus gesture ownership prevents UI
   presses from generating shots and allows aiming across 50%-transparent buttons.
+  The game's `KPADRead` uses the same input: `smg::HidMotion` (shared with the native app)
+  switches the gyroscope and accelerometer on in `KPADInit` and feeds them to the pointer.
+  A frame longer than a quarter second moves the pointer by a quarter second's worth: the
+  rates are one moment's, and dropping such frames left the pointer frozen at low frame rates.
 - Yaz0 decompression and RARC indexing work independently of host endianness and alignment.
   Archives are found whatever the case of their names, as the Wii's DVD file system finds them:
   the disc stores `FloaterOtakingGalaxy.arc` and `CubeBubbleEXAZone.arc` where the game asks for
@@ -564,6 +568,13 @@ format; depth reads back as raw D24S8 words, with the port's nearer-is-larger tu
 texturing has no PICA counterpart (no dependent reads): a stage that only offsets its coordinates is drawn without
 the offset, with a one-time note, and set-ups that wrap, replace or chain coordinates stop by name. A frame whose
 commands outgrow citro3d's 1 MB buffer is ended and begun again with the screen output detached.
+
+**TEV comparisons.** The PICA's combiner has no compare ops (`GX_TEV_COMP_*`), which compute `d + (a > b ? c : 0)`
+and friends. Image effects lean on them: `FallOutFieldDraw`'s screen fill sets alpha to `texture alpha > K0.a ? A0 :
+0` and lets an alpha test drop the zeros. With A0 = 0 that pass is invisible on the Wii. Read as an ordinary lerp,
+it painted its colour over the file select's planets. A compare whose c is zero is exactly d, so it compiles
+exactly. One the PICA can't decide adds nothing and is counted as an approximation: the effect is left out rather
+than spread over the screen. 27 of the disc's 7,780 materials still need a real comparison.
 
 **More byte-order traps.** Data the GPU reads must hold the Wii's bytes even when the source wrote it as wider
 integers: `MainLoopFramework`'s `clearZTexData` (Z24X8 texels as `u32`s) cleared every frame to near on ARM, and every
