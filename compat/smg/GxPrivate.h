@@ -11,6 +11,8 @@ u32 GXGetFifoCount(const GXFifoObj* fifo);
 volatile void* smgGXRegisters(int unit);
 // The DSP block, whose mailboxes and AI DMA are functions (source/compat/WiiAudio.cpp); JAudio2's handler writes it.
 volatile void* smgAudioRegisters(void);
+// GXPeekARGB and GXPeekZ's pixel (source/compat/GxFifo.cpp): 0xAARRGGBB, or Z with nearer smaller.
+u32 smgPeekEfb(u16 x, u16 y, int depth);
 // Any other Wii hardware block: touching it stops the program by name.
 volatile void* smgUnportedRegisters(const char* block);
 #ifdef __cplusplus

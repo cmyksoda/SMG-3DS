@@ -1962,8 +1962,13 @@ adapt("src/RVL_SDK/gx/GXDisplayList.c", "RVL_SDK/gx/GXDisplayList.c", [('#includ
 # is still to come, so each stops by name.
 adapt("src/RVL_SDK/gx/GXMisc.c", "RVL_SDK/gx/GXMisc.c", [
     ('#include "revolution/gx.h"\n', '#include "revolution/gx.h"\n#include <smg/GxPrivate.h>\n', 1),
-    ("    u32 addr = (u32) OSPhysicalToUncached(0x8000000);\n",
-     "    OSPanic(__FILE__, __LINE__, \"reading the EFB's pixels back (GXPeekARGB, GXPeekZ) is not the port's yet\");\n    u32 addr = 0;\n", 2),
+    # The EFB's pixels come from the port's renderer, which reads its target back.
+    ("void GXPeekARGB(u16 x, u16 y, u32* color) {\n    u32 addr = (u32) OSPhysicalToUncached(0x8000000);\n    SC_PE_PI_EFB_ADDR_SET_X(addr, x);\n"
+     "    SC_PE_PI_EFB_ADDR_SET_Y(addr, y);\n    SC_PE_PI_EFB_ADDR_SET_TYPE(addr,  0);\n    *color = (*(u32 *)addr);\n}",
+     "void GXPeekARGB(u16 x, u16 y, u32* color) {\n    *color = smgPeekEfb(x, y, 0);\n}", 1),
+    ("void GXPeekZ(u16 x, u16 y, u32* z)  {\n    u32 addr = (u32) OSPhysicalToUncached(0x8000000);\n    SC_PE_PI_EFB_ADDR_SET_X(addr, x);\n"
+     "    SC_PE_PI_EFB_ADDR_SET_Y(addr, y);\n    SC_PE_PI_EFB_ADDR_SET_TYPE(addr,  1);\n    *z = *(u32*)addr;\n}",
+     "void GXPeekZ(u16 x, u16 y, u32* z)  {\n    *z = smgPeekEfb(x, y, 1);\n}", 1),
 ])
 
 # The Wii's hardware registers: the GX library's processor interface and memory interface blocks are the port's

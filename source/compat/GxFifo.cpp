@@ -93,6 +93,14 @@ void putBigEndian(u32 value, u32 bytes) {
 extern "C" {
 volatile void* smgGXRegisters(int unit) { return sRegisters[unit]; }
 
+// GXPeekARGB and GXPeekZ, from any thread: the renderer is the FIFO's, so its lock is taken (after the CPU, as ever).
+u32 smgPeekEfb(u16 x, u16 y, int depth) {
+    sFifoLock.lock();
+    const u32 value = smg::gxRenderPeek(processor(), x, y, depth != 0);
+    sFifoLock.unlock();
+    return value;
+}
+
 volatile void* smgUnportedRegisters(const char* block) {
     std::fprintf(stderr, "The Wii's %s hardware registers are not the port's\n", block);
     std::abort();

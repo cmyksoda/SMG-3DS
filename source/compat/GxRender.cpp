@@ -4,12 +4,16 @@
 #include <3ds.h>
 #include <citro3d.h>
 #include <GxShader.hpp>
+#include <private/pe_reg.h>
 #include <smg/FreeStore.hpp>
+#include <smg/GxCopy.hpp>
 #include <smg/GxDraw.hpp>
 #include <smg/GxRender.hpp>
 #include <smg/Pica.hpp>
 #include <smg/Texture.hpp>
 #include <revolution/os.h>
+#include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -24,6 +28,10 @@ namespace {
 constexpr std::size_t VertexBytes = 2u << 20, CommandBytes = 1u << 20;
 // Room a draw's commands need at most, in words: when less is left, the frame is ended and begun again (see roomFor).
 constexpr u32 DrawCommandWords = 0x800;
+// The render target read back whole for a texture copy, still tiled the screen's way round but linear.
+constexpr u32 ReadbackFlags = GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | GX_TRANSFER_RAW_COPY(0) |
+                              GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) | GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGBA8) |
+                              GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO);
 constexpr u32 DisplayTransferFlags = GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | GX_TRANSFER_RAW_COPY(0) |
                                      GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) | GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB8) |
                                      GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO);
@@ -41,6 +49,9 @@ struct Renderer {
     shaderProgram_s program;
     GxDrawVertex* vertices = nullptr;
     std::size_t used = 0;
+    // The target's colour and depth read back (both four bytes a pixel, the screen's way round), until drawn on again.
+    u32* readback[2] = {};
+    bool fresh[2] = {};
     // A texture by where and how GX fetches it.
     using Key = std::tuple<u32, u16, u16, u8, u8, u8, u8, u8>;
     std::map<Key, C3D_Tex> textures;
@@ -63,6 +74,7 @@ struct Renderer {
         C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
         C3D_FrameDrawOn(target);
         if (clearPending) C3D_RenderTargetClear(target, C3D_CLEAR_ALL, clearColor, clearDepth);
+        fresh[0] = fresh[1] = false;
         clearPending = false;
         used = 0;
         inFrame = true;
@@ -158,6 +170,7 @@ struct Renderer {
         C3D_CullFace(GPU_CULL_NONE);  // culled in EFB space already
         for (unsigned unit = 0; unit < d.program.unitCount; ++unit) C3D_TexBind(unit, &texture(d.textures[d.program.units[unit].texture]));
         C3D_DrawArrays(GPU_TRIANGLES, 0, static_cast<int>(d.triangles.size()));
+        fresh[0] = fresh[1] = false;
         used += d.triangles.size();
     }
 
@@ -176,21 +189,92 @@ struct Renderer {
         used = 0;
     }
 
+    // Textures made from memory a copy has just written are stale.
+    void forget(u32 address, std::size_t size) {
+        for (auto it = textures.begin(); it != textures.end();) {
+            if (std::get<0>(it->first) >= address && std::get<0>(it->first) < address + size) {
+                C3D_TexDelete(&it->second);
+                it = textures.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    // The EFB is the 400x240 target, so each EFB pixel is read from the target pixel it was drawn to, with the precision
+    // of the EFB's pixel format (PE_CONTROL): RGB8 has no alpha, RGBA6 six bits a channel, RGB565 its own.
+    struct Efb {
+        const u32* pixels;
+        float toScreenX, toScreenY;
+        u32 format;
+    };
+    static std::array<std::uint8_t, 4> efbPixel(const void* context, int x, int y) {
+        const Efb& e = *static_cast<const Efb*>(context);
+        const int sx = std::clamp(static_cast<int>((static_cast<float>(x) + 0.5f) * e.toScreenX), 0, 399);
+        const int sy = std::clamp(static_cast<int>((static_cast<float>(y) + 0.5f) * e.toScreenY), 0, 239);
+        const u32 v = e.pixels[sx * 240 + (239 - sy)];  // the target is the screen turned a quarter, as the LCD is
+        std::array<std::uint8_t, 4> c{std::uint8_t(v >> 24), std::uint8_t(v >> 16), std::uint8_t(v >> 8), std::uint8_t(v)};
+        const auto keep = [](std::uint8_t value, int bits) { return std::uint8_t((value >> (8 - bits) << (8 - bits)) | value >> bits); };
+        if (e.format == 0) c[3] = 255;
+        if (e.format == 1) for (auto& channel : c) channel = keep(channel, 6);
+        if (e.format == 2) c[0] = keep(c[0], 5), c[1] = keep(c[1], 6), c[2] = keep(c[2], 5), c[3] = 255;
+        return c;
+    }
+
+    void textureCopy(const GxCommandProcessor& gpu, std::uint32_t command) {
+        GxTextureCopy copy;
+        if (const char* why = readTextureCopy(gpu, command, copy)) stop(why);
+        if (!inFrame) begin();
+        const Efb efb{readEfb(false), 400.0f / frame.width, 240.0f / frame.height, PE_CONTROL_GET_PIXTYPE(gpu.bp[0x43])};
+        encodeTextureCopy(copy, efbPixel, &efb, static_cast<std::uint8_t*>(OSPhysicalToCached(copy.address)));
+        forget(copy.address, textureCopySize(copy));
+        if (copy.clear) C3D_RenderTargetClear(target, C3D_CLEAR_ALL, copyClearColor(gpu), copyClearDepth(gpu)), fresh[0] = fresh[1] = false;
+    }
+
+    // What has been drawn so far goes to the GPU and is finished before the target is read; depth (D24S8) moves as
+    // raw four-byte pixels too.
+    const u32* readEfb(bool depth) {
+        u32*& into = readback[depth];
+        if (!into) into = static_cast<u32*>(linearAlloc(240 * 400 * 4));
+        if (!into) stop("reading the EFB back with no memory to read it into");
+        if (!fresh[depth]) {
+            if (inFrame) C3D_FrameSplit(0);
+            void* buffer = depth ? target->frameBuf.depthBuf : target->frameBuf.colorBuf;
+            C3D_SyncDisplayTransfer(static_cast<u32*>(buffer), GX_BUFFER_DIM(240, 400), into, GX_BUFFER_DIM(240, 400), ReadbackFlags);
+            fresh[depth] = true;
+        }
+        return into;
+    }
+
+    std::uint32_t peek(const GxCommandProcessor& gpu, unsigned x, unsigned y, bool depth) {
+        if (!ready) return depth ? 0xFFFFFF : 0;
+        if (!depth) {
+            const Efb efb{readEfb(false), 400.0f / frame.width, 240.0f / frame.height, PE_CONTROL_GET_PIXTYPE(gpu.bp[0x43])};
+            const auto c = efbPixel(&efb, int(x), int(y));
+            return u32(c[3]) << 24 | u32(c[0]) << 16 | u32(c[1]) << 8 | c[2];
+        }
+        const int sx = std::clamp(static_cast<int>((static_cast<float>(x) + 0.5f) * 400.0f / frame.width), 0, 399);
+        const int sy = std::clamp(static_cast<int>((static_cast<float>(y) + 0.5f) * 240.0f / frame.height), 0, 239);
+        return 0xFFFFFF - (readEfb(true)[sx * 240 + (239 - sy)] & 0xFFFFFF);  // the port keeps nearer as larger
+    }
+
+    static u32 copyClearColor(const GxCommandProcessor& gpu) {
+        const std::uint32_t ar = gpu.bp[0x4F], gb = gpu.bp[0x50];
+        // citro3d's clear colour is 0xRRGGBBAA.
+        return (ar & 0xFF) << 24 | (gb >> 8 & 0xFF) << 16 | (gb & 0xFF) << 8 | (ar >> 8 & 0xFF);
+    }
+    // Its depth buffer keeps nearer as larger.
+    static u32 copyClearDepth(const GxCommandProcessor& gpu) { return 0xFFFFFF - (gpu.bp[0x51] & 0xFFFFFF); }
+
     // PE_COPY_CMD: opcode 1 copies to the display, 0 to a texture; bit 11 clears the EFB after.
     void copy(const GxCommandProcessor& gpu, std::uint32_t command) {
-        if (!(command >> 14 & 1)) stop("an EFB copy to a texture");
+        if (!(command >> 14 & 1)) return textureCopy(gpu, command);
         const std::uint32_t size = gpu.bp[0x4A];
         frame.width = static_cast<float>((size & 0x3FF) + 1), frame.height = static_cast<float>((size >> 10 & 0x3FF) + 1);
         if (!inFrame) begin();
         C3D_FrameEnd(0);
         inFrame = false;
-        if (command >> 11 & 1) {
-            const std::uint32_t ar = gpu.bp[0x4F], gb = gpu.bp[0x50];
-            // citro3d's clear colour is 0xRRGGBBAA; its depth buffer keeps nearer as larger.
-            clearColor = (ar & 0xFF) << 24 | (gb >> 8 & 0xFF) << 16 | (gb & 0xFF) << 8 | (ar >> 8 & 0xFF);
-            clearDepth = 0xFFFFFF - (gpu.bp[0x51] & 0xFFFFFF);
-            clearPending = true;
-        }
+        if (command >> 11 & 1) clearColor = copyClearColor(gpu), clearDepth = copyClearDepth(gpu), clearPending = true;
     }
 };
 
@@ -203,6 +287,11 @@ Renderer& renderer() {
 void gxRenderPrimitive(const GxCommandProcessor& gpu, std::uint8_t kind, std::uint8_t format, std::uint16_t count, const std::uint8_t* vertices) {
     const PortMemory memory;
     renderer().draw(gpu, kind, format, count, vertices);
+}
+
+std::uint32_t gxRenderPeek(const GxCommandProcessor& gpu, unsigned x, unsigned y, bool depth) {
+    const PortMemory memory;
+    return renderer().peek(gpu, x, y, depth);
 }
 
 void gxRenderCopy(const GxCommandProcessor& gpu, std::uint32_t command) {
