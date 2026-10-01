@@ -1730,11 +1730,14 @@ adapt("src/Game/RhythmLib/AudChordInfo.cpp", "Game/RhythmLib/AudChordInfo.cpp", 
      "    void* resource = pArchive->getResource((u16)id);\n    if (resource != nullptr && *(s32*)resource == 0) {\n"
      "        smgNativeChordTable(resource, pArchive->getResSize(resource));\n    }\n    bool loaded = setChordTableResource(resource);", 1),
 ])
-# A failed allocation panics with an empty message on the Wii; the port's names the heap, size and alignment.
+# A failed allocation panics with an empty message on the Wii; the port's names the heap, size and alignment, after a
+# census of what fills the heap (source/compat/GameHeap.cpp).
 adapt("src/Game/System/HeapMemoryWatcher.cpp", "Game/System/HeapMemoryWatcher.cpp", [
+    ('#include "Game/System/HeapMemoryWatcher.hpp"\n', '#include "Game/System/HeapMemoryWatcher.hpp"\n\nextern "C" void smgHeapCensus(void* heap);\n', 1),
     ("void HeapMemoryWatcher::memoryErrorCallback(void*, u32, int) {\n    OSPanic(__FILE__, 537, \"\");",
      "void HeapMemoryWatcher::memoryErrorCallback(void* pHeap, u32 size, int align) {\n"
      "    JKRHeap* heap = static_cast< JKRHeap* >(pHeap);\n"
+     "    smgHeapCensus(pHeap);\n"
      "    OSPanic(__FILE__, 537, \"heap %p (%lu of %lu bytes free, %lu in one block) could not give %lu bytes aligned %d\", pHeap,\n"
      "            (unsigned long)heap->getTotalFreeSize(), (unsigned long)heap->mSize, (unsigned long)heap->getFreeSize(), (unsigned long)size, align);", 1),
 ])
