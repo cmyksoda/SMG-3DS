@@ -42,8 +42,6 @@ void RFLDrawXlu() { unported("RFLDrawXlu"); }
 void RFLDrawXluCore() { unported("RFLDrawXluCore"); }
 void RFLGetAdditionalInfo() { unported("RFLGetAdditionalInfo"); }
 void RFLInitCharModel() { unported("RFLInitCharModel"); }
-void RFLLoadMaterialSetting() { unported("RFLLoadMaterialSetting"); }
-void RFLLoadVertexSetting() { unported("RFLLoadVertexSetting"); }
 void RFLMakeIcon() { unported("RFLMakeIcon"); }
 void RFLSetExpression() { unported("RFLSetExpression"); }
 void RFLSetMtx() { unported("RFLSetMtx"); }
