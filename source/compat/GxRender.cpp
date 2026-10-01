@@ -49,7 +49,8 @@ struct Renderer {
     DVLB_s* shader = nullptr;
     shaderProgram_s program;
     GxDrawVertex* vertices = nullptr;
-    std::size_t used = 0;
+    std::size_t used = 0, flushed = 0;
+    GxDraw drawing;  // kept between draws, so its vertices' memory is too
     // The target's colour and depth read back (both four bytes a pixel, the screen's way round), until drawn on again.
     u32* readback[2] = {};
     bool fresh[2] = {};
@@ -77,8 +78,27 @@ struct Renderer {
         if (clearPending) C3D_RenderTargetClear(target, C3D_CLEAR_ALL, clearColor, clearDepth);
         fresh[0] = fresh[1] = false;
         clearPending = false;
-        used = 0;
+        used = flushed = 0;
         inFrame = true;
+    }
+
+    // The vertices written since the GPU last took a command list, out of the CPU's cache (Azahar has none).
+    void flushVertices() {
+        if (used > flushed) GSPGPU_FlushDataCache(vertices + flushed, (used - flushed) * sizeof(GxDrawVertex));
+        flushed = used;
+    }
+
+    // Ends the frame drawn so far without showing it; resume() begins again on the same target once the GPU is done, so
+    // the vertex buffer can start over. Inside a frame citro3d's "sync" transfers only queue: readbacks go between.
+    void pause() {
+        C3D_RenderTargetDetachOutput(target);
+        C3D_FrameEnd(0);
+    }
+    void resume() {
+        C3D_FrameBegin(0);
+        C3D_FrameDrawOn(target);
+        C3D_RenderTargetSetOutput(target, GFX_TOP, GFX_LEFT, DisplayTransferFlags);
+        used = flushed = 0;
     }
 
     C3D_Tex& texture(const GxTextureMap& map) {
@@ -127,7 +147,7 @@ struct Renderer {
     }
 
     void draw(const GxCommandProcessor& gpu, std::uint8_t kind, std::uint8_t format, std::uint16_t count, const std::uint8_t* data) {
-        GxDraw d;
+        GxDraw& d = drawing;
         buildGxDraw(gpu, kind, format, count, data, frame, d);
         if (d.unsupported) stop(d.unsupported);
         if (d.material.blend.type == 2 && d.material.blend.logic != 3) stop("a logic op other than copy");
@@ -152,8 +172,6 @@ struct Renderer {
             out[i].position[0] = d.triangles[i].position[1];
             out[i].position[1] = -d.triangles[i].position[0];
         }
-        // The GPU reads this memory itself: on hardware the CPU's cache must hand it over (Azahar has no cache).
-        GSPGPU_FlushDataCache(out, d.triangles.size() * sizeof(GxDrawVertex));
 
         C3D_BindProgram(&program);
         C3D_AttrInfo* attributes = C3D_GetAttrInfo();
@@ -185,12 +203,9 @@ struct Renderer {
         u32 size, offset;
         GPUCMD_GetBuffer(&buffer, &size, &offset);
         if (size - offset >= DrawCommandWords && (used + vertexCount) * sizeof(GxDrawVertex) <= VertexBytes) return;
-        C3D_RenderTargetDetachOutput(target);
-        C3D_FrameEnd(0);
-        C3D_FrameBegin(C3D_FRAME_SYNCDRAW);  // waits for the GPU, so the vertex buffer can start over
-        C3D_FrameDrawOn(target);
-        C3D_RenderTargetSetOutput(target, GFX_TOP, GFX_LEFT, DisplayTransferFlags);
-        used = 0;
+        flushVertices();
+        pause();
+        resume();
     }
 
     // Textures made from memory a copy has just written are stale.
@@ -235,16 +250,18 @@ struct Renderer {
         if (copy.clear) C3D_RenderTargetClear(target, C3D_CLEAR_ALL, copyClearColor(gpu), copyClearDepth(gpu)), fresh[0] = fresh[1] = false;
     }
 
-    // What has been drawn so far goes to the GPU and is finished before the target is read; depth (D24S8) moves as
-    // raw four-byte pixels too.
+    // What has been drawn so far, read back from the target once the GPU has finished it; depth (D24S8) moves as raw
+    // four-byte pixels too.
     const u32* readEfb(bool depth) {
         u32*& into = readback[depth];
         if (!into) into = static_cast<u32*>(linearAlloc(240 * 400 * 4));
         if (!into) stop("reading the EFB back with no memory to read it into");
         if (!fresh[depth]) {
-            if (inFrame) C3D_FrameSplit(0);
+            if (inFrame) flushVertices(), pause();
             void* buffer = depth ? target->frameBuf.depthBuf : target->frameBuf.colorBuf;
             C3D_SyncDisplayTransfer(static_cast<u32*>(buffer), GX_BUFFER_DIM(240, 400), into, GX_BUFFER_DIM(240, 400), ReadbackFlags);
+            GSPGPU_InvalidateDataCache(into, 240 * 400 * 4);
+            if (inFrame) resume();
             fresh[depth] = true;
         }
         return into;
