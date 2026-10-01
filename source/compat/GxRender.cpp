@@ -43,7 +43,7 @@ struct Renderer {
     using Key = std::tuple<u32, u16, u16, u8, u8, u8, u8, u8>;
     std::map<Key, C3D_Tex> textures;
     GxFrame frame;
-    bool scissorNoted = false;
+    bool scissorNoted = false, indirectNoted = false;
 
     void init() {
         C3D_Init(C3D_DEFAULT_CMDBUF_SIZE);
@@ -117,6 +117,10 @@ struct Renderer {
         if (d.unsupported) stop(d.unsupported);
         if (d.material.blend.type == 2 && d.material.blend.logic != 3) stop("a logic op other than copy");
         if (d.depthTextureOp) depthFromTexture(d);
+        if (d.indirectDropped && !indirectNoted) {
+            std::fprintf(stderr, "The Wii GPU's drawing: indirect texture offsets are left out (the PICA has no dependent reads)\n");
+            indirectNoted = true;
+        }
         if (!scissorNoted && (d.scissor[0] > 0 || d.scissor[1] > 0 || d.scissor[2] < frame.width || d.scissor[3] < frame.height)) {
             std::fprintf(stderr, "The Wii GPU's drawing: a scissor inside the EFB is drawn unscissored for now\n");
             scissorNoted = true;

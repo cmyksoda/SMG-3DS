@@ -56,7 +56,6 @@ void readTev(const GxCommandProcessor& gpu, GxDraw& out) {
     m.tevStageCount = static_cast<std::uint8_t>(GEN_MODE_GET_NTEV(gen) + 1);
     m.texGenCount = static_cast<std::uint8_t>(GEN_MODE_GET_NTEX(gen));
     m.channelCount = static_cast<std::uint8_t>(GEN_MODE_GET_NCOL(gen));
-    if (GEN_MODE_GET_NBMP(gen)) out.unsupported = "indirect texture stages";
     for (int i = 0; i < m.tevStageCount; ++i) {
         TevStage& s = m.stages[i];
         const std::uint32_t color = gpu.bp[0xC0 + 2 * i], alpha = gpu.bp[0xC1 + 2 * i];
@@ -77,7 +76,11 @@ void readTev(const GxCommandProcessor& gpu, GxDraw& out) {
         s.channel = channelId(odd ? RAS1_TREF_GET_CC1(order) : RAS1_TREF_GET_CC0(order));
         s.konstColor = static_cast<std::uint8_t>(odd ? TEV_KSEL_GET_KCSEL1(ksel) : TEV_KSEL_GET_KCSEL0(ksel));
         s.konstAlpha = static_cast<std::uint8_t>(odd ? TEV_KSEL_GET_KASEL1(ksel) : TEV_KSEL_GET_KASEL0(ksel));
-        if (gpu.bp[0x10 + i] & 0x1FFFFF) out.unsupported = "indirect texturing";
+        // BP 0x10+: bias 4-6, bump alpha 7-8, matrix 9-12, S and T wraps 13-18, LOD 19, add the previous stage's 20.
+        const std::uint32_t indirect = gpu.bp[0x10 + i];
+        if (indirect >> 7 & 3 || indirect >> 13 & 0x3F || indirect >> 20 & 1)
+            out.unsupported = "an indirect lookup that wraps, replaces or chains its coordinates, or bumps alpha";
+        else if (indirect >> 9 & 0xF) out.indirectDropped = true;
         if (s.texMap < 8) m.textures[s.texMap] = s.texMap;
     }
     for (int r = 0; r < 4; ++r) {

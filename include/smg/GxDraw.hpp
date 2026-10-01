@@ -38,6 +38,8 @@ struct GxDraw {
     std::uint8_t depthTextureOp = 0, depthTextureType = 0;
     std::uint32_t depthTextureOffset = 0;
     int scissor[4] = {};  // left, top, right, bottom (exclusive), EFB pixels
+    // A stage's indirect offset left out, its regular coordinates kept: the PICA has no dependent texture reads.
+    bool indirectDropped = false;
     std::vector<GxDrawVertex> triangles;
     const char* unsupported = nullptr;
 };

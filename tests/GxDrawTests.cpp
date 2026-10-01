@@ -73,6 +73,26 @@ void quad(Stream& s, std::initializer_list<unsigned> corners) {
     }
 }
 
+// A stage offset by an indirect matrix keeps its own coordinates, its offset left out; wrapping or replacing them can't be.
+void indirect() {
+    auto owned = std::make_unique<smg::GxCommandProcessor>(host());
+    smg::GxCommandProcessor& gpu = *owned;
+    Stream s;
+    clearState(s);
+    s.bp(0x00010001);  // GEN_MODE: one indirect stage
+    s.bp(0x10000270);  // stage 0: indirect stage 0, biased S T U, matrix 0
+    quad(s, {0, 1, 3, 2});
+    drawn.clear();
+    gpu.put(s.bytes.data(), static_cast<std::uint32_t>(s.bytes.size()));
+    smg::GxDraw d;
+    smg::buildGxDraw(gpu, drawn[0].kind, drawn[0].format, drawn[0].count, drawn[0].data.data(), {}, d);
+    check(!d.unsupported && d.indirectDropped && d.triangles.size() == 6, "an indirect offset is left out and the stage still drawn");
+    gpu.bp[0x10] = 0x270 | 1 << 16;  // T wraps to 0: the lookup replaces the coordinate
+    smg::GxDraw wrapped;
+    smg::buildGxDraw(gpu, drawn[0].kind, drawn[0].format, drawn[0].count, drawn[0].data.data(), {}, wrapped);
+    check(wrapped.unsupported != nullptr, "one that wraps its coordinates stops by name");
+}
+
 void clearQuad() {
     auto owned = std::make_unique<smg::GxCommandProcessor>(host());  // 80 KiB: more than a 3DS thread's stack
     smg::GxCommandProcessor& gpu = *owned;
@@ -218,6 +238,7 @@ void layoutMaterial() {
 
 int runGxDrawTests() {
     clearQuad();
+    indirect();
     layoutMaterial();
     texturedQuad();
     perspective();
