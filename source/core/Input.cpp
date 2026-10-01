@@ -223,7 +223,8 @@ const InputFrame& Input::update(const RawInput& raw, float seconds) {
     }
     frame_.shootMode = stylus && shootMode_;
     const bool touchShot = frame_.shootMode && touchActive && gesture_ == Gesture::Aim;
-    frame_.shoot = sample(shoot_, frame_.pointer.visible && (actions[Shoot].held || touchShot));
+    // ZR is the Wii's B whether or not the pointer shows: the game asks for it at the title and in menus too.
+    frame_.shoot = sample(shoot_, actions[Shoot].held || touchShot);
     frame_.optionsOpen = optionsOpen_;
     frame_.remapOpen = remapOpen_;
     frame_.capturing = capturing_;

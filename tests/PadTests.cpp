@@ -58,7 +58,7 @@ int runPadTests() {
         check(pad.buttons().testReleaseZ() && !pad.buttons().testButtonC(), "original Z and C release");
         raw.held = smg::ZR;
         sample();
-        check(!pad.buttons().testButtonB(), "ZR cannot shoot while the stylus pointer is hidden");
+        check(pad.buttons().testButtonB(), "ZR is the Wii's B with the stylus lifted, as the title's A + B needs");
         raw = {};
         sample();
 

@@ -189,6 +189,10 @@ void stylusPointer() {
     raw.touchY = 120;
     check(input.update(raw).shoot.pressed, "ZR shoots at the stylus pointer");
     input.update({});
+    raw = {};
+    raw.held = smg::ZR;
+    check(input.update(raw).shoot.pressed && !input.frame().pointer.visible, "ZR is still Wii B with the stylus lifted");
+    input.update({});
     frame = input.update(touch(280, 210));
     check(frame.shootMode && !frame.pointer.visible && !frame.shoot.held, "toggle press consumes touch without firing");
     check(near(smg::touchButtonOpacity(frame), 1), "UI press stays opaque");
