@@ -3,6 +3,7 @@
 // hands over are kept as the registers kept them. What reaches the screens is the port's renderer's.
 #include <3ds.h>
 #include <revolution/vi.h>
+#include <smg/Interrupts.hpp>
 #include <cstdio>
 #include <cstdlib>
 
@@ -29,8 +30,11 @@ void retraces(void*) {
         sCurrentFrameBuffer = sFlushedFrameBuffer;
         const VIRetraceCallback pre = sPreRetrace, post = sPostRetrace;
         LightLock_Unlock(&sLock);
-        if (pre) pre(count);
-        if (post) post(count);
+        {
+            const smg::AsInterrupt retrace;
+            if (pre) pre(count);
+            if (post) post(count);
+        }
         LightLock_Lock(&sLock);
         CondVar_Broadcast(&sRetrace);
         LightLock_Unlock(&sLock);
@@ -50,6 +54,7 @@ void VIInit() {
 }
 
 void VIWaitForRetrace() {
+    const smg::InterruptsReleased released;
     LightLock_Lock(&sLock);
     const u32 start = sRetraceCount;
     while (sRetraceCount == start) CondVar_Wait(&sRetrace, &sLock);

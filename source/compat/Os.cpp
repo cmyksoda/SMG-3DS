@@ -5,10 +5,17 @@
 #include <revolution/os/OSCache.h>
 #include <revolution/os/OSInterrupt.h>
 #include <revolution/os/OSThread.h>
+#include <smg/Interrupts.hpp>
+#include <atomic>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#if __has_include(<3ds.h>)
+#include <3ds.h>
+#else
+#include <mutex>
+#endif
 
 // The Wii's bus clock, which the SDK reads from low memory; OSGetTime's ticks run at a quarter of it.
 u32 __OSBusClock = 243000000;
@@ -25,32 +32,55 @@ void DCZeroRange(void* start, u32 size) { std::memset(start, 0, size); }
 void PPCSync() { __sync_synchronize(); }
 
 namespace {
-BOOL sInterruptsEnabled = TRUE;
+#if __has_include(<3ds.h>)
+class CpuLock {
+public:
+    void lock() { LightLock_Lock(&lock_); }
+    bool try_lock() { return LightLock_TryLock(&lock_) == 0; }
+    void unlock() { LightLock_Unlock(&lock_); }
+
+private:
+    LightLock lock_ = 1;
+};
+#else
+using CpuLock = std::mutex;
+#endif
+
+// Interrupts off is the Wii's one CPU held: nothing else ran meanwhile, so a thread turning them off waits out any
+// other thread's off-section, handler or alarm. Each thread has its own state, as each Wii thread had its MSR.
+CpuLock sCpu;
+thread_local bool tOff = false;
 s32 sSchedulerDisabled = 0;
 void deliverPendingInterrupts();
 } // namespace
 
 // The previous state comes back, as the SDK returns it, so nested sections restore what they found.
 BOOL OSDisableInterrupts() {
-    const BOOL previous = sInterruptsEnabled;
-    sInterruptsEnabled = FALSE;
-    return previous;
+    if (tOff) return FALSE;
+    sCpu.lock();
+    tOff = true;
+    return TRUE;
 }
 
 // Turning interrupts back on delivers what was raised while they were off, as the Wii's CPU takes them.
 BOOL OSEnableInterrupts() {
-    const BOOL previous = sInterruptsEnabled;
-    sInterruptsEnabled = TRUE;
+    if (!tOff) return TRUE;
+    tOff = false;
+    sCpu.unlock();
     deliverPendingInterrupts();
-    return previous;
+    return FALSE;
 }
 
-BOOL OSRestoreInterrupts(BOOL level) {
-    const BOOL previous = sInterruptsEnabled;
-    sInterruptsEnabled = level;
-    if (level) deliverPendingInterrupts();
-    return previous;
+BOOL OSRestoreInterrupts(BOOL level) { return level ? OSEnableInterrupts() : OSDisableInterrupts(); }
+
+smg::InterruptsReleased::InterruptsReleased() : held_(tOff) {
+    if (held_) OSEnableInterrupts();
 }
+smg::InterruptsReleased::~InterruptsReleased() {
+    if (held_) OSDisableInterrupts();
+}
+smg::AsInterrupt::AsInterrupt() : held_(OSDisableInterrupts()) {}
+smg::AsInterrupt::~AsInterrupt() { OSRestoreInterrupts(held_); }
 
 s32 OSDisableScheduler() { return sSchedulerDisabled++; }
 s32 OSEnableScheduler() { return sSchedulerDisabled--; }
@@ -107,7 +137,7 @@ void PPCMtmsr(u32 state) { sMachineState = state; }
 #include <revolution/os/OSReset.h>
 namespace {
 __OSInterruptHandler sInterruptHandlers[32] = {};
-OSInterruptMask sUnmasked = 0;
+std::atomic<OSInterruptMask> sUnmasked{0};
 u32 sHid2 = 0, sWpar = 0;
 } // namespace
 __OSInterruptHandler __OSSetInterruptHandler(__OSInterrupt interrupt, __OSInterruptHandler handler) {
@@ -116,39 +146,38 @@ __OSInterruptHandler __OSSetInterruptHandler(__OSInterrupt interrupt, __OSInterr
     return previous;
 }
 OSInterruptMask __OSUnmaskInterrupts(OSInterruptMask mask) {
-    const OSInterruptMask previous = ~sUnmasked;
-    sUnmasked |= mask;
+    const OSInterruptMask previous = ~sUnmasked.fetch_or(mask);
+    deliverPendingInterrupts();
     return previous;
 }
-OSInterruptMask __OSMaskInterrupts(OSInterruptMask mask) {
-    const OSInterruptMask previous = ~sUnmasked;
-    sUnmasked &= ~mask;
-    return previous;
-}
+OSInterruptMask __OSMaskInterrupts(OSInterruptMask mask) { return ~sUnmasked.fetch_and(~mask); }
 namespace {
-u32 sPendingInterrupts = 0;
+std::atomic<u32> sPendingInterrupts{0};
 
-// The lowest-numbered source first, as the Wii's dispatcher takes them; a handler runs with interrupts off.
+// The lowest-numbered source first, as the Wii's dispatcher takes them, with interrupts off. A thread finding the
+// CPU held leaves them to its holder, who looks again after each release, so none is lost between the two.
 void deliverPendingInterrupts() {
-    while (sInterruptsEnabled) {
-        const u32 ready = sPendingInterrupts & sUnmasked;
-        if (!ready) return;
-        const int source = __builtin_clz(ready);
-        sPendingInterrupts &= ~(0x80000000u >> source);
-        const __OSInterruptHandler handler = sInterruptHandlers[source];
-        if (!handler) continue;
-        OSContext context;
-        std::memset(&context, 0, sizeof context);
-        sInterruptsEnabled = FALSE;
-        handler(static_cast<__OSInterrupt>(source), &context);
-        sInterruptsEnabled = TRUE;
+    while (!tOff && (sPendingInterrupts & sUnmasked)) {
+        if (!sCpu.try_lock()) return;
+        tOff = true;
+        for (u32 ready; (ready = sPendingInterrupts & sUnmasked);) {
+            const int source = __builtin_clz(ready);
+            sPendingInterrupts.fetch_and(~(0x80000000u >> source));
+            if (const __OSInterruptHandler handler = sInterruptHandlers[source]) {
+                OSContext context;
+                std::memset(&context, 0, sizeof context);
+                handler(static_cast<__OSInterrupt>(source), &context);
+            }
+        }
+        tOff = false;
+        sCpu.unlock();
     }
 }
 } // namespace
 
-// A device of the port's raises one of the Wii's interrupts (the GPU's command processor, for its pixel engine).
+// A device of the port's raises one of the Wii's interrupts; it never waits for the CPU, as it may hold the FIFO.
 extern "C" void smgRaiseInterrupt(__OSInterrupt interrupt) {
-    sPendingInterrupts |= 0x80000000u >> (interrupt & 31);
+    sPendingInterrupts.fetch_or(0x80000000u >> (interrupt & 31));
     deliverPendingInterrupts();
 }
 

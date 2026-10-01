@@ -8,6 +8,7 @@
 #include <revolution/os/OSThread.h>
 #include <revolution/os/OSTime.h>
 #include <smg/FreeStore.hpp>
+#include <smg/Interrupts.hpp>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -100,7 +101,10 @@ void OSLockMutex(OSMutex* mutex) {
         ++mutex->count;
         return;
     }
-    LightLock_Lock(lockOf(mutex));
+    if (LightLock_TryLock(lockOf(mutex)) != 0) {
+        const smg::InterruptsReleased released;
+        LightLock_Lock(lockOf(mutex));
+    }
     mutex->thread = self;
     mutex->count = 1;
 }
@@ -138,12 +142,12 @@ void OSInitMessageQueue(OSMessageQueue* queue, OSMessage* messages, s32 count) {
 }
 
 // A full queue makes a blocking sender wait and a non-blocking one fail, as the SDK's does; Jam puts the
-// message first in line.
-static BOOL put(OSMessageQueue* queue, OSMessage message, s32 flags, bool first) {
+// message first in line. A wait is tried first without it, so only a real one lets interrupts in.
+static BOOL putMessage(OSMessageQueue* queue, OSMessage message, bool wait, bool first) {
     QueueSync* sync = syncOf(queue);
     LightLock_Lock(&sync->lock);
     while (queue->usedCount >= queue->msgCount) {
-        if (!(flags & OS_MESSAGE_BLOCK)) {
+        if (!wait) {
             LightLock_Unlock(&sync->lock);
             return FALSE;
         }
@@ -161,14 +165,21 @@ static BOOL put(OSMessageQueue* queue, OSMessage message, s32 flags, bool first)
     return TRUE;
 }
 
-BOOL OSSendMessage(OSMessageQueue* queue, OSMessage message, s32 flags) { return put(queue, message, flags, false); }
-BOOL OSJamMessage(OSMessageQueue* queue, OSMessage message, s32 flags) { return put(queue, message, flags, true); }
+static BOOL sendMessage(OSMessageQueue* queue, OSMessage message, s32 flags, bool first) {
+    if (putMessage(queue, message, false, first)) return TRUE;
+    if (!(flags & OS_MESSAGE_BLOCK)) return FALSE;
+    const smg::InterruptsReleased released;
+    return putMessage(queue, message, true, first);
+}
 
-BOOL OSReceiveMessage(OSMessageQueue* queue, OSMessage* message, s32 flags) {
+BOOL OSSendMessage(OSMessageQueue* queue, OSMessage message, s32 flags) { return sendMessage(queue, message, flags, false); }
+BOOL OSJamMessage(OSMessageQueue* queue, OSMessage message, s32 flags) { return sendMessage(queue, message, flags, true); }
+
+static BOOL takeMessage(OSMessageQueue* queue, OSMessage* message, bool wait) {
     QueueSync* sync = syncOf(queue);
     LightLock_Lock(&sync->lock);
     while (queue->usedCount == 0) {
-        if (!(flags & OS_MESSAGE_BLOCK)) {
+        if (!wait) {
             LightLock_Unlock(&sync->lock);
             return FALSE;
         }
@@ -180,6 +191,13 @@ BOOL OSReceiveMessage(OSMessageQueue* queue, OSMessage* message, s32 flags) {
     CondVar_Broadcast(&sync->notFull);
     LightLock_Unlock(&sync->lock);
     return TRUE;
+}
+
+BOOL OSReceiveMessage(OSMessageQueue* queue, OSMessage* message, s32 flags) {
+    if (takeMessage(queue, message, false)) return TRUE;
+    if (!(flags & OS_MESSAGE_BLOCK)) return FALSE;
+    const smg::InterruptsReleased released;
+    return takeMessage(queue, message, true);
 }
 
 // A thread starts suspended, as the SDK makes it, and first runs when OSResumeThread brings its count to zero.
@@ -225,6 +243,7 @@ s32 OSSuspendThread(OSThread* thread) {
     Native* native = nativeOf(thread);
     if (previous > 0 || !native || !native->thread) return previous;
     if (thread != OSGetCurrentThread()) unported("OSSuspendThread of another running thread");
+    const smg::InterruptsReleased released;
     while (thread->suspend > 0) LightEvent_Wait(&native->resumed);
     return previous;
 }
@@ -243,7 +262,10 @@ void OSExitThread(void* result) {
 BOOL OSJoinThread(OSThread* thread, void** result) {
     Native* native = nativeOf(thread);
     if (!native || !native->thread) return FALSE;
-    threadJoin(native->thread, U64_MAX);
+    {
+        const smg::InterruptsReleased released;
+        threadJoin(native->thread, U64_MAX);
+    }
     threadFree(native->thread);
     native->thread = nullptr;
     if (result) *result = native->result;
@@ -280,11 +302,16 @@ void OSInitThreadQueue(OSThreadQueue* queue) {
     queue->head = queue->tail = nullptr;
 }
 
+// The SDK sleeps with interrupts off until a handler wakes the queue: the wake-up count is noted before they come
+// on, and they come on without the sleep lock held, since a handler run then may wake this very queue.
 void OSSleepThread(OSThreadQueue* queue) {
     LightLock_Lock(&sSleepLock);
     Sleepers& waiting = sleepers()[queue];
     if (waiting.wakeups == 0 && !waiting.woken) CondVar_Init(&waiting.woken);
     const u32 lay = waiting.wakeups;
+    LightLock_Unlock(&sSleepLock);
+    const smg::InterruptsReleased released;
+    LightLock_Lock(&sSleepLock);
     while (waiting.wakeups == lay) CondVar_Wait(&waiting.woken, &sSleepLock);
     LightLock_Unlock(&sSleepLock);
 }
@@ -297,8 +324,14 @@ void OSWakeupThread(OSThreadQueue* queue) {
     LightLock_Unlock(&sSleepLock);
 }
 
-void OSYieldThread() { svcSleepThread(0); }
-void OSSleepTicks(OSTime ticks) { svcSleepThread(static_cast<s64>(toNanoseconds(ticks))); }
+void OSYieldThread() {
+    const smg::InterruptsReleased released;
+    svcSleepThread(0);
+}
+void OSSleepTicks(OSTime ticks) {
+    const smg::InterruptsReleased released;
+    svcSleepThread(static_cast<s64>(toNanoseconds(ticks)));
+}
 
 // The time base counts OS_TIMER_CLOCK ticks from 2000-01-01, as the Wii's does: set from the 3DS clock once,
 // then advanced by its system tick.
@@ -400,6 +433,7 @@ void alarms(void*) {
             LightLock_Unlock(&sAlarmLock);
             OSContext context;
             std::memset(&context, 0, sizeof context);
+            const smg::AsInterrupt decrementer;
             handler(due, &context);
             continue;
         }

@@ -1547,6 +1547,8 @@ adapt("libs/JSystem/include/JSystem/JKernel/JKRAram.hpp", "include/JSystem/JKern
 adapt("src/JSystem/JAudio2/dsptask.cpp", "JSystem/JAudio2/dsptask.cpp", [
     ("    audiotask.iram_mmem_addr = (u16*)((u8*)jdsp + 0x80000000);", "    audiotask.iram_mmem_addr = jdsp;", 1),
     ("    audiotask.dram_mem_addr = (u16*)((u8*)AUDIO_YIELD_BUFFER + 0x80000000);", "    audiotask.dram_mem_addr = AUDIO_YIELD_BUFFER;", 1),
+    # The DSP's interrupt reaches the game through other threads here, which a spin of higher priority would starve.
+    ("        firstWarning = FALSE;\n    }", "        firstWarning = FALSE;\n        OSSleepTicks(OSMicrosecondsToTicks(100));\n    }", 1),
 ])
 # Metrowerks' size_t is u32's unsigned long; the toolchains' own size_t is what operator new takes. The Wii's
 # boot info sits at the start of MEM1; the port's is in source/compat/OsMemory.cpp.

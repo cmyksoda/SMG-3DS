@@ -4,6 +4,7 @@
 #include <3ds.h>
 #include <revolution/dvd.h>
 #include <smg/FreeStore.hpp>
+#include <smg/Interrupts.hpp>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
@@ -134,6 +135,7 @@ void work(void*) {
             block->transferredSize = result < 0 ? 0 : result;
         }
         block->state = result < 0 ? DVD_STATE_FATAL_ERROR : DVD_STATE_END;
+        const smg::AsInterrupt transferDone;
         if (request.fileCallback) request.fileCallback(result, request.file);
         if (request.blockCallback) request.blockCallback(result, block);
     }
