@@ -1562,6 +1562,12 @@ adapt("src/JSystem/J3DGraphBase/J3DTevs.cpp", "JSystem/J3DGraphBase/J3DTevs.cpp"
     ("    u32 var_r31 = *(u32*)((u8*)pDL + 1);\n    return var_r31 & 0xFFFFFF;",
      "    const u8* command = static_cast< const u8* >(pDL);\n    return u16(command[3] << 8 | command[4]);", 1),
 ])
+# A streamed track's headers turn native as they come off the disc (compat/smg/NativeResources.hpp).
+adapt("src/JSystem/JAudio2/JASAramStream.cpp", "JSystem/JAudio2/JASAramStream.cpp", [
+    ('#include "JSystem/JAudio2/JASAramStream.hpp"\n', '#include "JSystem/JAudio2/JASAramStream.hpp"\n#include <smg/NativeResources.hpp>\n', 1),
+    ("    DCInvalidateRange(sReadBuffer, sizeof(Header));\n", "    DCInvalidateRange(sReadBuffer, sizeof(Header));\n    smgNativeAstHeader(sReadBuffer);\n", 1),
+    ("    DCInvalidateRange(sReadBuffer, size);\n    BlockHeader* bhead", "    DCInvalidateRange(sReadBuffer, size);\n    smgNativeAstBlock(sReadBuffer);\n    BlockHeader* bhead", 1),
+])
 # No Wii Remote strap reminder (Jaxi's call: the 3DS has no strap): the logo scene goes straight to its wait for the
 # system archive, and the strap's layout is never made.
 adapt("src/Game/Scene/LogoScene.cpp", "Game/Scene/LogoScene.cpp", [

@@ -139,6 +139,22 @@ void smgNativeSpeakerTable(void* table, u32 size) {
     }
 }
 
+// AST: tag, size and format bytes, channels and loop flag, sample rate, loop start and end, block size, volume.
+void smgNativeAstHeader(void* header) {
+    auto* h = static_cast<u8*>(header);
+    if (std::memcmp(h, "STRM", 4)) return;
+    swapWords(h, 1), swap(*reinterpret_cast<u16*>(h + 0xC)), swap(*reinterpret_cast<u16*>(h + 0xE));
+    swapWords(h + 0x10, 1), swapWords(h + 0x18, 3);
+}
+
+// BLCK: tag, each channel's byte count, then six channels' two ADPCM history halves.
+void smgNativeAstBlock(void* block) {
+    auto* b = static_cast<u8*>(block);
+    if (std::memcmp(b, "BLCK", 4)) return;
+    swapWords(b, 2);
+    for (int i = 0; i < 12; ++i) swap(*reinterpret_cast<u16*>(b + 8 + 2 * i));
+}
+
 void smgNativeSpeakerWaves(void* waves, u32 size) {
     const smg::PortMemory memory;
     if (const char* why = smg::nativeSpeakerWaves(static_cast<std::uint8_t*>(waves), size)) {

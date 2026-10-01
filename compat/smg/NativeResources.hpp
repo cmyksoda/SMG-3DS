@@ -25,6 +25,10 @@ void smgNativeRemixSequence(void* sequence, u32 size);
 // The Wii Remote speaker's table (.bct) and waves (.csw), turned in place.
 void smgNativeSpeakerTable(void* table, u32 size);
 void smgNativeSpeakerWaves(void* waves, u32 size);
+// A streamed track's (AST) header and each block's header, turned as JASAramStream reads them from the disc; the
+// samples stay the DSP's. Each is turned only while its tag still reads STRM or BLCK.
+void smgNativeAstHeader(void* header);
+void smgNativeAstBlock(void* block);
 // JAudio2's audio archive (SMR.szs), its parts turned in place; `size` is the heap block holding it (negative if none).
 void smgNativeAudioArchive(void* archive, s32 size);
 // A J3D model file (BMD, BDL, BMT) turned in place the first time a loader meets it; its header gives its size.
