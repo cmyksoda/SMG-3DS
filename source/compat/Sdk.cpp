@@ -40,19 +40,11 @@ void RFLDrawOpa() { unported("RFLDrawOpa"); }
 void RFLDrawOpaCore() { unported("RFLDrawOpaCore"); }
 void RFLDrawXlu() { unported("RFLDrawXlu"); }
 void RFLDrawXluCore() { unported("RFLDrawXluCore"); }
-void RFLExit() { unported("RFLExit"); }
 void RFLGetAdditionalInfo() { unported("RFLGetAdditionalInfo"); }
-void RFLGetAsyncStatus() { unported("RFLGetAsyncStatus"); }
-void RFLGetLastReason() { unported("RFLGetLastReason"); }
-void RFLGetModelBufferSize() { unported("RFLGetModelBufferSize"); }
-void RFLGetWorkSize() { unported("RFLGetWorkSize"); }
 void RFLInitCharModel() { unported("RFLInitCharModel"); }
-void RFLInitResAsync() { unported("RFLInitResAsync"); }
-void RFLIsAvailableOfficialData() { unported("RFLIsAvailableOfficialData"); }
 void RFLLoadMaterialSetting() { unported("RFLLoadMaterialSetting"); }
 void RFLLoadVertexSetting() { unported("RFLLoadVertexSetting"); }
 void RFLMakeIcon() { unported("RFLMakeIcon"); }
-void RFLSearchOfficialData() { unported("RFLSearchOfficialData"); }
 void RFLSetExpression() { unported("RFLSetExpression"); }
 void RFLSetMtx() { unported("RFLSetMtx"); }
 // RSO
