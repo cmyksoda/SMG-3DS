@@ -532,6 +532,46 @@ hardware (Azahar doesn't enforce it), so data converted in place can't be `const
 header needs both build directories cleaned: ninja's dependency files still name upstream's copy, and a stale object
 kept a big-endian reader reading natively.
 
+**One CPU, many threads.** The Wii runs every thread on one core, and "interrupts off" means nothing else runs. The
+port makes it exactly that: `OSDisableInterrupts` takes a global lock (each thread keeps its own state, as each Wii
+thread had its own MSR), interrupt handlers run holding it, and pending interrupts are atomic bits. A device raising
+one only *tries* the lock, since it may be inside the GX FIFO, and whoever releases the lock looks again, so nothing is
+lost between the two. The lock order is the CPU before the FIFO. Every OS wait (a message queue that would block, a
+contended mutex, `OSSleepThread`, a thread's own suspension, sleeps, joins, the retrace wait) gives the CPU back
+while it waits, as the Wii's scheduler loads the next thread's machine state. `OSSleepThread` notes its wake-up count
+before letting go, and lets go without the sleep lock held, because a handler run at that moment may wake its own
+queue. Alarms, retrace callbacks and disc callbacks run as interrupts. A spin that waits for an interrupt (the DSP's
+boot handshake) sleeps a little each turn: on the 3DS the interrupt comes from other threads, which a spinner of
+higher priority would starve. The GX FIFO assembles each thread's commands separately (four streams), and its lock
+is fair: the main thread blocks only on citro3d's frame sync inside a draw, so with libctru's unfair locks the
+scene-loading thread's GX writes never got a turn.
+
+**Converted where archives mount.** `smgNativeRarc` turns each archive's tables native once, then its BTI headers,
+KCL collision (in the Wii's own layout, whose offsets become 32-bit pointers; a 64-bit host keeps `Kcl`'s repacked
+copy) and JParticle containers. JParticle's loader compares block tags as multi-character constants, which are
+big-endian integers, so its tags turn too; before that, `'2-10'` never matched on ARM and every emitter was null.
+Each converter has a disc audit that reads the result back through the game's own structs (`resource_audit --j3d`
+covers J3D, BTI and JPC; `--collision` compares every KCL turned in place with the repacked one).
+
+**The GX features the game scene needed.** Indexed XF loads (arrays 12 to 15: J3D's matrices and GX's light objects,
+read in the CPU's order). Lighting for colour channel 0, after Dolphin's software renderer: ambient plus each masked
+light, spot or specular falloff, diffuse none/signed/clamped, then the GPU's `(m * (l + (l >> 7))) >> 8`. EFB copies to
+textures: `GxCopy` encodes every colour format but RG8 and GB8 as the pixel engine writes them, including the vertical
+filter; the SDK's "no filter" setting is the taps (21, 22, 21)/64, since six-bit taps can't pass a row through
+unchanged. The renderer reads its target back for each copy and for `GXPeekZ`/`GXPeekARGB` (the screen's way round:
+EFB pixel to target index `sx * 240 + (239 - sy)`, checked against a live frame), quantised to the EFB's pixel
+format; depth reads back as raw D24S8 words, with the port's nearer-is-larger turned to the Wii's Z. Indirect
+texturing has no PICA counterpart (no dependent reads): a stage that only offsets its coordinates is drawn without
+the offset, with a one-time note, and set-ups that wrap, replace or chain coordinates stop by name. A frame whose
+commands outgrow citro3d's 1 MB buffer is ended and begun again with the screen output detached.
+
+**More byte-order traps.** Data the GPU reads must hold the Wii's bytes even when the source wrote it as wider
+integers: `MainLoopFramework`'s `clearZTexData` (Z24X8 texels as `u32`s) cleared every frame to near on ARM, and every
+3D draw then failed its depth test. The SDK's GX read `GXColor` arguments through `u32` casts (TEV, konst, fog, light
+and channel colours), and J3D read texture numbers back from its display lists with a native `u32` load. Region: Petari
+matches a build that loads a Mii-name font (`MiiFont.arc`) the US disc doesn't have, and whose `main.dol` never
+names it, so the step is skipped when the archive is absent. Checking `main.dol`'s strings settles such questions.
+
 ## The native scene boundary
 
 `smg::NativeScene` (`compat/smg/Scene.hpp`, `source/compat/Scene.cpp`) holds what
