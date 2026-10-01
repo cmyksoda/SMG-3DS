@@ -40,11 +40,6 @@ void RFLDrawOpa() { unported("RFLDrawOpa"); }
 void RFLDrawOpaCore() { unported("RFLDrawOpaCore"); }
 void RFLDrawXlu() { unported("RFLDrawXlu"); }
 void RFLDrawXluCore() { unported("RFLDrawXluCore"); }
-void RFLGetAdditionalInfo() { unported("RFLGetAdditionalInfo"); }
-void RFLInitCharModel() { unported("RFLInitCharModel"); }
-void RFLMakeIcon() { unported("RFLMakeIcon"); }
-void RFLSetExpression() { unported("RFLSetExpression"); }
-void RFLSetMtx() { unported("RFLSetMtx"); }
 // RSO
 void RSOFindExportSymbolAddr() { unported("RSOFindExportSymbolAddr"); }
 void RSOGetJumpCodeSize() { unported("RSOGetJumpCodeSize"); }

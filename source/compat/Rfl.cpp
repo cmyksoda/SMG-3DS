@@ -1,10 +1,30 @@
-// The Wii's Mii library (RVLFaceLib) as it answers when its data can't be had: the 3DS holds no Wii Mii database,
-// so initialising reports the library unavailable and no Mii exists. The game checks for exactly this and goes on
-// without Mii faces. The GX set-up the game calls before its (empty) Mii pass is RVLFaceLib's own; drawing and models
-// need a Mii, so they stay in source/compat/Sdk.cpp and stop by name.
+// The Wii's Mii library (RVLFaceLib) answering as a Wii does where no Mii was ever made: the 3DS holds no Wii Mii
+// database, so the library starts and its database is empty. (Jaxi's call pending; reporting the database unreadable
+// instead makes the file select show "Unable to read the Mii Channel data" at every boot.) Every request for a Mii
+// gets the library's own answer for an empty slot. The GX set-up for the Mii pass is RVLFaceLib's; drawing needs a
+// Mii, so it stays in source/compat/Sdk.cpp and stops by name.
 #include <RVLFaceLib.h>
+#include <RFLi_Model.h>
+#include <revolution/mtx.h>
 #include <revolution/gx.h>
 #include <cstdio>
+#include <cstdlib>
+
+extern "C" u32 PSMTXInvXpose(const Mtx, Mtx);  // source/compat/Math.cpp; the SDK's header leaves it out
+
+namespace {
+// RFLiGetCharInfo's answer for an official slot, all of them empty here. A default Mii (RVLFaceLib's built-in ones)
+// can't be made without the library itself; the file select only keeps one as a hidden placeholder face, shown for a
+// file whose icon is a Mii, which no file can have here.
+RFLErrcode emptySlot(RFLDataSource source, u16 index, const char* who) {
+    if (source == RFLDataSource_Default) return RFLErrcode_NotAvailable;
+    if (source != RFLDataSource_Official) {
+        std::fprintf(stderr, "The Wii's Mii library: %s of a Mii from source %d is not the port's yet\n", who, int(source));
+        std::abort();
+    }
+    return index >= RFL_DB_CHAR_MAX ? RFLErrcode_WrongParam : RFLErrcode_NotAvailable;
+}
+} // namespace
 
 extern "C" {
 // The port's library holds nothing and never makes a Mii's model, so each asks for no more than one heap block.
@@ -12,15 +32,34 @@ u32 RFLGetWorkSize(BOOL) { return 32; }
 u32 RFLGetModelBufferSize(RFLResolution, u32) { return 32; }
 
 RFLErrcode RFLInitResAsync(void*, void*, u32, BOOL) {
-    std::fputs("The Wii's Mii library: the 3DS has no Wii Mii database, so the game goes on without Miis\n", stderr);
-    return RFLErrcode_NotAvailable;
+    std::fputs("The Wii's Mii library: the 3DS has no Wii Mii database, so the game sees one with no Miis\n", stderr);
+    return RFLErrcode_Success;
 }
 
-RFLErrcode RFLGetAsyncStatus(void) { return RFLErrcode_NotAvailable; }
+RFLErrcode RFLGetAsyncStatus(void) { return RFLErrcode_Success; }
 s32 RFLGetLastReason(void) { return 0; }
 void RFLExit(void) {}
 BOOL RFLIsAvailableOfficialData(u16) { return FALSE; }
 BOOL RFLSearchOfficialData(const RFLCreateID*, u16*) { return FALSE; }
+
+RFLErrcode RFLGetAdditionalInfo(RFLAdditionalInfo*, RFLDataSource source, RFLMiddleDB*, u16 index) {
+    return emptySlot(source, index, "RFLGetAdditionalInfo");
+}
+RFLErrcode RFLMakeIcon(void*, RFLDataSource source, RFLMiddleDB*, u16 index, RFLExpression, const RFLIconSetting*) {
+    return emptySlot(source, index, "RFLMakeIcon");
+}
+RFLErrcode RFLInitCharModel(RFLCharModel*, RFLDataSource source, RFLMiddleDB*, u16 index, void*, RFLResolution, u32) {
+    return emptySlot(source, index, "RFLInitCharModel");
+}
+
+// A model's matrices and expression are its own state, as RFL_Model.c keeps them (the file select's hidden faces set
+// theirs every frame).
+void RFLSetMtx(RFLCharModel* model, const Mtx mvMtx) {
+    RFLiCharModel* imodel = reinterpret_cast<RFLiCharModel*>(model);
+    PSMTXCopy(mvMtx, imodel->posMtx);
+    PSMTXInvXpose(mvMtx, imodel->nrmMtx);
+}
+void RFLSetExpression(RFLCharModel* model, RFLExpression expr) { reinterpret_cast<RFLiCharModel*>(model)->expression = expr; }
 
 // As RFL_Model.c sets them: indexed s16 positions, normals and texture coordinates (index type 2 is GX_INDEX8).
 void RFLLoadVertexSetting(const RFLDrawCoreSetting* setting) {
