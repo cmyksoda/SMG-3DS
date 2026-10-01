@@ -50,6 +50,7 @@ void smgGameMain();
 
 int main() {
     std::fprintf(stderr, "mario-probe: main\n");
+    osSetSpeedupEnable(true);  // the New 3DS's 804 MHz clock and L2 cache; 268 MHz without
     gfxInitDefault();
     consoleInit(GFX_BOTTOM, nullptr);  // the top screen is the game's
     // consoleInit takes stderr for the screen too; stops belong in the log, which outlives the app.
