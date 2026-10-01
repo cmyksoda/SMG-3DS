@@ -27,3 +27,7 @@ void smgNativeSpeakerTable(void* table, u32 size);
 void smgNativeSpeakerWaves(void* waves, u32 size);
 // JAudio2's audio archive (SMR.szs), its parts turned in place; `size` is the heap block holding it (negative if none).
 void smgNativeAudioArchive(void* archive, s32 size);
+// A J3D model file (BMD, BDL, BMT) turned in place the first time a loader meets it; its header gives its size.
+void smgNativeJ3DModel(void* file);
+// A J3D animation file (BCK, BTK, BRK, BPK, BTP, BVA) turned in place the first time the loader meets it.
+void smgNativeJ3DAnimation(void* file);

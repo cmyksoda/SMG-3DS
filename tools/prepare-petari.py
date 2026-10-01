@@ -1039,11 +1039,18 @@ adapt("src/JSystem/J3DGraphLoader/J3DAnmLoader.cpp", "JSystem/J3DGraphLoader/J3D
      "(void*)((intptr_t)indexPtr0 + (intptr_t)dst->mAnmVtxColorIndexData[0][i].mpData * 2)", 2),
     ("(void*)((s32)indexPtr1 + (s32)dst->mAnmVtxColorIndexData[1][i].mpData * 2)",
      "(void*)((intptr_t)indexPtr1 + (intptr_t)dst->mAnmVtxColorIndexData[1][i].mpData * 2)", 2),
+    # Animations turn native as the loader first meets them (smg::nativeJ3DAnimation).
+    ('#include "JSystem/JSupport/JSupport.hpp"\n', '#include "JSystem/JSupport/JSupport.hpp"\n#include <smg/NativeResources.hpp>\n', 1),
+    ("    if (!i_data) {\n        return NULL;\n    }\n", "    if (!i_data) {\n        return NULL;\n    }\n    smgNativeJ3DAnimation(const_cast< void* >(i_data));\n", 1),
 ])
 # The loader's first line reads the current JKRHeap's free size and drops it; the port allocates from the free store.
 adapt("src/JSystem/J3DGraphLoader/J3DModelLoader.cpp", "JSystem/J3DGraphLoader/J3DModelLoader.cpp", [
     ("J3DModelData* J3DModelLoader::load(void const* i_data, u32 i_flags) {\n    JKRGetCurrentHeap()->getTotalFreeSize();\n",
      "J3DModelData* J3DModelLoader::load(void const* i_data, u32 i_flags) {\n", 1),
+    # Models turn native as JSystem's loaders first meet them (compat/smg/NativeResources.hpp, smg::nativeJ3DModel).
+    ('#include "JSystem/JUtility/JUTNameTab.hpp"\n', '#include "JSystem/JUtility/JUTNameTab.hpp"\n#include <smg/NativeResources.hpp>\n', 1),
+    ("    if (i_data == NULL) {\n        return NULL;\n    }\n", "    if (i_data == NULL) {\n        return NULL;\n    }\n    smgNativeJ3DModel(const_cast< void* >(i_data));\n", 1),
+    ("    if (data == NULL) {\n        return NULL;\n    }\n", "    if (data == NULL) {\n        return NULL;\n    }\n    smgNativeJ3DModel(const_cast< void* >(data));\n", 2),
 ])
 # GDSetArrayRaw takes the array's raw address as a u32; Metrowerks converted the null to it.
 adapt("src/JSystem/J3DGraphBase/J3DShape.cpp", "JSystem/J3DGraphBase/J3DShape.cpp", [

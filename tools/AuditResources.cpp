@@ -556,11 +556,13 @@ int auditBmg(const fs::path& root) {
 
 int auditLayouts(const fs::path& root);  // tools/AuditLayouts.cpp
 int auditAudio(const fs::path& root);  // tools/AuditAudio.cpp
+int auditJ3D(const fs::path& root);  // tools/AuditJ3D.cpp
 
 int main(int argc, char** argv) {
     if (argc == 3 && !std::strcmp(argv[2], "--bmg")) return auditBmg(argv[1]);
     if (argc == 3 && !std::strcmp(argv[2], "--layouts")) return auditLayouts(argv[1]);
     if (argc == 3 && !std::strcmp(argv[2], "--audio")) return auditAudio(argv[1]);
+    if (argc == 3 && !std::strcmp(argv[2], "--j3d")) return auditJ3D(argv[1]);
     if (argc == 3 && !std::strcmp(argv[2], "--gravity")) return auditGravity(argv[1], false);
     if (argc == 3 && !std::strcmp(argv[2], "--actors")) return auditGravity(argv[1], true);
     if (argc == 3 && !std::strcmp(argv[2], "--collision")) return auditCollision(argv[1]);
@@ -591,7 +593,7 @@ int main(int argc, char** argv) {
         return 0;
     }
     const bool models = argc == 3 && !std::strcmp(argv[2], "--models");
-    if (argc != 2 && !models) { std::fprintf(stderr,"Usage: resource_audit EXTRACTED_FILES_DIRECTORY [--models|--gravity|--actors|--collision|--bmg|--layouts|--audio] | MAIN_DOL --dol\n"); return 2; }
+    if (argc != 2 && !models) { std::fprintf(stderr,"Usage: resource_audit EXTRACTED_FILES_DIRECTORY [--models|--gravity|--actors|--collision|--bmg|--layouts|--audio|--j3d] | MAIN_DOL --dol\n"); return 2; }
     std::error_code ec;
     const fs::path root(argv[1]);
     if (!fs::is_directory(root, ec)) { std::fprintf(stderr,"Not a readable directory\n"); return 2; }

@@ -98,7 +98,7 @@ add_library(petari_j3d STATIC
   "${CMAKE_CURRENT_BINARY_DIR}/petari/JSystem/J3DGraphLoader/J3DAnmLoader.cpp" "${J3D}/J3DGraphLoader/J3DJointFactory.cpp" "${J3D}/J3DGraphLoader/J3DMaterialFactory.cpp"
   "${J3D}/J3DGraphLoader/J3DMaterialFactory_v21.cpp" "${J3D}/J3DGraphLoader/J3DModelLoaderCalcSize.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/JSystem/J3DGraphLoader/J3DModelLoader.cpp" "${J3D}/J3DGraphLoader/J3DShapeFactory.cpp"
-  source/compat/Gx.cpp)
+  source/compat/Gx.cpp source/compat/NativeJ3D.cpp source/core/J3D.cpp)
 target_link_libraries(petari_j3d PUBLIC petari_core petari_game_boundaries)
 # Loud stops for game classes the whole-game library builds for real. As a library linked after the scene and
 # J3D libraries, a program takes a stop only when nothing earlier defines the entry point.
@@ -392,7 +392,7 @@ else()
   add_executable(gravity_tool tools/GravityTool.cpp)
   target_link_libraries(gravity_tool PRIVATE smg_native_scene smg_platform)
   target_compile_options(gravity_tool PRIVATE -Wall -Wextra -Werror)
-  add_executable(resource_audit tools/AuditResources.cpp tools/AuditLayouts.cpp tools/AuditAudio.cpp)
+  add_executable(resource_audit tools/AuditResources.cpp tools/AuditLayouts.cpp tools/AuditAudio.cpp tools/AuditJ3D.cpp)
   target_link_libraries(resource_audit PRIVATE smg_native_scene smg_platform)
   target_compile_options(resource_audit PRIVATE -Wall -Wextra -Werror)
   add_executable(bcsv_tests tests/BcsvTests.cpp)
