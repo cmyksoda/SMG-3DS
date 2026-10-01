@@ -1542,6 +1542,12 @@ adapt("libs/RVL_SDK/include/revolution/gx/GXFDLShortcut.h", "include/revolution/
 adapt("libs/JSystem/include/JSystem/JKernel/JKRAram.hpp", "include/JSystem/JKernel/JKRAram.hpp", [
     ("u32 JKRDecompExpandSize(u8*);", '#include "JSystem/JKernel/JKRDecomp.hpp"', 1),
 ])
+# Petari's file select sets a Mii-name font from MiiFont.arc, which Jaxi's US disc doesn't have and its main.dol
+# never names: there the names keep their layouts' own fonts.
+adapt("src/Game/Map/FileSelector.cpp", "Game/Map/FileSelector.cpp", [
+    ('    JKRMemArchive* pArchive = MR::receiveArchive("/LayoutData/MiiFont.arc");\n',
+     '    JKRMemArchive* pArchive = MR::receiveArchive("/LayoutData/MiiFont.arc");\n    if (pArchive == nullptr) {\n        return;\n    }\n', 1),
+])
 # No Wii Remote strap reminder (Jaxi's call: the 3DS has no strap): the logo scene goes straight to its wait for the
 # system archive, and the strap's layout is never made.
 adapt("src/Game/Scene/LogoScene.cpp", "Game/Scene/LogoScene.cpp", [
