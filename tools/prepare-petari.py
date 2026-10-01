@@ -1584,6 +1584,13 @@ adapt("src/Game/System/WPadPointer.cpp", "Game/System/WPadPointer.cpp", [
     ("    static const s32 sIsValidInScreenTime = 5;", "    static const s32 sIsValidInScreenTime = 0;", 1),
     ("    static const s32 sIsInValidOutScreenTime = 10;", "    static const s32 sIsInValidOutScreenTime = 0;", 1),
 ])
+# A mix configuration is written as a word (its bus in the high byte, then two nibbles) and read through bitfields,
+# which Metrowerks lays out from the word's first byte and GCC on ARM from its low end: here they name the same bits.
+adapt("libs/JSystem/include/JSystem/JAudio2/JASChannel.hpp", "include/JSystem/JAudio2/JASChannel.hpp", [
+    ("        struct {\n            u8 upper : 8;\n            u8 lower0 : 4;\n            u8 lower1 : 4;\n        };",
+     "        struct {\n#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__\n            u8 lower1 : 4;\n            u8 lower0 : 4;\n"
+     "            u8 upper : 8;\n#else\n            u8 upper : 8;\n            u8 lower0 : 4;\n            u8 lower1 : 4;\n#endif\n        };", 1),
+])
 # No Wii Remote strap reminder (Jaxi's call: the 3DS has no strap): the logo scene goes straight to its wait for the
 # system archive, and the strap's layout is never made.
 adapt("src/Game/Scene/LogoScene.cpp", "Game/Scene/LogoScene.cpp", [

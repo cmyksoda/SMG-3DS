@@ -1,4 +1,5 @@
 #include <smg/AudioData.hpp>
+#include <JSystem/JAudio2/JASChannel.hpp>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -223,7 +224,15 @@ void soundAnimation() {
     check(smg::nativeSoundAnimation(cut.data(), cut.size()) != nullptr, "a cut-off one is refused");
 }
 
+// JASChannel's mix configuration: written as a word, read as a bus byte and two nibbles, as on the Wii.
+void mixConfig() {
+    JASChannel::MixConfig config;
+    config.whole = 0x0352;
+    check(config.upper == 3 && config.lower0 == 5 && config.lower1 == 2, "a mix configuration's bus and nibbles are the Wii's");
+}
+
 int runAudioDataTests() {
+    mixConfig();
     soundAnimation();
     audioArchive();
     speaker();
