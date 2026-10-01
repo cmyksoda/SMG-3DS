@@ -44,6 +44,11 @@ struct GxDraw {
     const char* unsupported = nullptr;
 };
 
+// GX's lighting for colour channel 0 at a vertex: `view` its position and `normal` its unit normal in view space, `vertex`
+// its colour 0. The material and ambient come from registers or the vertex, the lights from XF, as the channel's control
+// words say; Dolphin's software renderer is the reference for the arithmetic.
+void gxLitChannel(const GxCommandProcessor& gpu, const float view[3], const float normal[3], const std::uint8_t vertex[4], std::uint8_t out[4]);
+
 void buildGxDraw(const GxCommandProcessor& gpu, std::uint8_t kind, std::uint8_t format, std::uint16_t count, const std::uint8_t* vertices,
                  const GxFrame& frame, GxDraw& out);
 } // namespace smg

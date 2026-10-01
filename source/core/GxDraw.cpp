@@ -8,6 +8,7 @@
 #include <private/tev_reg.h>
 #include <private/tx_reg.h>
 #include <private/xf_mem.h>
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstring>
@@ -133,6 +134,82 @@ void readPixel(const GxCommandProcessor& gpu, GxDraw& out) {
     }
 }
 
+float dot(const float a[3], const float b[3]) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+bool normalize(float v[3]) {
+    const float length = std::sqrt(dot(v, v));
+    if (length == 0) return false;
+    for (int i = 0; i < 3; ++i) v[i] /= length;
+    return true;
+}
+float safeDivide(float n, float d) { return d == 0 ? (n > 0 ? 3.4e38f : 0) : n / d; }
+
+constexpr std::uint32_t XfLights = 0x600;
+
+// The masked lights' sum for one control word into `sum` (0-255 per component): each light's colour, attenuated
+// (specular or spot, by the control word) and turned by the normal (none, signed or clamped).
+void addLights(const GxCommandProcessor& gpu, std::uint32_t ctrl, const float view[3], const float normal[3], float sum[4]) {
+    const unsigned mask = XF_COLOR0CNTRL_F_GET_LIGHT0(ctrl) | XF_COLOR0CNTRL_F_GET_LIGHT1(ctrl) << 1 | XF_COLOR0CNTRL_F_GET_LIGHT2(ctrl) << 2 |
+                          XF_COLOR0CNTRL_F_GET_LIGHT3(ctrl) << 3 | XF_COLOR0CNTRL_F_GET_LIGHT4(ctrl) << 4 | XF_COLOR0CNTRL_F_GET_LIGHT5(ctrl) << 5 |
+                          XF_COLOR0CNTRL_F_GET_LIGHT6(ctrl) << 6 | XF_COLOR0CNTRL_F_GET_LIGHT7(ctrl) << 7;
+    const unsigned diffuse = XF_COLOR0CNTRL_F_GET_DIFFUSEATTEN(ctrl);  // GXDiffuseFn: none, sign, clamp
+    const bool attenuated = XF_COLOR0CNTRL_F_GET_ATTENENABLE(ctrl), spot = XF_COLOR0CNTRL_F_GET_ATTENSELECT(ctrl);
+    for (int n = 0; n < 8; ++n) {
+        if (!(mask >> n & 1)) continue;
+        const std::uint32_t* l = gpu.xf + XfLights + 16 * n;  // three reserved words, colour, A0-A2, K0-K2, position, direction
+        const float cosine[3] = {asFloat(l[4]), asFloat(l[5]), asFloat(l[6])};
+        float distance[3] = {asFloat(l[7]), asFloat(l[8]), asFloat(l[9])};
+        const float direction[3] = {asFloat(l[13]), asFloat(l[14]), asFloat(l[15])};
+        float toLight[3] = {asFloat(l[10]) - view[0], asFloat(l[11]) - view[1], asFloat(l[12]) - view[2]};
+        float scale = 1;
+        if (attenuated && spot) {
+            const float d2 = dot(toLight, toLight), d = std::sqrt(d2);
+            if (d > 0) for (float& k : toLight) k /= d;
+            const float angle = std::max(0.0f, dot(toLight, direction));
+            scale = safeDivide(std::max(0.0f, cosine[0] + cosine[1] * angle + cosine[2] * angle * angle),
+                               distance[0] + distance[1] * d + distance[2] * d2);
+        } else if (attenuated) {
+            // Specular: the light's direction holds the half-angle, and distance attenuation runs on the same angle.
+            normalize(toLight);
+            const float angle = dot(toLight, normal) >= 0 ? std::max(0.0f, dot(direction, normal)) : 0.0f;
+            if (diffuse) normalize(distance);
+            scale = safeDivide(std::max(0.0f, cosine[0] + cosine[1] * angle + cosine[2] * angle * angle),
+                               distance[0] + distance[1] * angle + distance[2] * angle * angle);
+        } else if (!normalize(toLight)) {
+            std::memcpy(toLight, normal, sizeof toLight);
+        }
+        float turn = 1;
+        if (diffuse) turn = diffuse == 2 ? std::max(0.0f, dot(toLight, normal)) : dot(toLight, normal);
+        const std::uint32_t color = l[3];
+        for (int c = 0; c < 4; ++c) sum[c] += static_cast<float>(color >> (24 - 8 * c) & 0xFF) * scale * turn;
+    }
+}
+} // namespace
+
+void gxLitChannel(const GxCommandProcessor& gpu, const float view[3], const float normal[3], const std::uint8_t vertex[4], std::uint8_t out[4]) {
+    const std::uint32_t ctrl[2] = {gpu.xf[XfColor0Ctrl], gpu.xf[XfAlpha0Ctrl]}, material = gpu.xf[XfMaterial0], ambient = gpu.xf[XfAmbient0];
+    for (int part = 0; part < 2; ++part) {
+        // Part 0 is the colour (RGB), part 1 the alpha; each has its own control word.
+        const int first = part ? 3 : 0, last = part ? 4 : 3;
+        std::uint8_t mat[4], amb[4];
+        for (int c = 0; c < 4; ++c) {
+            mat[c] = XF_COLOR0CNTRL_F_GET_MATERIAL_SRC(ctrl[part]) ? vertex[c] : static_cast<std::uint8_t>(material >> (24 - 8 * c));
+            amb[c] = XF_COLOR0CNTRL_F_GET_AMBIENT_SRC(ctrl[part]) ? vertex[c] : static_cast<std::uint8_t>(ambient >> (24 - 8 * c));
+        }
+        if (!XF_COLOR0CNTRL_F_GET_LIGHTFUNC(ctrl[part])) {
+            for (int c = first; c < last; ++c) out[c] = mat[c];
+            continue;
+        }
+        float sum[4];
+        for (int c = 0; c < 4; ++c) sum[c] = amb[c];
+        addLights(gpu, ctrl[part], view, normal, sum);
+        for (int c = first; c < last; ++c) {
+            const int light = std::clamp(static_cast<int>(sum[c]), 0, 255);
+            out[c] = static_cast<std::uint8_t>(mat[c] * (light + (light >> 7)) >> 8);
+        }
+    }
+}
+
+namespace {
 struct Transformer {
     const GxCommandProcessor& gpu;
     const GxFrame& frame;
@@ -182,19 +259,22 @@ struct Transformer {
         }
     }
 
-    // A channel's colour and alpha: the material register or the vertex colour, as its control word says.
-    void channel(const GxVertex& v, std::uint8_t color[4]) {
+    // Channel 0's colour and alpha at a vertex, lit when its control words say (the normal through its normal matrix).
+    void channel(const GxVertex& v, std::uint32_t index, const float view[3], std::uint8_t color[4]) {
         if ((gpu.xf[XfNumChans] & 3) == 0) {
             std::memset(color, 0, 4);
             return;
         }
-        const std::uint32_t colorCtrl = gpu.xf[XfColor0Ctrl], alphaCtrl = gpu.xf[XfAlpha0Ctrl], material = gpu.xf[XfMaterial0];
-        if (XF_COLOR0CNTRL_F_GET_LIGHTFUNC(colorCtrl) || XF_COLOR0CNTRL_F_GET_LIGHTFUNC(alphaCtrl)) out.unsupported = "lit colour channels";
-        const std::uint8_t reg[4] = {static_cast<std::uint8_t>(material >> 24), static_cast<std::uint8_t>(material >> 16),
-                                     static_cast<std::uint8_t>(material >> 8), static_cast<std::uint8_t>(material)};
-        const bool vertexColor = XF_COLOR0CNTRL_F_GET_MATERIAL_SRC(colorCtrl), vertexAlpha = XF_COLOR0CNTRL_F_GET_MATERIAL_SRC(alphaCtrl);
-        for (int k = 0; k < 3; ++k) color[k] = vertexColor ? v.color[0][k] : reg[k];
-        color[3] = vertexAlpha ? v.color[0][3] : reg[3];
+        float normal[3] = {0, 0, 0};
+        if (XF_COLOR0CNTRL_F_GET_LIGHTFUNC(gpu.xf[XfColor0Ctrl]) || XF_COLOR0CNTRL_F_GET_LIGHTFUNC(gpu.xf[XfAlpha0Ctrl])) {
+            // Normal matrices: three rows of three from XF 0x400, at the position matrix's row.
+            const std::uint32_t base = 0x400 + (index & 31) * 3;
+            for (int r = 0; r < 3; ++r)
+                normal[r] = asFloat(gpu.xf[base + r * 3]) * v.normal[0] + asFloat(gpu.xf[base + r * 3 + 1]) * v.normal[1] +
+                            asFloat(gpu.xf[base + r * 3 + 2]) * v.normal[2];
+            normalize(normal);
+        }
+        gxLitChannel(gpu, view, normal, v.color[0], color);
     }
 
     // Position through its matrix and the projection, then the viewport onto the EFB, then the EFB onto [-1, 1].
@@ -219,7 +299,7 @@ struct Transformer {
         d.position[2] = (zc * vp[2] + vp[5] * wc) / 16777215.0f - wc;  // citro3d's range: near -1, far 0
         d.position[3] = wc;
         screen[0] = wc != 0 ? ex / wc : 0, screen[1] = wc != 0 ? ey / wc : 0;
-        channel(v, d.color);
+        channel(v, index, view, d.color);
         return d;
     }
 };

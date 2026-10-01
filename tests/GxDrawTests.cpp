@@ -93,6 +93,44 @@ void indirect() {
     check(wrapped.unsupported != nullptr, "one that wraps its coordinates stops by name");
 }
 
+// GX lighting, by XF state as GXSetChanCtrl, GXSetChanMatColor, GXSetChanAmbColor and GXLoadLightObjImm leave it.
+void setFloat(smg::GxCommandProcessor& gpu, unsigned address, float value) { std::memcpy(&gpu.xf[address], &value, 4); }
+void lighting() {
+    auto owned = std::make_unique<smg::GxCommandProcessor>(host());
+    smg::GxCommandProcessor& gpu = *owned;
+    gpu.xf[0x1009] = 1;
+    gpu.xf[0x100E] = 1 << 1 | 1 << 2 | 2 << 7;  // colour: material register, lit, light 0, ambient register, diffuse clamped
+    gpu.xf[0x1010] = 0;                          // alpha: the material register, unlit
+    gpu.xf[0x100C] = 0xFFFFFF80, gpu.xf[0x100A] = 0x000000FF;
+    gpu.xf[0x600 + 3] = 0xFFFFFFFF;
+    setFloat(gpu, 0x600 + 12, 10);  // light 0 at (0, 0, 10)
+    const float origin[3] = {0, 0, 0}, facing[3] = {0, 0, 1}, side[3] = {1, 0, 0}, tilted[3] = {0, 0.6f, 0.8f};
+    const std::uint8_t vertex[4] = {10, 20, 30, 40};
+    std::uint8_t c[4];
+    smg::gxLitChannel(gpu, origin, facing, vertex, c);
+    check(c[0] == 255 && c[1] == 255 && c[2] == 255 && c[3] == 0x80, "a white light straight on lights the material fully; alpha stays unlit");
+    smg::gxLitChannel(gpu, origin, side, vertex, c);
+    check(c[0] == 0, "a light at right angles adds nothing");
+    smg::gxLitChannel(gpu, origin, tilted, vertex, c);
+    check(c[0] == 204, "and one at an angle adds its cosine");
+    gpu.xf[0x100A] = 0x404040FF;
+    const float away[3] = {0, 0, -1};
+    smg::gxLitChannel(gpu, origin, away, vertex, c);
+    check(c[0] == 63, "facing away, clamped, only the ambient is left, through the GPU's (m * (l + l >> 7)) >> 8");
+    gpu.xf[0x100A] = 0x000000FF;
+    gpu.xf[0x100E] |= 1 << 9 | 1 << 10;  // spot attenuation
+    setFloat(gpu, 0x600 + 4, 1), setFloat(gpu, 0x600 + 7, 1), setFloat(gpu, 0x600 + 9, 0.25f), setFloat(gpu, 0x600 + 15, -1);
+    setFloat(gpu, 0x600 + 12, 2);
+    smg::gxLitChannel(gpu, origin, facing, vertex, c);
+    check(c[0] == 126, "a spot light two units off falls to half by K0 + K2 d^2");
+    gpu.xf[0x1010] = 1 << 1 | 1 << 2 | 2 << 7;
+    gpu.xf[0x100E] = 1, gpu.xf[0x100A] = 0;  // colour from the vertex, unlit; no ambient alpha
+    gpu.xf[0x600 + 3] = 0xFFFFFF80;
+    setFloat(gpu, 0x600 + 12, 10);
+    smg::gxLitChannel(gpu, origin, facing, vertex, c);
+    check(c[0] == 10 && c[2] == 30 && c[3] == (0x80 * (0x80 + 1) >> 8), "the colour can come from the vertex while the alpha is lit");
+}
+
 void clearQuad() {
     auto owned = std::make_unique<smg::GxCommandProcessor>(host());  // 80 KiB: more than a 3DS thread's stack
     smg::GxCommandProcessor& gpu = *owned;
@@ -203,7 +241,8 @@ void channels() {
     drawn.clear();
     gpu.put(lit.bytes.data(), static_cast<std::uint32_t>(lit.bytes.size()));
     smg::buildGxDraw(gpu, drawn[0].kind, drawn[0].format, drawn[0].count, drawn[0].data.data(), {}, d);
-    check(d.unsupported && d.triangles.empty(), "a lit channel is named, not drawn");
+    c = d.triangles[0].color;
+    check(!d.unsupported && c[0] == 0 && c[2] == 0 && c[3] == 0x44, "lit with no lights and a black ambient, the colour is black; alpha stays the material's");
 }
 } // namespace
 
@@ -239,6 +278,7 @@ void layoutMaterial() {
 int runGxDrawTests() {
     clearQuad();
     indirect();
+    lighting();
     layoutMaterial();
     texturedQuad();
     perspective();
