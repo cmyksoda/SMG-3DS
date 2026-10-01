@@ -64,59 +64,79 @@ struct Octree {
         return true;
     }
 };
+
+// A file's sections and parameters, checked so nothing the game can reach lies outside it, and its octree's bytes
+// classed by the walk.
+struct Layout {
+    std::size_t positions = 0, normals = 0, prismBase = 0, octree = 0, positionCount = 0, normalCount = 0, prismCount = 0;
+    float thickness = 0, minimum[3]{};
+    std::uint32_t masks[3]{};
+    std::int32_t shift = 0, xShift = 0, xyShift = 0;
+    std::vector<std::uint8_t> kind;
+};
+
+const char* parse(Bytes source, Layout& l) {
+    const std::uint8_t* d = source.data;
+    if (!d || source.size < WiiHeader || source.size > INT32_MAX) return "Invalid KCL size";
+    l.positions = be32(d), l.normals = be32(d + 4), l.prismBase = be32(d + 8), l.octree = be32(d + 12);
+    // Prisms count from one: the array's slot zero overlaps the end of the normals.
+    if (l.positions < WiiHeader || l.positions % 4 || l.normals < l.positions || l.prismBase + PrismSize < l.normals ||
+        l.octree < l.prismBase + PrismSize || l.octree % 4 || l.octree > source.size || (l.normals - l.positions) % VectorSize ||
+        (l.prismBase + PrismSize - l.normals) % VectorSize || (l.octree - l.prismBase - PrismSize) % PrismSize)
+        return "Invalid KCL section offsets";
+    l.positionCount = (l.normals - l.positions) / VectorSize;
+    l.normalCount = (l.prismBase + PrismSize - l.normals) / VectorSize;
+    l.prismCount = (l.octree - l.prismBase - PrismSize) / PrismSize;
+    if (!l.prismCount || l.prismCount > 0xffff) return "Invalid KCL triangle count";
+
+    l.thickness = beFloat(d + 0x10);
+    for (int axis = 0; axis < 3; ++axis) l.minimum[axis] = beFloat(d + 0x14 + axis * 4), l.masks[axis] = be32(d + 0x20 + axis * 4);
+    l.shift = static_cast<std::int32_t>(be32(d + 0x2c));
+    l.xShift = static_cast<std::int32_t>(be32(d + 0x30)), l.xyShift = static_cast<std::int32_t>(be32(d + 0x34));
+    if (!std::isfinite(l.thickness) || !std::isfinite(l.minimum[0]) || !std::isfinite(l.minimum[1]) || !std::isfinite(l.minimum[2]))
+        return "Invalid KCL bounds";
+    if (l.shift < 0 || l.shift > 31) return "Invalid KCL block width";
+    std::uint32_t blocks[3];
+    for (int axis = 0; axis < 3; ++axis) {
+        const std::uint32_t extent = ~l.masks[axis];
+        if (extent & (extent + 1)) return "Invalid KCL axis mask";
+        blocks[axis] = (extent >> l.shift) + 1;
+    }
+    std::size_t topNodes = 1;
+    if (l.xShift != -1 || l.xyShift != -1) {
+        if (l.xShift < 0 || l.xyShift < l.xShift || l.xyShift > 31 || blocks[0] > (1u << l.xShift) || blocks[1] > (1u << (l.xyShift - l.xShift)))
+            return "Invalid KCL block layout";
+        topNodes = ((std::size_t(blocks[2] - 1) << l.xyShift) | (std::size_t(blocks[1] - 1) << l.xShift) | (blocks[0] - 1)) + 1;
+    }
+    if (topNodes > (source.size - l.octree) / 4) return "KCL octree is truncated";
+
+    Octree tree{d, l.octree, source.size, l.prismCount, std::vector<std::uint8_t>(source.size - l.octree)};
+    for (std::size_t i = 0; i < topNodes; ++i)
+        if (!tree.node(l.octree + i * 4, l.octree, l.shift)) return "Invalid KCL octree node or prism list";
+
+    for (std::size_t i = 0; i < (l.positionCount + l.normalCount) * 3; ++i)
+        if (!std::isfinite(beFloat(d + l.positions + i * 4))) return "Invalid KCL vector";
+    for (std::size_t i = 1; i <= l.prismCount; ++i) {
+        const std::uint8_t* prism = d + l.prismBase + i * PrismSize;
+        if (!std::isfinite(beFloat(prism)) || be16(prism + 4) >= l.positionCount) return "Invalid KCL triangle";
+        for (int normal = 0; normal < 4; ++normal)
+            if (be16(prism + 6 + normal * 2) >= l.normalCount) return "Invalid KCL triangle normal";
+    }
+    l.kind.swap(tree.kind);
+    return nullptr;
+}
 } // namespace
 
 bool Kcl::load(Bytes source, std::string& error) {
     storage_.clear();
     triangles_ = 0;
     error.clear();
+    Layout l;
+    if (const char* why = parse(source, l)) return fail(error, why);
     const std::uint8_t* d = source.data;
-    if (!d || source.size < WiiHeader || source.size > INT32_MAX) return fail(error, "Invalid KCL size");
-    const std::size_t positions = be32(d), normals = be32(d + 4), prismBase = be32(d + 8), octree = be32(d + 12);
-    // Prisms count from one: the array's slot zero overlaps the end of the normals.
-    if (positions < WiiHeader || positions % 4 || normals < positions || prismBase + PrismSize < normals ||
-        octree < prismBase + PrismSize || octree % 4 || octree > source.size || (normals - positions) % VectorSize ||
-        (prismBase + PrismSize - normals) % VectorSize || (octree - prismBase - PrismSize) % PrismSize)
-        return fail(error, "Invalid KCL section offsets");
-    const std::size_t positionCount = (normals - positions) / VectorSize;
-    const std::size_t normalCount = (prismBase + PrismSize - normals) / VectorSize;
-    const std::size_t prismCount = (octree - prismBase - PrismSize) / PrismSize;
-    if (!prismCount || prismCount > 0xffff) return fail(error, "Invalid KCL triangle count");
-
-    const float thickness = beFloat(d + 0x10);
-    const float minimum[3]{beFloat(d + 0x14), beFloat(d + 0x18), beFloat(d + 0x1c)};
-    const std::uint32_t masks[3]{be32(d + 0x20), be32(d + 0x24), be32(d + 0x28)};
-    const std::int32_t shift = static_cast<std::int32_t>(be32(d + 0x2c));
-    const std::int32_t xShift = static_cast<std::int32_t>(be32(d + 0x30)), xyShift = static_cast<std::int32_t>(be32(d + 0x34));
-    if (!std::isfinite(thickness) || !std::isfinite(minimum[0]) || !std::isfinite(minimum[1]) || !std::isfinite(minimum[2]))
-        return fail(error, "Invalid KCL bounds");
-    if (shift < 0 || shift > 31) return fail(error, "Invalid KCL block width");
-    std::uint32_t blocks[3];
-    for (int axis = 0; axis < 3; ++axis) {
-        const std::uint32_t extent = ~masks[axis];
-        if (extent & (extent + 1)) return fail(error, "Invalid KCL axis mask");
-        blocks[axis] = (extent >> shift) + 1;
-    }
-    std::size_t topNodes = 1;
-    if (xShift != -1 || xyShift != -1) {
-        if (xShift < 0 || xyShift < xShift || xyShift > 31 || blocks[0] > (1u << xShift) || blocks[1] > (1u << (xyShift - xShift)))
-            return fail(error, "Invalid KCL block layout");
-        topNodes = ((std::size_t(blocks[2] - 1) << xyShift) | (std::size_t(blocks[1] - 1) << xShift) | (blocks[0] - 1)) + 1;
-    }
-    if (topNodes > (source.size - octree) / 4) return fail(error, "KCL octree is truncated");
-
-    Octree tree{d, octree, source.size, prismCount, std::vector<std::uint8_t>(source.size - octree)};
-    for (std::size_t i = 0; i < topNodes; ++i)
-        if (!tree.node(octree + i * 4, octree, shift)) return fail(error, "Invalid KCL octree node or prism list");
-
-    for (std::size_t i = 0; i < (positionCount + normalCount) * 3; ++i)
-        if (!std::isfinite(beFloat(d + positions + i * 4))) return fail(error, "Invalid KCL vector");
-    for (std::size_t i = 1; i <= prismCount; ++i) {
-        const std::uint8_t* prism = d + prismBase + i * PrismSize;
-        if (!std::isfinite(beFloat(prism)) || be16(prism + 4) >= positionCount) return fail(error, "Invalid KCL triangle");
-        for (int normal = 0; normal < 4; ++normal)
-            if (be16(prism + 6 + normal * 2) >= normalCount) return fail(error, "Invalid KCL triangle normal");
-    }
+    const std::size_t positions = l.positions, prismBase = l.prismBase, octree = l.octree;
+    const std::size_t positionCount = l.positionCount, normalCount = l.normalCount, prismCount = l.prismCount;
+    const std::vector<std::uint8_t>& kind = l.kind;
 
     // Header in this build's own layout, then positions, normals, prisms (slot zero kept) and the octree.
     const std::size_t header = (sizeof(KCLFile) + 15) / 16 * 16;
@@ -132,14 +152,14 @@ bool Kcl::load(Bytes source, std::string& error) {
     file.mNormOffset = static_cast<u32>(nativeNormals);
     file.mPrismOffset = static_cast<u32>(nativePrisms);
     file.mOctreeOffset = static_cast<u32>(nativeOctree);
-    file.mThickness = thickness;
-    file.mMin.set(minimum[0], minimum[1], minimum[2]);
-    file.mXMask = static_cast<s32>(masks[0]);
-    file.mYMask = static_cast<s32>(masks[1]);
-    file.mZMask = static_cast<s32>(masks[2]);
-    file.mBlockWidthShift = shift;
-    file.mBlockXShift = xShift;
-    file.mBlockXYShift = xyShift;
+    file.mThickness = l.thickness;
+    file.mMin.set(l.minimum[0], l.minimum[1], l.minimum[2]);
+    file.mXMask = static_cast<s32>(l.masks[0]);
+    file.mYMask = static_cast<s32>(l.masks[1]);
+    file.mZMask = static_cast<s32>(l.masks[2]);
+    file.mBlockWidthShift = l.shift;
+    file.mBlockXShift = l.xShift;
+    file.mBlockXYShift = l.xyShift;
     std::memcpy(out, &file, sizeof file);
 
     for (std::size_t i = 0; i < (positionCount + normalCount) * 3; ++i)
@@ -151,15 +171,36 @@ bool Kcl::load(Bytes source, std::string& error) {
         for (int field = 0; field < 6; ++field) store(to + 4 + field * 2, be16(prism + 4 + field * 2));
     }
     // Bytes no node reaches are never read; they keep their disc order.
-    for (std::size_t at = 0; at < tree.kind.size();) {
+    for (std::size_t at = 0; at < kind.size();) {
         const std::uint8_t* from = d + octree + at;
         std::uint8_t* to = out + nativeOctree + at;
-        if (tree.kind[at] == Octree::Node) store(to, be32(from)), at += 4;
-        else if (tree.kind[at] == Octree::List) store(to, be16(from)), at += 2;
+        if (kind[at] == Octree::Node) store(to, be32(from)), at += 4;
+        else if (kind[at] == Octree::List) store(to, be16(from)), at += 2;
         else *to = *from, at += 1;
     }
     storage_.swap(storage);
     triangles_ = prismCount;
     return true;
+}
+
+const char* nativeKcl(std::uint8_t* data, std::size_t size) {
+    Layout l;
+    if (const char* why = parse({data, size}, l)) return why;
+    const auto swap32 = [](std::uint8_t* p) { store(p, be32(p)); };
+    for (std::size_t at = 0; at < WiiHeader; at += 4) swap32(data + at);
+    for (std::size_t i = 0; i < (l.positionCount + l.normalCount) * 3; ++i) swap32(data + l.positions + i * 4);
+    for (std::size_t i = 1; i <= l.prismCount; ++i) {
+        std::uint8_t* prism = data + l.prismBase + i * PrismSize;
+        swap32(prism);
+        for (int field = 0; field < 6; ++field) store(prism + 4 + field * 2, be16(prism + 4 + field * 2));
+    }
+    // Bytes no node reaches are never read; they keep their disc order.
+    for (std::size_t at = 0; at < l.kind.size();) {
+        std::uint8_t* p = data + l.octree + at;
+        if (l.kind[at] == Octree::Node) swap32(p), at += 4;
+        else if (l.kind[at] == Octree::List) store(p, be16(p)), at += 2;
+        else at += 1;
+    }
+    return nullptr;
 }
 } // namespace smg

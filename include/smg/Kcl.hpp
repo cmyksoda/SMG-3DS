@@ -20,4 +20,7 @@ private:
     std::vector<std::uint64_t> storage_;
     std::size_t triangles_ = 0;
 };
+// The same file turned native in place, in the Wii's own layout (offsets the game turns into its 32-bit pointers):
+// returns why it can't be, leaving it as it was, or null.
+const char* nativeKcl(std::uint8_t* data, std::size_t size);
 } // namespace smg

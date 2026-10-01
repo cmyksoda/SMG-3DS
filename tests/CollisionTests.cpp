@@ -34,17 +34,58 @@ KC_PrismData* down(const Server& server, float x, float z, float from = 50, floa
     return prism;
 }
 
-void floorCollision(bool twoLevels) {
+std::uint32_t word(const std::uint8_t* p) {
+    std::uint32_t value;
+    std::memcpy(&value, p, sizeof value);
+    return value;
+}
+
+// The file nativeKcl turns in place keeps the Wii's layout; each section holds what the repacked file's does.
+void inPlaceMatchesRepacked(bool twoLevels) {
+    const auto raw = floorKcl(twoLevels);
+    smg::Kcl kcl;
+    std::string error;
+    check(kcl.load({raw.data(), raw.size()}, error), "the floor repacks");
+    std::vector<std::uint8_t> native(raw.begin(), raw.end());
+    check(!smg::nativeKcl(native.data(), native.size()), "a Wii KCL turns native in place");
+    const auto* repacked = static_cast<const std::uint8_t*>(kcl.data());
+    const auto& file = *reinterpret_cast<const KCLFile*>(repacked);
+    const std::uint32_t positions = word(&native[0]), normals = word(&native[4]), prisms = word(&native[8]), octree = word(&native[12]);
+    check(positions == 0x38 && octree < native.size(), "its offsets read natively");
+    check(!std::memcmp(&native[positions], repacked + file.mPosOffset, normals - positions) &&
+              !std::memcmp(&native[normals], repacked + file.mNormOffset, prisms + 16 - normals),
+          "its positions and normals are the repacked ones");
+    check(!std::memcmp(&native[prisms + 16], repacked + file.mPrismOffset + 16, octree - prisms - 16), "and its prisms");
+    check(!std::memcmp(&native[octree], repacked + file.mOctreeOffset, native.size() - octree), "and its octree, node by node");
+    float thickness;
+    std::memcpy(&thickness, &native[0x10], sizeof thickness);
+    check(thickness == file.mThickness && static_cast<s32>(word(&native[0x20])) == file.mXMask &&
+              static_cast<s32>(word(&native[0x2C])) == file.mBlockWidthShift && static_cast<s32>(word(&native[0x34])) == file.mBlockXYShift,
+          "and its header's values");
+    std::vector<std::uint8_t> cut(raw.begin(), raw.begin() + static_cast<long>(octree));
+    const std::vector<std::uint8_t> before = cut;
+    check(smg::nativeKcl(cut.data(), cut.size()) && cut == before, "a cut-off file is refused and left as it was");
+}
+
+// inPlace: the game's own path, the file turned native where its archive holds it (32-bit pointers only).
+void floorCollision(bool twoLevels, bool inPlace = false) {
     const auto raw = floorKcl(twoLevels), table = attributes();
     smg::Kcl kcl;
     smg::Bcsv pa;
     std::string error;
     check(kcl.load({raw.data(), raw.size()}, error) && kcl.triangles() == 2, "a Wii KCL repacks");
     check(pa.load({table.data(), table.size()}, error), "its attribute table loads");
+    std::vector<std::uint64_t> held((raw.size() + 7) / 8);
+    void* data = kcl.data();
+    if (inPlace) {
+        std::memcpy(held.data(), raw.data(), raw.size());
+        check(!smg::nativeKcl(reinterpret_cast<std::uint8_t*>(held.data()), raw.size()), "a Wii KCL turns native in place");
+        data = held.data();
+    }
 
     smg::NativeScene scene;
     Server server;
-    server.init(kcl.data(), pa.info().mData);
+    server.init(data, pa.info().mData);
     // As CollisionParts::init does for a part.
     MR::initCameraCodeCollection("floor", 0);
     check(server.calcFarthestVertexDistance(), "every triangle has attributes");
@@ -86,7 +127,7 @@ void floorCollision(bool twoLevels) {
     // Another placement of the same model attaches to the same image, which is already set up.
     TVec3f* positions = server.mFile->mPos;
     Server again;
-    again.init(kcl.data(), pa.info().mData);
+    again.init(data, pa.info().mData);
     check(again.mFile->mPos == positions && down(again, 30, 20), "a second part shares the image unchanged");
 }
 
@@ -121,6 +162,9 @@ void rejected() {
 int runCollisionTests() {
     floorCollision(false);
     floorCollision(true);
+    inPlaceMatchesRepacked(false);
+    inPlaceMatchesRepacked(true);
+    if (sizeof(void*) == 4) floorCollision(false, true), floorCollision(true, true);
     rejected();
     std::printf("%u original collision checks passed\n", checks);
     return 0;

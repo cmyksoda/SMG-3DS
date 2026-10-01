@@ -362,13 +362,28 @@ bool listed(const KCollisionServer& server, const TVec3f& point, int triangle) {
 }
 
 // Every KCL on the disc through the original KCollisionServer, rays checked against brute force.
+// The game's path turns the file in place in the Wii's layout; each section must hold what the repacked file's does.
+const char* inPlaceDiffers(const std::uint8_t* raw, std::size_t size, const void* repackedData) {
+    std::vector<std::uint8_t> native(raw, raw + size);
+    if (const char* why = smg::nativeKcl(native.data(), size)) return why;
+    const auto* repacked = static_cast<const std::uint8_t*>(repackedData);
+    const auto& file = *reinterpret_cast<const KCLFile*>(repacked);
+    std::uint32_t at[4];
+    std::memcpy(at, native.data(), sizeof at);
+    if (std::memcmp(&native[at[0]], repacked + file.mPosOffset, at[2] + 16 - at[0])) return "vectors differ";
+    if (std::memcmp(&native[at[2] + 16], repacked + file.mPrismOffset + 16, at[3] - at[2] - 16)) return "prisms differ";
+    if (std::memcmp(&native[at[3]], repacked + file.mOctreeOffset, size - at[3])) return "octree differs";
+    if (std::memcmp(&native[0x10], &file.mThickness, 0x28)) return "header values differ";
+    return nullptr;
+}
+
 int auditCollision(const fs::path& root) {
     std::vector<fs::path> archives;
     for (const auto& entry : fs::recursive_directory_iterator(root))
         if (entry.is_regular_file() && extension(entry.path().string(), ".arc")) archives.push_back(entry.path());
     std::sort(archives.begin(), archives.end());
     std::size_t files = 0, triangles = 0, failed = 0, noAttributes = 0, badAttributes = 0, rays = 0, hits = 0, edges = 0,
-                wrong = 0, disabled = 0, cameraCodes = 0, unlisted = 0, firstBlock = 0;
+                wrong = 0, disabled = 0, cameraCodes = 0, unlisted = 0, firstBlock = 0, inPlaceWrong = 0;
     for (const auto& path : archives) {
         std::vector<std::uint8_t> storage;
         std::vector<smg::ArchiveEntry> entries;
@@ -385,6 +400,10 @@ int auditCollision(const fs::path& root) {
                 continue;
             }
             triangles += kcl.triangles();
+            if (const char* why = inPlaceDiffers(storage.data() + entry.offset, entry.size, kcl.data())) {
+                std::fprintf(stderr, "KCL %s in place: %s\n", label.c_str(), why);
+                ++inPlaceWrong;
+            }
             const std::string pa = entry.path.substr(0, entry.path.size() - 3) + "pa";
             smg::Bcsv attributes;
             const auto table = std::find_if(entries.begin(), entries.end(), [&](const smg::ArchiveEntry& e) { return e.path == pa; });
@@ -452,7 +471,8 @@ int auditCollision(const fs::path& root) {
             delete server.mapInfo;
         }
     }
-    std::printf("%zu KCL files, %zu loaded, %zu triangles (%zu disabled as degenerate)\n", files, files - failed, triangles, disabled);
+    std::printf("%zu KCL files, %zu loaded, %zu triangles (%zu disabled as degenerate); turned in place, %zu differ from the repacked\n",
+                files, files - failed, triangles, disabled, inPlaceWrong);
     std::printf("%zu without an attribute table, %zu naming missing rows; %zu camera codes collected\n", noAttributes,
                 badAttributes, cameraCodes);
     std::printf("%zu rays: %zu hits agree with brute force, %zu differ only at an edge, %zu meet a triangle the disc's "
