@@ -38,6 +38,8 @@ inline bool operator!=(const Settings& a, const Settings& b) { return !(a == b);
 // Plain key=value text; unknown keys and bad values are skipped so old files keep loading.
 Settings parseSettings(const std::string& text, Settings base = {});
 std::string formatSettings(const Settings& settings);
+// Where the 3DS keeps the player's settings, for the native app and the game alike.
+inline constexpr const char* SettingsPath = "sdmc:/3ds/SMG-3DS/settings.ini";
 bool loadSettings(const char* path, Settings& settings);
 bool saveSettings(const char* path, const Settings& settings);
 } // namespace smg

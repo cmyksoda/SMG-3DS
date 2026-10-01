@@ -8,7 +8,6 @@
 #include <citro2d.h>
 
 namespace {
-constexpr const char* SettingsPath = "sdmc:/3ds/SMG-3DS/settings.ini";
 constexpr const char* DataRoot = "sdmc:/3ds/SMG-3DS/game";
 // Hundreds of draws with their own combiner state overflow citro3d's default 256 KiB.
 constexpr std::size_t CommandBufferSize = 0x100000;
@@ -35,7 +34,7 @@ int main() {
     smg::HidMotion motion;
     motion.start();
     smg::Settings settings;
-    smg::loadSettings(SettingsPath, settings);
+    smg::loadSettings(smg::SettingsPath, settings);
     smg::Input input(settings);
     smg::NativePad pad;
     smg::Session session(DataRoot);
@@ -53,7 +52,7 @@ int main() {
         previousTime = now;
         if (suspendInput) { input.cancelGesture(); suspendInput = false; elapsed = 0; }
         const auto& frame = input.update(raw, static_cast<float>(elapsed));
-        if (input.takeSettingsChanged()) smg::saveSettings(SettingsPath, input.settings());
+        if (input.takeSettingsChanged()) smg::saveSettings(smg::SettingsPath, input.settings());
         pad.update(frame, elapsed);
         session.updateNerve();
         scene.update(frame, static_cast<float>(elapsed));

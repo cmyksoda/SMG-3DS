@@ -16,8 +16,13 @@ f32 sSensorHeight[WPAD_MAX_CONTROLLERS];
 smg::KpadRepeat sRepeat[WPAD_MAX_CONTROLLERS];
 u64 sLastRead = 0;
 
+// The player's pointer mode and button layout, as the native app saves them.
 smg::Input& input() {
-    static smg::Input port;
+    static smg::Input port = [] {
+        smg::Settings settings;
+        smg::loadSettings(smg::SettingsPath, settings);
+        return smg::Input(settings);
+    }();
     return port;
 }
 smg::HidMotion sMotion;
