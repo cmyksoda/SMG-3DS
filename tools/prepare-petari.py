@@ -1568,6 +1568,16 @@ adapt("src/JSystem/JAudio2/JASAramStream.cpp", "JSystem/JAudio2/JASAramStream.cp
     ("    DCInvalidateRange(sReadBuffer, sizeof(Header));\n", "    DCInvalidateRange(sReadBuffer, sizeof(Header));\n    smgNativeAstHeader(sReadBuffer);\n", 1),
     ("    DCInvalidateRange(sReadBuffer, size);\n    BlockHeader* bhead", "    DCInvalidateRange(sReadBuffer, size);\n    smgNativeAstBlock(sReadBuffer);\n    BlockHeader* bhead", 1),
 ])
+# A sound ID's composite word is (section << 24 | group << 16 | wave), as the game builds and stores it; the parts
+# overlaying it are ordered by the CPU's byte order so they read the same fields on ARM.
+adapt("libs/JSystem/include/JSystem/JAudio2/JAISound.hpp", "include/JSystem/JAudio2/JAISound.hpp", [
+    ("        struct {\n            union {\n                u16 value;\n                struct {\n                    u8 sectionID;\n                    u8 groupID;\n"
+     "                } parts;\n            } type;\n            u16 waveID;\n        } info;",
+     "        struct {\n#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__\n            u16 waveID;\n            union {\n                u16 value;\n"
+     "                struct {\n                    u8 groupID;\n                    u8 sectionID;\n                } parts;\n            } type;\n#else\n"
+     "            union {\n                u16 value;\n                struct {\n                    u8 sectionID;\n                    u8 groupID;\n"
+     "                } parts;\n            } type;\n            u16 waveID;\n#endif\n        } info;", 1),
+])
 # No Wii Remote strap reminder (Jaxi's call: the 3DS has no strap): the logo scene goes straight to its wait for the
 # system archive, and the strap's layout is never made.
 adapt("src/Game/Scene/LogoScene.cpp", "Game/Scene/LogoScene.cpp", [
