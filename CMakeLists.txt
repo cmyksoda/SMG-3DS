@@ -271,10 +271,10 @@ if(NINTENDO_3DS)
   # Only the toolchain's own optional hooks may stay undefined; anything else fails the link by name.
   function(smg_no_missing_weak target)
     add_custom_command(TARGET ${target} POST_BUILD
-      COMMAND sh -c "missing=$(\"$0\" -C \"$1\" | grep -E '^ +[wv] ' | grep -vE ' (__cxa_pure_virtual|__deregister_frame_info|__register_frame_info|__gnu_Unwind_Find_exidx|__syscall_tls_[a-z]+|userAppInit|userAppExit)$'); [ -z \"$missing\" ] || { printf 'Weak references nothing defines in %s:\\n%s\\n' \"$1\" \"$missing\" >&2; exit 1; }"
+      COMMAND sh -c "missing=$(\"$0\" -C \"$1\" | grep -E '^ +[wv] ' | grep -vE ' (__deregister_frame_info|__register_frame_info|__gnu_Unwind_Find_exidx|__syscall_tls_[a-z]+|userAppInit|userAppExit)$'); [ -z \"$missing\" ] || { printf 'Weak references nothing defines in %s:\\n%s\\n' \"$1\" \"$missing\" >&2; exit 1; }"
         "${CMAKE_NM}" "$<TARGET_FILE:${target}>" VERBATIM)
   endfunction()
-  add_executable(SMG-3DS source/platform/Main.cpp source/platform/TouchUi.cpp source/platform/SceneRenderer.cpp "${MODEL_SHADER}")
+  add_executable(SMG-3DS source/platform/PureVirtual.cpp source/platform/Main.cpp source/platform/TouchUi.cpp source/platform/SceneRenderer.cpp "${MODEL_SHADER}")
   smg_no_missing_weak(SMG-3DS)
   set_target_properties(SMG-3DS PROPERTIES SUFFIX ".elf")
   target_include_directories(SMG-3DS PRIVATE "${DEVKITPRO}/libctru/include" "${CMAKE_CURRENT_BINARY_DIR}")
@@ -360,7 +360,7 @@ if(NINTENDO_3DS)
     target_compile_options(${library} PRIVATE -Wno-narrowing -ffunction-sections -fdata-sections)
   endforeach()
 
-  add_executable(mario_probe source/probe/MarioProbe.cpp)
+  add_executable(mario_probe source/probe/MarioProbe.cpp source/platform/PureVirtual.cpp)
   smg_no_missing_weak(mario_probe)
   set_target_properties(mario_probe PROPERTIES SUFFIX ".elf")
   target_include_directories(mario_probe PRIVATE "${DEVKITPRO}/libctru/include")
@@ -375,7 +375,7 @@ if(NINTENDO_3DS)
 
   option(SMG_BUILD_VALIDATION "Build a separate on-device math/input test app" OFF)
   if(SMG_BUILD_VALIDATION)
-    add_executable(native_validation tests/NativeTests.cpp tests/MathTests.cpp tests/PadTests.cpp tests/BcsvTests.cpp
+    add_executable(native_validation source/platform/PureVirtual.cpp tests/NativeTests.cpp tests/MathTests.cpp tests/PadTests.cpp tests/BcsvTests.cpp
       tests/ModelTests.cpp tests/CombinerTests.cpp tests/GravityTests.cpp tests/Etc1Tests.cpp tests/GpuTests.cpp
       tests/NameObjTests.cpp tests/SceneTests.cpp tests/CollisionTests.cpp tests/AnimationTests.cpp tests/ActorTests.cpp tests/J3DTransformTests.cpp tests/J3DSkeletonTests.cpp
       tests/GxCommandTests.cpp tests/BmgTests.cpp tests/ColorTests.cpp tests/LayoutTests.cpp tests/WideTests.cpp tests/GxDrawTests.cpp tests/GxCopyTests.cpp tests/WiiDspTests.cpp tests/AudioDataTests.cpp)
