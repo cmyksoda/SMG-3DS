@@ -37,6 +37,9 @@ completion does not make those interfaces portable to ARM11/PICA200.
   switches the gyroscope and accelerometer on in `KPADInit` and feeds them to the pointer.
   A frame longer than a quarter second moves the pointer by a quarter second's worth: the
   rates are one moment's, and dropping such frames left the pointer frozen at low frame rates.
+  The game's `WPadPointer` waits out IR noise (5 valid samples before showing, 10 invalid ones before hiding);
+  the 3DS pointer is exact, so both are 0 and a lifted stylus hides it at once. ZR stays the Wii's B with
+  the stylus lifted: the title's "Press both A and B" and the menus' back need it.
 - Yaz0 decompression and RARC indexing work independently of host endianness and alignment.
   Archives are found whatever the case of their names, as the Wii's DVD file system finds them:
   the disc stores `FloaterOtakingGalaxy.arc` and `CubeBubbleEXAZone.arc` where the game asks for
@@ -202,7 +205,6 @@ borrows its owner's sample storage rather than allocating the Wii's 120-sample I
    original `NameObjListExecutor` scheduler,
    gravity, collision, stage placement, Mario, animation, and camera using the real resources.
    Integrate the input boundary into `GamePadUtil`/`WPad`, including explicit digital spin input.
-   Skip the Wii pointer's multi-frame loss-of-IR delay: stylus lift must hide it immediately.
    The Switch release's right-stick camera needs new camera code; the C-Stick value is ready.
 5. **Complete gameplay.** Stage transitions, menus, save migration/format, audio through NDSP,
    cutscenes, effects, motion-controlled minigames, and all game-specific exceptions.
@@ -567,7 +569,9 @@ EFB pixel to target index `sx * 240 + (239 - sy)`, checked against a live frame)
 format; depth reads back as raw D24S8 words, with the port's nearer-is-larger turned to the Wii's Z. Indirect
 texturing has no PICA counterpart (no dependent reads): a stage that only offsets its coordinates is drawn without
 the offset, with a one-time note, and set-ups that wrap, replace or chain coordinates stop by name. A frame whose
-commands outgrow citro3d's 1 MB buffer is ended and begun again with the screen output detached.
+commands outgrow citro3d's 1 MB buffer is ended and begun again with the screen output detached. GX's scissor
+(BP 0x20/0x21, less the 342 offset) is scaled to the screen and set on the target the way citro3d's quarter turn
+wants it: left = 240 - (y + h), top = 400 - (x + w).
 
 **TEV comparisons.** The PICA's combiner has no compare ops (`GX_TEV_COMP_*`), which compute `d + (a > b ? c : 0)`
 and friends. Image effects lean on them: `FallOutFieldDraw`'s screen fill sets alpha to `texture alpha > K0.a ? A0 :
