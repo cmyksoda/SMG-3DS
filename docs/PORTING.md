@@ -572,6 +572,20 @@ and channel colours), and J3D read texture numbers back from its display lists w
 matches a build that loads a Mii-name font (`MiiFont.arc`) the US disc doesn't have, and whose `main.dol` never
 names it, so the step is skipped when the archive is absent. Checking `main.dol`'s strings settles such questions.
 
+**Bitfields read as words.** `GXSetTevOp`'s presets (`GX_MODULATE`, `GX_REPLACE`, `GX_PASSCLR`, ...) are tables of
+`tev_color_env_t` / `tev_alpha_env_t`: bitfield structs read back as register words. Metrowerks packs a struct's first
+bitfield into the word's top bits, and GCC on ARM into its bottom bits. The words therefore came out scrambled, and
+every `GXSetTevOp` draw ran nonsense stages. The visible case was the picture font's button icons, drawn as white
+silhouettes. The adapted `GXSetTevOp` builds each word field by field by name (`smgTevColorWord`, `smgTevAlphaWord`
+in `compat/smg/GxPrivate.h`); a test pins `GX_MODULATE` to the hardware's words. Reversing the field order instead
+would break the SDK's positional initialisers, which GCC rejects. Any other bitfield struct read as an integer has
+the same trap; `io_reg.h`'s `si_comcsr_t` is the only other one in the SDK headers.
+
+**Sound animations.** An actor archive's `.bas` (`JAUSoundAnimation`) is read in place by `JAUSoundAnimator`, so it
+turns native at mount like the BTI, KCL and JPC files: a count, a control word the game leaves null, then 0x20-byte
+sounds. The records sit at offset 8 only where pointers are 32-bit, so the 64-bit host audit reads them there by
+hand. All 394 disc files audit clean.
+
 ## The native scene boundary
 
 `smg::NativeScene` (`compat/smg/Scene.hpp`, `source/compat/Scene.cpp`) holds what
