@@ -1578,6 +1578,12 @@ adapt("libs/JSystem/include/JSystem/JAudio2/JAISound.hpp", "include/JSystem/JAud
      "            union {\n                u16 value;\n                struct {\n                    u8 sectionID;\n                    u8 groupID;\n"
      "                } parts;\n            } type;\n            u16 waveID;\n#endif\n        } info;", 1),
 ])
+# The Wii waits out IR noise: a pointer shows after 5 valid samples and lingers 10 after losing the sensor bar. The
+# 3DS's pointer is exact (touch, gyro or stick), so it shows at once and a lifted stylus hides it at once.
+adapt("src/Game/System/WPadPointer.cpp", "Game/System/WPadPointer.cpp", [
+    ("    static const s32 sIsValidInScreenTime = 5;", "    static const s32 sIsValidInScreenTime = 0;", 1),
+    ("    static const s32 sIsInValidOutScreenTime = 10;", "    static const s32 sIsInValidOutScreenTime = 0;", 1),
+])
 # No Wii Remote strap reminder (Jaxi's call: the 3DS has no strap): the logo scene goes straight to its wait for the
 # system archive, and the strap's layout is never made.
 adapt("src/Game/Scene/LogoScene.cpp", "Game/Scene/LogoScene.cpp", [
