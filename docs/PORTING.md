@@ -601,7 +601,8 @@ links as a no-op whose "result" is its first argument. Every sequenced note stor
 and each note-off "freed" that fake channel, nulling the track's call stack, so the file-select music returned to
 address 0. It was found with a GDB hardware watchpoint (Azahar's stub takes them) on the stack slot. The overwrite
 files now link whole, and each 3DS executable's link fails by name on any undefined weak symbol outside the
-toolchain's optional hooks (`smg_no_missing_weak` in `CMakeLists.txt`).
+toolchain's optional hooks (`smg_no_missing_weak` in `CMakeLists.txt`). `__cxa_pure_virtual` was one of those
+holes too (the toolchain leaves it weak and undefined), so each executable now links its own, which stops by name.
 
 **Sound animations.** An actor archive's `.bas` (`JAUSoundAnimation`) is read in place by `JAUSoundAnimator`, so it
 turns native at mount like the BTI, KCL and JPC files: a count, a control word the game leaves null, then 0x20-byte
