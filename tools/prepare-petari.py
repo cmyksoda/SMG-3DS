@@ -1542,6 +1542,14 @@ adapt("libs/RVL_SDK/include/revolution/gx/GXFDLShortcut.h", "include/revolution/
 adapt("libs/JSystem/include/JSystem/JKernel/JKRAram.hpp", "include/JSystem/JKernel/JKRAram.hpp", [
     ("u32 JKRDecompExpandSize(u8*);", '#include "JSystem/JKernel/JKRDecomp.hpp"', 1),
 ])
+# No Wii Remote strap reminder (Jaxi's call: the 3DS has no strap): the logo scene goes straight to its wait for the
+# system archive, and the strap's layout is never made.
+adapt("src/Game/Scene/LogoScene.cpp", "Game/Scene/LogoScene.cpp", [
+    ("        initNerve(GET_NERVE_ANON(LogoSceneStrapFadein));", "        initNerve(GET_NERVE_ANON(LogoSceneWaitReadDoneSystemArchive));", 1),
+    ("    if (tryFadeoutLayout()) {\n        setNerve(GET_NERVE_ANON(LogoSceneStrapFadein));",
+     "    if (tryFadeoutLayout()) {\n        setNerve(GET_NERVE_ANON(LogoSceneWaitReadDoneSystemArchive));", 1),
+    ('    mStrapLayout = MR::createSimpleLayout("ストラップ着用画面", "WiiRemoteStrap", 1);\n    mStrapLayout->kill();\n', "", 1),
+])
 # DspBoot hands the DSP its microcode at cached-mirror addresses (0x80000000 up), which no 3DS image can hold; on
 # the 3DS every view of memory is the address itself (source/compat/WiiAudio.cpp runs the DSP).
 adapt("src/JSystem/JAudio2/dsptask.cpp", "JSystem/JAudio2/dsptask.cpp", [
