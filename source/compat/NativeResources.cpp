@@ -4,6 +4,7 @@
 #include <smg/AudioData.hpp>
 #include <smg/Bmg.hpp>
 #include <smg/FreeStore.hpp>
+#include <smg/J3D.hpp>
 #include <smg/Layout.hpp>
 #include <smg/NativeResources.hpp>
 #include <cstdio>
@@ -43,6 +44,19 @@ void smgNativeRarc(void* archive) {
         swap(files[i].mFileID);
         swap(files[i].mHash);
         swapWords(reinterpret_cast<u8*>(&files[i]) + 4, 3);  // flag and name offset, data offset or directory, size
+    }
+    // BTI textures' headers turn here, where every reader's archive passes (their data stays the GPU's).
+    const char* names = reinterpret_cast<const char*>(info) + info->mStringTableOffset;
+    u8* data = static_cast<u8*>(archive) + header->mHeaderSize + header->mFileDataOffset;
+    for (u32 i = 0; i < info->mNrFiles; ++i) {
+        if (files[i].mFlag & 2) continue;  // a directory
+        const char* name = names + files[i].mNameOffset;
+        const char* dot = std::strrchr(name, '.');
+        if (!dot || strcasecmp(dot, ".bti")) continue;
+        if (const char* why = smg::nativeBti(data + files[i].mDataOffset, files[i].mDataSize)) {
+            std::fprintf(stderr, "A BTI texture (%s) %s\n", name, why);
+            std::abort();
+        }
     }
 }
 

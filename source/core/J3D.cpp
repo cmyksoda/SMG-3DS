@@ -230,6 +230,12 @@ void materials(SwapPlan& plan, const Block& b) {
     nameTable(plan, b, names);
 }
 
+// ResTIMG (0x20): format and alpha bytes, width and height, wrap and palette bytes, palette size and offset, filter
+// bytes, LOD bias and image offset.
+void resTimg(SwapPlan& plan, std::size_t t) {
+    plan.halves(t + 2, 2), plan.half(t + 0xA), plan.word(t + 0xC), plan.half(t + 0x1A), plan.word(t + 0x1C);
+}
+
 // TEX1: ResTIMG per texture (0x20); texels and palettes stay the GPU's.
 void textures(SwapPlan& plan, const Block& b) {
     if (!plan.need(b.start, 0x14, b.end, "a TEX1 header")) return;
@@ -237,10 +243,7 @@ void textures(SwapPlan& plan, const Block& b) {
     plan.half(b.at(8)), plan.words(b.at(0xC), 2);
     const std::size_t headers = b.at(plan.be32(b.at(0xC)));
     if (count && !plan.need(headers, 0x20 * std::size_t(count), b.end, "texture headers")) return;
-    for (std::uint32_t i = 0; i < count; ++i) {
-        const std::size_t t = headers + 0x20 * i;
-        plan.halves(t + 2, 2), plan.half(t + 0xA), plan.word(t + 0xC), plan.half(t + 0x1A), plan.word(t + 0x1C);
-    }
+    for (std::uint32_t i = 0; i < count; ++i) resTimg(plan, headers + 0x20 * i);
     nameTable(plan, b, plan.be32(b.at(0x10)));
 }
 
@@ -387,6 +390,15 @@ const char* nativeJ3DAnimation(std::uint8_t* data, std::size_t size) {
         }
         at += length;
     }
+    return plan.apply();
+}
+
+const char* nativeBti(std::uint8_t* data, std::size_t size) {
+    SwapPlan plan(data, size);
+    if (size < 0x20) return "is shorter than its header";
+    const std::uint32_t image = plan.be32(0x1C), palette = plan.be32(0xC);
+    if (!image || image > size || (palette && palette > size)) return "points its image or palette past its end";
+    resTimg(plan, 0);
     return plan.apply();
 }
 

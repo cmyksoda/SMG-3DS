@@ -399,6 +399,24 @@ void animation(Audit& a, const std::string& where, const std::uint8_t* data, std
     a.plausible(smg::nativeJ3DAnimation(twice.data(), twice.size()) != nullptr, "a second turn (it must be refused)");
 }
 
+void bti(Audit& a, const std::string& where, const std::uint8_t* data, std::size_t size) {
+    Bytes copy(data, data + size);
+    a.where = where;
+    ++a.files;
+    if (const char* why = smg::nativeBti(copy.data(), copy.size())) {
+        ++a.refused;
+        std::printf("%s: refused: %s\n", where.c_str(), why);
+        return;
+    }
+    a.before = data, a.after = copy.data();
+    const auto& t = *reinterpret_cast<const ResTIMG*>(copy.data());
+    a.field(t.mFormat, "texture format"), a.field(t.mWidth, "texture width"), a.field(t.mHeight, "texture height"), a.field(t.mPaletteNum, "palette size");
+    a.field(t.mPaletteDataOffset, "palette offset"), a.field(t.mLodBias, "LOD bias"), a.field(t.mImageDataOffset, "image offset");
+    a.plausible(t.mWidth && t.mWidth <= 1024 && t.mHeight && t.mHeight <= 1024 && t.mFormat <= 14 && t.mFormat != 7, "a BTI header");
+    a.plausible(std::memcmp(copy.data() + 0x20, data + 0x20, size - 0x20) == 0, "a BTI's data (it stays the GPU's)");
+    ++a.counts["BTI textures"];
+}
+
 std::string lower(std::string s) {
     for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     return s;
@@ -428,6 +446,8 @@ int auditJ3D(const fs::path& root) {
             const std::string ext = name.size() > 4 ? name.substr(name.size() - 4) : "";
             if ((ext == ".bmd" || ext == ".bdl" || ext == ".bmt") && entry.size >= 8 && std::memcmp(source.data + entry.offset, "J3D2", 4) == 0)
                 auditFile(a, fs::relative(path, root).string() + " " + entry.path, source.data + entry.offset, entry.size);
+            if (ext == ".bti" && entry.size >= 0x20)
+                bti(a, fs::relative(path, root).string() + " " + entry.path, source.data + entry.offset, entry.size);
             if (entry.size >= 0x28 && std::memcmp(source.data + entry.offset, "J3D1", 4) == 0)
                 animation(a, fs::relative(path, root).string() + " " + entry.path, source.data + entry.offset, entry.size);
         }
