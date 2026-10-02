@@ -272,8 +272,70 @@ struct Renderer {
     void startBuffers() {
         used = flushed = indexUsed = indexFlushed = batchStart = 0;
         C3D_BindProgram(&program);
+        forgetSent();
         bindCpuBuffers();
         applied = false;
+    }
+
+    // What citro3d was last given by the draws here, so a draw passes on only what changed (each citro3d setter marks
+    // its part to be sent to the GPU again, a whole block of registers). Forgotten whenever other code here sets
+    // citro3d's state itself (texture copies, movie frames) and at each command list.
+    struct Sent {
+        bool pixel = false, cull = false, scissor = false, texture[CombinerProgram::MaxUnits] = {}, fixed[7] = {};
+        PicaPixel was;
+        int writeMask = 0;
+        GPU_CULLMODE cullMode = GPU_CULL_NONE;
+        bool scissorWhole = true;
+        int scissorBox[4] = {};
+        C3D_Tex* bound[CombinerProgram::MaxUnits] = {};
+        C3D_Tex boundWas[CombinerProgram::MaxUnits] = {};
+        C3D_FVec fixedWas[7] = {};
+        int meshLayout = -1;  // the mesh attribute loaders citro3d holds (meshLayoutOf), -1 none
+        u64 meshPermutation = 0;
+        int meshComponents = 0;
+    } sent;
+    void forgetSent() { sent = Sent{}; }
+
+    void sendPixel() {
+        const bool all = !sent.pixel;
+        const PicaPixel& was = sent.was;
+        for (unsigned i = 0; i < CombinerProgram::MaxStages; ++i)
+            if (all || std::memcmp(&was.env[i], &pixel.env[i], sizeof(C3D_TexEnv))) *C3D_GetTexEnv(int(i)) = pixel.env[i];
+        if (all || was.bufferColor != pixel.bufferColor) C3D_TexEnvBufColor(pixel.bufferColor);
+        if (all || was.bufferUpdate[0] != pixel.bufferUpdate[0] || was.bufferUpdate[1] != pixel.bufferUpdate[1])
+            C3D_TexEnvBufUpdate(C3D_RGB, pixel.bufferUpdate[0]), C3D_TexEnvBufUpdate(C3D_Alpha, pixel.bufferUpdate[1]);
+        if (all || was.alphaTest != pixel.alphaTest || was.alphaFunc != pixel.alphaFunc || was.alphaReference != pixel.alphaReference)
+            C3D_AlphaTest(pixel.alphaTest, pixel.alphaFunc, pixel.alphaReference);
+        if (all || was.equation != pixel.equation || was.alphaEquation != pixel.alphaEquation || was.source != pixel.source ||
+            was.destination != pixel.destination || was.alphaSource != pixel.alphaSource || was.alphaDestination != pixel.alphaDestination)
+            C3D_AlphaBlend(pixel.equation, pixel.alphaEquation, pixel.source, pixel.destination, pixel.alphaSource, pixel.alphaDestination);
+        if (all || was.depthTest != pixel.depthTest || was.depthFunc != pixel.depthFunc || sent.writeMask != writeMask)
+            C3D_DepthTest(pixel.depthTest, pixel.depthTest ? pixel.depthFunc : GPU_ALWAYS, static_cast<GPU_WRITEMASK>(writeMask));
+        sent.was = pixel, sent.writeMask = writeMask, sent.pixel = true;
+    }
+    void sendCull(GPU_CULLMODE mode) {
+        if (sent.cull && sent.cullMode == mode) return;
+        C3D_CullFace(mode);
+        sent.cull = true, sent.cullMode = mode;
+    }
+    void sendScissor() {
+        if (sent.scissor && sent.scissorWhole == scissorWhole && (scissorWhole || !std::memcmp(sent.scissorBox, scissor, sizeof scissor))) return;
+        if (scissorWhole) C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
+        else C3D_SetScissor(GPU_SCISSOR_NORMAL, scissor[0], scissor[1], scissor[2], scissor[3]);
+        sent.scissor = true, sent.scissorWhole = scissorWhole, std::memcpy(sent.scissorBox, scissor, sizeof scissor);
+    }
+    // The same texture object with the same registers needs no binding again.
+    void sendTexture(unsigned unit, C3D_Tex& texture) {
+        if (sent.texture[unit] && sent.bound[unit] == &texture && !std::memcmp(&sent.boundWas[unit], &texture, sizeof texture)) return;
+        C3D_TexBind(int(unit), &texture);
+        sent.texture[unit] = true, sent.bound[unit] = &texture, sent.boundWas[unit] = texture;
+    }
+    void sendFixed(int reg, float x, float y, float z, float w) {
+        C3D_FVec& was = sent.fixedWas[reg];
+        if (sent.fixed[reg] && was.x == x && was.y == y && was.z == z && was.w == w) return;
+        C3D_FVec* value = C3D_FixedAttribGetWritePtr(reg);
+        value->x = x, value->y = y, value->z = z, value->w = w;
+        sent.fixed[reg] = true, was = *value;
     }
 
     // The CPU path's vertices: transformed already, the shader passing them on. Bound again only when a draw from them
@@ -284,6 +346,8 @@ struct Renderer {
     }
     void bindCpuBuffers() {
         cpuBound = true;
+        sent.meshLayout = -1;
+        for (bool& known : sent.fixed) known = false;  // the vertex loaders' fixed values, not trusted past another layout
         C3D_BoolUnifSet(GPU_VERTEX_SHADER, transformUniform, false);
         C3D_BoolUnifSet(GPU_VERTEX_SHADER, rgbRegUniform, false);
         C3D_BoolUnifSet(GPU_VERTEX_SHADER, alphaRegUniform, false);
@@ -854,7 +918,8 @@ struct Renderer {
                     setRow(lightUniform + int(l) * 6 + r, row[0], row[1], row[2], row[3]);
                 }
             setRow(ambientUniform, u.ambient[0], u.ambient[1], u.ambient[2], u.ambient[3]);
-            C3D_IVUnifSet(GPU_VERTEX_SHADER, lightLoopUniform, u.lights ? int(u.lights) - 1 : 0, 0, 6, 0);
+            const u32 loop = IVec_Pack(u.lights ? int(u.lights) - 1 : 0, 0, 6, 0);
+            if (C3D_IVUnif[GPU_VERTEX_SHADER][lightLoopUniform - 0x60] != loop) C3D_IVUnifSet(GPU_VERTEX_SHADER, lightLoopUniform, u.lights ? int(u.lights) - 1 : 0, 0, 6, 0);
             C3D_BoolUnifSet(GPU_VERTEX_SHADER, anyLightUniform, u.lights != 0);
             C3D_BoolUnifSet(GPU_VERTEX_SHADER, rgbLitUniform, u.rgbLit);
             C3D_BoolUnifSet(GPU_VERTEX_SHADER, alphaLitUniform, u.alphaLit);
@@ -874,35 +939,39 @@ struct Renderer {
         const u64 drawing = stepStart();
         // GxMeshVertex: position (v0), colour (v1), three texgen inputs (v2-v4), normal (v6), slot (v5). What a draw doesn't
         // take from the vertices is a fixed attribute, and the bytes it skips are padding (0xC is four bytes, 0xE twelve).
-        C3D_AttrInfo* attributes = C3D_GetAttrInfo();
-        AttrInfo_Init(attributes);
-        u64 permutation = 0;
-        int components = 0;
-        const auto loader = [&](int reg, GPU_FORMATS format, int count) {
-            permutation |= u64(AttrInfo_AddLoader(attributes, reg, format, count)) << (4 * components++);
-        };
-        const auto pad = [&](unsigned code) { permutation |= u64(code) << (4 * components++); };
-        const auto fixed = [&](int reg, float x, float y, float z, float w) {
-            AttrInfo_AddFixed(attributes, reg);
-            C3D_FVec* value = C3D_FixedAttribGetWritePtr(reg);
-            value->x = x, value->y = y, value->z = z, value->w = w;
-        };
-        loader(0, GPU_FLOAT, 3);
-        if (u.fixedColor) pad(0xC), fixed(1, u.color[0], u.color[1], u.color[2], u.color[3]);
-        else loader(1, GPU_UNSIGNED_BYTE, 4);
-        for (unsigned unit = 0; unit < 3; ++unit) {
-            if (unit < u.units) loader(2 + int(unit), GPU_FLOAT, 3);
-            else pad(0xE), fixed(2 + int(unit), 0, 0, 0, 1);
+        // The loaders depend only on which of those the mesh has, so consecutive meshes alike keep citro3d's.
+        const int layout = int(u.fixedColor) | int(u.units) << 1 | int(u.lit) << 3 | int(mesh.slots != 0) << 4;
+        if (sent.meshLayout != layout) {
+            C3D_AttrInfo* attributes = C3D_GetAttrInfo();
+            AttrInfo_Init(attributes);
+            u64 permutation = 0;
+            int components = 0;
+            const auto loader = [&](int reg, GPU_FORMATS format, int count) {
+                permutation |= u64(AttrInfo_AddLoader(attributes, reg, format, count)) << (4 * components++);
+            };
+            const auto pad = [&](unsigned code) { permutation |= u64(code) << (4 * components++); };
+            loader(0, GPU_FLOAT, 3);
+            if (u.fixedColor) pad(0xC), AttrInfo_AddFixed(attributes, 1);
+            else loader(1, GPU_UNSIGNED_BYTE, 4);
+            for (unsigned unit = 0; unit < 3; ++unit) {
+                if (unit < u.units) loader(2 + int(unit), GPU_FLOAT, 3);
+                else pad(0xE), AttrInfo_AddFixed(attributes, 2 + int(unit));
+            }
+            if (u.lit) loader(6, GPU_FLOAT, 3);
+            else pad(0xE), AttrInfo_AddFixed(attributes, 6);
+            if (mesh.slots) loader(5, GPU_FLOAT, 1);
+            else AttrInfo_AddFixed(attributes, 5);
+            sent.meshLayout = layout, sent.meshPermutation = permutation, sent.meshComponents = components;
         }
-        if (u.lit) loader(6, GPU_FLOAT, 3);
-        else pad(0xE), fixed(6, 0, 0, 0, 0);
-        if (mesh.slots) loader(5, GPU_FLOAT, 1);
-        else fixed(5, 0, 0, 0, 0);
+        if (u.fixedColor) sendFixed(1, u.color[0], u.color[1], u.color[2], u.color[3]);
+        for (unsigned unit = u.units; unit < 3; ++unit) sendFixed(2 + int(unit), 0, 0, 0, 1);
+        if (!u.lit) sendFixed(6, 0, 0, 0, 0);
+        if (!mesh.slots) sendFixed(5, 0, 0, 0, 0);
         C3D_BufInfo* buffers = C3D_GetBufInfo();
         BufInfo_Init(buffers);
-        BufInfo_Add(buffers, mesh.block, sizeof(GxMeshVertex), components, permutation);
+        BufInfo_Add(buffers, mesh.block, sizeof(GxMeshVertex), sent.meshComponents, sent.meshPermutation);
         // GX culls in the EFB, its y down; the PICA sees the same triangles turned for the screen.
-        C3D_CullFace(u.reject == 1 ? GPU_CULL_FRONT_CCW : u.reject == 2 ? GPU_CULL_BACK_CCW : GPU_CULL_NONE);
+        sendCull(u.reject == 1 ? GPU_CULL_FRONT_CCW : u.reject == 2 ? GPU_CULL_BACK_CCW : GPU_CULL_NONE);
         const auto* indices = reinterpret_cast<const std::uint16_t*>(static_cast<std::uint8_t*>(mesh.block) + mesh.vertexCount * sizeof(GxMeshVertex));
         for (std::size_t g = 0; g < mesh.groups.size(); ++g) {
             if (g) pipeline.meshSlotUniforms(mesh.groups[g], u), slotUniforms(u);
@@ -912,7 +981,6 @@ struct Renderer {
         u32 size, offset;
         GPUCMD_GetBuffer(&buffer, &size, &offset);
         if (size - offset < 0x40) stop("a mesh's draws filling the GPU's command list");  // GPUCMD_Add would have dropped some
-        C3D_CullFace(GPU_CULL_NONE);
         cpuBound = false;
         fresh[0] = fresh[1] = false;
         ++perf.meshDraws, perf.meshTriangles += mesh.indexCount / 3;
@@ -946,6 +1014,7 @@ struct Renderer {
         applyState();
         const bool wholeScreen = dumping && dumpBatch();
         ensureCpuBuffers();
+        sendCull(GPU_CULL_NONE);  // culled in EFB space already
         C3D_DrawElements(GPU_TRIANGLES, static_cast<int>(indexUsed - batchStart), C3D_UNSIGNED_SHORT, indices + batchStart);
         ++perf.draws, perf.triangles += (indexUsed - batchStart) / 3;
         batchStart = indexUsed;
@@ -956,13 +1025,10 @@ struct Renderer {
     void applyState() {
         const Step step(perf, 1);
         if (!applied || appliedVersion != stateVersion) {
-            pixel.apply();
-            C3D_DepthTest(pixel.depthTest, pixel.depthTest ? pixel.depthFunc : GPU_ALWAYS, static_cast<GPU_WRITEMASK>(writeMask));
-            C3D_CullFace(GPU_CULL_NONE);  // culled in EFB space already
-            if (scissorWhole) C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
-            else C3D_SetScissor(GPU_SCISSOR_NORMAL, scissor[0], scissor[1], scissor[2], scissor[3]);
+            sendPixel();
+            sendScissor();
             for (unsigned unit = 0; unit < state_->program.unitCount; ++unit)
-                C3D_TexBind(unit, &texture(state_->textures[state_->program.units[unit].texture]));
+                sendTexture(unit, texture(state_->textures[state_->program.units[unit].texture]));
             applied = true, appliedVersion = stateVersion;
         }
     }
@@ -1130,6 +1196,7 @@ struct Renderer {
         }
         forget(copy.address, textureCopySize(copy));
         stateValid = applied = false;  // its textures may be gone
+        forgetSent();
         if (copy.clear) C3D_RenderTargetClear(target, C3D_CLEAR_ALL, copyClearColor(gpu), copyClearDepth(gpu)), fresh[0] = fresh[1] = false;
     }
 
@@ -1217,6 +1284,7 @@ struct Renderer {
         C3D_CullFace(GPU_CULL_NONE);
         C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
         for (int unit = 0; unit < 3; ++unit) C3D_TexBind(unit, &scratch);
+        forgetSent();
         ensureCpuBuffers();
         C3D_DrawArrays(GPU_TRIANGLES, static_cast<int>(used), static_cast<int>(n));
         used += n;
@@ -1383,6 +1451,7 @@ struct Renderer {
         C3D_CullFace(GPU_CULL_NONE);
         C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
         C3D_TexBind(0, &m.texture);
+        forgetSent();
         ensureCpuBuffers();
         C3D_DrawArrays(GPU_TRIANGLES, static_cast<int>(used), static_cast<int>(n));
         used += n;
