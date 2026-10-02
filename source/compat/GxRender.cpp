@@ -118,8 +118,8 @@ struct Renderer {
     std::size_t used = 0, flushed = 0, indexUsed = 0, indexFlushed = 0, batchStart = 0;
     GxVertexPipeline pipeline;
     // The state the pending primitives share, built again only when the BP registers a draw reads change; consecutive
-    // primitives under one state are one draw (flushBatch).
-    GxDrawState state;
+    // primitives under one state are one draw (flushBatch). It lives in the state cache (readState).
+    GxDrawState* state_ = nullptr;
     PicaPixel pixel;
     int writeMask = 0, scissor[4] = {};
     bool stateValid = false, applied = false, scissorEmpty = false, scissorWhole = true;
@@ -377,7 +377,7 @@ struct Renderer {
         bool prepared;
         {
             const Step step(perf, 2);
-            prepared = pipeline.prepare(gpu, state, frame, kind, format);
+            prepared = pipeline.prepare(gpu, *state_, frame, kind, format);
         }
         if (!prepared) stop(pipeline.unsupported);
         if (scissorEmpty || !count) return;
@@ -392,7 +392,7 @@ struct Renderer {
     void ensureState(const GxCommandProcessor& gpu) {
         if (!stateValid || gpu.bpChanges != stateBp || !(frame == stateFrame)) {
             std::uint8_t color0[4];
-            if (stateValid && frame == stateFrame && state.color0InVertex && onlyColor0Changed(gpu) && gxColor0Bytes(gpu, color0))
+            if (stateValid && frame == stateFrame && state_->color0InVertex && onlyColor0Changed(gpu) && gxColor0Bytes(gpu, color0))
                 stateBp = gpu.bpChanges, ++perf.color0Rides;
             else
                 buildState(gpu);
@@ -402,15 +402,17 @@ struct Renderer {
     }
 
     // readGxDrawState through a cache keyed by every register it reads (the BP ones a draw reads, the TEV colours and
-    // konsts, the channels' XF words): J3D's materials come back every frame, so most builds are a lookup.
+    // konsts, the channels' XF words): J3D's materials come back every frame, so most builds are a lookup. The key is
+    // gathered into an array and hashed by 32-bit multiplies, and the draw uses the cached state where it lies.
+    static constexpr unsigned MaxStateWords = 160;
     struct CachedState {
-        std::vector<u32> words;
+        u32 words[MaxStateWords];
         GxDrawState state;
         PicaPixel pixel;  // preparePixel's, of the state's material and program
         bool pixelReady = false;
     };
-    std::unordered_map<std::uint64_t, CachedState> states;
-    std::vector<u32> stateWords;
+    std::unordered_map<u32, CachedState> states;
+    u32 stateWords[MaxStateWords];
     CachedState* stateEntry = nullptr;  // the entry the last read came from or went into
 
     void readState(const GxCommandProcessor& gpu) {
@@ -418,25 +420,28 @@ struct Renderer {
             std::vector<std::uint8_t> read;
             for (u32 a = 0; a < 0x100; ++a)
                 if (GxCommandProcessor::drawsRead(a)) read.push_back(std::uint8_t(a));
+            if (read.size() + 22 > MaxStateWords) stop("more registers in a draw state than its key holds");
             return read;
         }();
-        stateWords.clear();
-        for (std::uint8_t a : registers) stateWords.push_back(gpu.bp[a]);
-        for (int i = 0; i < 8; ++i) stateWords.push_back(gpu.tevColor[i]), stateWords.push_back(gpu.tevKonst[i]);
-        for (u32 x : {0x1009u, 0x100Au, 0x100Cu, 0x100Eu, 0x1010u, 0x103Fu}) stateWords.push_back(gpu.xf[x]);
-        std::uint64_t hash = 0xCBF29CE484222325ull;
-        for (u32 w : stateWords) hash = (hash ^ w) * 0x100000001B3ull;
-        if (auto found = states.find(hash); found != states.end() && found->second.words == stateWords) {
-            stateEntry = &found->second;
+        u32* word = stateWords;
+        for (std::uint8_t a : registers) *word++ = gpu.bp[a];
+        for (int i = 0; i < 8; ++i) *word++ = gpu.tevColor[i], *word++ = gpu.tevKonst[i];
+        for (u32 x : {0x1009u, 0x100Au, 0x100Cu, 0x100Eu, 0x1010u, 0x103Fu}) *word++ = gpu.xf[x];
+        const std::size_t bytes = std::size_t(word - stateWords) * sizeof(u32);
+        u32 hash = 0x811C9DC5u;
+        for (const u32* w = stateWords; w != word; ++w) hash = (hash ^ *w) * 0x01000193u;
+        if (auto found = states.find(hash); found != states.end() && !std::memcmp(found->second.words, stateWords, bytes)) {
             ++perf.stateHits;
-            return void(state = found->second.state);
+            stateEntry = &found->second, state_ = &found->second.state;
+            return;
         }
         ++perf.stateMisses;
-        readGxDrawState(gpu, state);
         if (states.size() >= 512) states.clear();
-        CachedState& entry = states[hash];
-        entry.words = stateWords, entry.state = state, entry.pixelReady = false;
-        stateEntry = &entry;
+        CachedState& entry = states[hash];  // a key that collides takes the entry over
+        std::memcpy(entry.words, stateWords, bytes);
+        readGxDrawState(gpu, entry.state);
+        entry.pixelReady = false;
+        stateEntry = &entry, state_ = &entry.state;
     }
 
     // dev.gx_timing: the clock around one of the per-call steps.
@@ -477,18 +482,18 @@ struct Renderer {
         std::memcpy(colorAtBuild, gpu.tevColor, sizeof colorAtBuild);
         std::memcpy(konstAtBuild, gpu.tevKonst, sizeof konstAtBuild);
         stateValid = true, stateBp = gpu.bpChanges, stateFrame = frame, ++stateVersion;
-        if (state.unsupported) stop(state.unsupported);
-        if (state.material.blend.type == 2 && state.material.blend.logic != 3) stop("a logic op other than copy");
-        if (state.depthTextureOp) depthFromTexture(state);
-        if (state.indirectDropped && !indirectNoted) {
+        if (state_->unsupported) stop(state_->unsupported);
+        if (state_->material.blend.type == 2 && state_->material.blend.logic != 3) stop("a logic op other than copy");
+        if (state_->depthTextureOp) depthFromTexture(*state_);
+        if (state_->indirectDropped && !indirectNoted) {
             std::fprintf(stderr, "The Wii GPU's drawing: indirect texture offsets are left out (the PICA has no dependent reads)\n");
             indirectNoted = true;
         }
         // GX's scissor in screen pixels, then on the target turned a quarter as the LCD is (citro3d's convention).
-        const int x0 = std::clamp(static_cast<int>(std::lround(state.scissor[0] * 400.0f / frame.width)), 0, 400);
-        const int x1 = std::clamp(static_cast<int>(std::lround(state.scissor[2] * 400.0f / frame.width)), 0, 400);
-        const int y0 = std::clamp(static_cast<int>(std::lround(state.scissor[1] * 240.0f / frame.height)), 0, 240);
-        const int y1 = std::clamp(static_cast<int>(std::lround(state.scissor[3] * 240.0f / frame.height)), 0, 240);
+        const int x0 = std::clamp(static_cast<int>(std::lround(state_->scissor[0] * 400.0f / frame.width)), 0, 400);
+        const int x1 = std::clamp(static_cast<int>(std::lround(state_->scissor[2] * 400.0f / frame.width)), 0, 400);
+        const int y0 = std::clamp(static_cast<int>(std::lround(state_->scissor[1] * 240.0f / frame.height)), 0, 240);
+        const int y1 = std::clamp(static_cast<int>(std::lround(state_->scissor[3] * 240.0f / frame.height)), 0, 240);
         scissorEmpty = x1 <= x0 || y1 <= y0;
         scissorWhole = x0 == 0 && y0 == 0 && x1 == 400 && y1 == 240;
         scissor[0] = 240 - y1, scissor[1] = 400 - x1, scissor[2] = 240 - y0, scissor[3] = 400 - x0;
@@ -498,12 +503,12 @@ struct Renderer {
             if (stateEntry->pixelReady) {
                 pixel = stateEntry->pixel;
             } else {
-                pixel = preparePixel(state.material, state.program);
+                pixel = preparePixel(state_->material, state_->program);
                 stateEntry->pixel = pixel, stateEntry->pixelReady = true;
             }
         }
-        if (state.dstAlphaEnable && state.alphaUpdate) keepDstAlpha();
-        writeMask = (state.colorUpdate ? GPU_WRITE_COLOR & ~GPU_WRITE_ALPHA : 0) | (state.alphaUpdate ? GPU_WRITE_ALPHA : 0) |
+        if (state_->dstAlphaEnable && state_->alphaUpdate) keepDstAlpha();
+        writeMask = (state_->colorUpdate ? GPU_WRITE_COLOR & ~GPU_WRITE_ALPHA : 0) | (state_->alphaUpdate ? GPU_WRITE_ALPHA : 0) |
                     (pixel.depthWrite ? GPU_WRITE_DEPTH : 0);
     }
 
@@ -516,9 +521,9 @@ struct Renderer {
             dstAlphaNoted = true;
             return;
         }
-        const unsigned last = std::min(state.program.stageCount, CombinerProgram::MaxStages - 1);
+        const unsigned last = std::min(state_->program.stageCount, CombinerProgram::MaxStages - 1);
         C3D_TexEnv& env = pixel.env[last];
-        if (last == state.program.stageCount) {
+        if (last == state_->program.stageCount) {
             C3D_TexEnvInit(&env);
             C3D_TexEnvSrc(&env, C3D_RGB, GPU_PREVIOUS);
         } else if ((env.srcRgb & 0xF) == GPU_CONSTANT || (env.srcRgb >> 4 & 0xF) == GPU_CONSTANT || (env.srcRgb >> 8 & 0xF) == GPU_CONSTANT) {
@@ -528,7 +533,7 @@ struct Renderer {
         C3D_TexEnvSrc(&env, C3D_Alpha, GPU_CONSTANT);
         C3D_TexEnvOpAlpha(&env, GPU_TEVOP_A_SRC_ALPHA);
         C3D_TexEnvFunc(&env, C3D_Alpha, GPU_REPLACE);
-        env.color = (env.color & 0x00FFFFFF) | u32(state.dstAlpha) << 24;
+        env.color = (env.color & 0x00FFFFFF) | u32(state_->dstAlpha) << 24;
         pixel.alphaEquation = GPU_BLEND_ADD, pixel.alphaSource = GPU_ONE, pixel.alphaDestination = GPU_ZERO;
     }
 
@@ -542,7 +547,7 @@ struct Renderer {
             const float ex = (-p[1] / p[3] + 1) * frame.width / 2, ey = (1 - p[0] / p[3]) * frame.height / 2;
             lo[0] = std::min(lo[0], ex), lo[1] = std::min(lo[1], ey), hi[0] = std::max(hi[0], ex), hi[1] = std::max(hi[1], ey);
         }
-        const ModelMaterial& m = state.material;
+        const ModelMaterial& m = state_->material;
         std::string stages;
         for (int s = 0; s < m.tevStageCount; ++s) {
             const TevStage& t = m.stages[s];
@@ -552,8 +557,8 @@ struct Renderer {
             stages += text;
         }
         std::string maps;
-        for (unsigned u = 0; u < state.program.unitCount; ++u) {
-            const GxTextureMap& t = state.textures[state.program.units[u].texture];
+        for (unsigned u = 0; u < state_->program.unitCount; ++u) {
+            const GxTextureMap& t = state_->textures[state_->program.units[u].texture];
             char text[64];
             std::snprintf(text, sizeof text, " %08lx:%ux%u:f%u", static_cast<unsigned long>(t.address), t.width, t.height, t.format);
             maps += text;
@@ -582,15 +587,15 @@ struct Renderer {
                      static_cast<unsigned long>(gpuXf[4]));
         std::fprintf(stderr, "gx dump: draw %u: %u tris, box (%.0f,%.0f)-(%.0f,%.0f); blend %u %u/%u, colour %d alpha %d, dst alpha %d:%u, z %d/%u/%d, "
                      "alpha test %u%s%u, C0 %s; tev%s; maps%s%s\n", dumpIndex++, unsigned((indexUsed - batchStart) / 3), lo[0], lo[1], hi[0], hi[1],
-                     m.blend.type, m.blend.source, m.blend.destination, state.colorUpdate, state.alphaUpdate, state.dstAlphaEnable, state.dstAlpha,
+                     m.blend.type, m.blend.source, m.blend.destination, state_->colorUpdate, state_->alphaUpdate, state_->dstAlphaEnable, state_->dstAlpha,
                      m.depth.enable, m.depth.function, m.depth.update, m.alphaTest.compare0, m.alphaTest.op ? "|" : "&", m.alphaTest.compare1,
-                     state.color0InVertex ? "rides" : "const", stages.c_str(), maps.c_str(), state.program.exact ? "" : " (approximated)");
+                     state_->color0InVertex ? "rides" : "const", stages.c_str(), maps.c_str(), state_->program.exact ? "" : " (approximated)");
         return lo[0] <= 1 && lo[1] <= 1 && hi[0] >= frame.width - 1 && hi[1] >= frame.height - 1;
     }
 
     // A mesh draw for the dump: its size and the state that draws it.
     void dumpMesh(const CachedMesh& mesh, const GxMeshUniforms& u) {
-        const ModelMaterial& m = state.material;
+        const ModelMaterial& m = state_->material;
         std::string stages;
         for (int s = 0; s < m.tevStageCount; ++s) {
             const TevStage& t = m.stages[s];
@@ -601,8 +606,8 @@ struct Renderer {
         }
         std::fprintf(stderr, "gx dump: draw %u (mesh): %u tris in %zu groups, lit %d (%u entries, rgb %d alpha %d), cull %u; blend %u %u/%u, colour %d "
                      "alpha %d, dst alpha %d:%u, z %d/%u/%d, alpha test %u%s%u; tev%s\n", dumpIndex++, mesh.indexCount / 3, mesh.groups.size(), u.lit,
-                     u.lights, u.rgbLit, u.alphaLit, u.reject, m.blend.type, m.blend.source, m.blend.destination, state.colorUpdate, state.alphaUpdate,
-                     state.dstAlphaEnable, state.dstAlpha, m.depth.enable, m.depth.function, m.depth.update, m.alphaTest.compare0,
+                     u.lights, u.rgbLit, u.alphaLit, u.reject, m.blend.type, m.blend.source, m.blend.destination, state_->colorUpdate, state_->alphaUpdate,
+                     state_->dstAlphaEnable, state_->dstAlpha, m.depth.enable, m.depth.function, m.depth.update, m.alphaTest.compare0,
                      m.alphaTest.op ? "|" : "&", m.alphaTest.compare1, stages.c_str());
     }
 
@@ -670,7 +675,7 @@ struct Renderer {
         bool prepared;
         {
             const Step step(perf, 2);
-            prepared = pipeline.prepare(gpu, state, frame, 0x90, 0);
+            prepared = pipeline.prepare(gpu, *state_, frame, 0x90, 0);
         }
         if (!prepared) return ++perf.refused[GxVertexPipeline::MeshUnsupported], GxVertexPipeline::MeshUnsupported;
         if (scissorEmpty) return GxVertexPipeline::MeshEmpty;
@@ -768,7 +773,7 @@ struct Renderer {
                 continue;
             }
             const std::uint16_t count = static_cast<std::uint16_t>(list[at + 1] << 8 | list[at + 2]);
-            if (!pipeline.prepare(gpu, state, frame, op & 0xF8, op & 7)) return void(std::fprintf(stderr, "gx check: the CPU path refuses a mesh's primitive\n"));
+            if (!pipeline.prepare(gpu, *state_, frame, op & 0xF8, op & 7)) return void(std::fprintf(stderr, "gx check: the CPU path refuses a mesh's primitive\n"));
             drawn.resize(count), indices.resize(GxVertexPipeline::maxIndices(count));
             pipeline.run(list + at + 3, count, drawn.data(), 0, indices.data());
             const u32 first = u32(cpu.size());
@@ -799,7 +804,7 @@ struct Renderer {
             return void(std::fprintf(stderr, "gx check: mesh at 0x%08lx (%zu groups) has triangles other than its list's\n", static_cast<unsigned long>(address),
                                      mesh.groups.size()));
         }
-        pipeline.prepare(gpu, state, frame, 0x90, 0);
+        pipeline.prepare(gpu, *state_, frame, 0x90, 0);
         const auto off = [](float got, float want) { return std::fabs(got - want) > 1e-3f * std::max(1.0f, std::fabs(want)); };
         for (std::size_t j = 0; j < mesh.vertices.size(); ++j) {
             if (mesh.origin[j] >= cpu.size()) return void(std::fprintf(stderr, "gx check: a mesh vertex from past its list's\n"));
@@ -956,8 +961,8 @@ struct Renderer {
             C3D_CullFace(GPU_CULL_NONE);  // culled in EFB space already
             if (scissorWhole) C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
             else C3D_SetScissor(GPU_SCISSOR_NORMAL, scissor[0], scissor[1], scissor[2], scissor[3]);
-            for (unsigned unit = 0; unit < state.program.unitCount; ++unit)
-                C3D_TexBind(unit, &texture(state.textures[state.program.units[unit].texture]));
+            for (unsigned unit = 0; unit < state_->program.unitCount; ++unit)
+                C3D_TexBind(unit, &texture(state_->textures[state_->program.units[unit].texture]));
             applied = true, appliedVersion = stateVersion;
         }
     }
