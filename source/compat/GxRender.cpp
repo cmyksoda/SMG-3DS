@@ -180,6 +180,8 @@ struct Renderer {
         u32 meshInvalidated = 0, meshOverflows = 0, meshBudgetDrops = 0, meshMismatches = 0, flushesQueued = 0;
         u64 timed[6] = {};  // dev.gx_timing: CPU-path primitives (immediate, in lists), display lists (mesh draws), texture copies, movie, frame ends
         u64 cpuCopyTicks = 0;  // of the texture copies, those read back and encoded on the CPU
+        u64 stepTicks[6] = {};  // dev.gx_timing: building the draw state, applying it, preparing the vertex pipeline; of the
+        u32 steps[6] = {};      // first, reading GX's state, the per-register stats, the pixel state
         u32 cpuCopies = 0, gpuCopies = 0;
         u32 meshesChecked = 0, meshesDiffering = 0;  // dev.gx_check
         u32 listVertices = 0;
@@ -364,7 +366,12 @@ struct Renderer {
     void draw(const GxCommandProcessor& gpu, std::uint8_t kind, std::uint8_t format, std::uint16_t count, const std::uint8_t* data) {
         ++perf.primitives, perf.vertices += count;
         ensureState(gpu);
-        if (!pipeline.prepare(gpu, state, frame, kind, format)) stop(pipeline.unsupported);
+        bool prepared;
+        {
+            const Step step(perf, 2);
+            prepared = pipeline.prepare(gpu, state, frame, kind, format);
+        }
+        if (!prepared) stop(pipeline.unsupported);
         if (scissorEmpty || !count) return;
         if (!inFrame) begin();
         roomFor(count);
@@ -385,12 +392,63 @@ struct Renderer {
         }
     }
 
+    // readGxDrawState through a cache keyed by every register it reads (the BP ones a draw reads, the TEV colours and
+    // konsts, the channels' XF words): J3D's materials come back every frame, so most builds are a lookup.
+    struct CachedState {
+        std::vector<u32> words;
+        GxDrawState state;
+    };
+    std::unordered_map<std::uint64_t, CachedState> states;
+    std::vector<u32> stateWords;
+
+    void readState(const GxCommandProcessor& gpu) {
+        static const std::vector<std::uint8_t> registers = [] {
+            std::vector<std::uint8_t> read;
+            for (u32 a = 0; a < 0x100; ++a)
+                if (GxCommandProcessor::drawsRead(a)) read.push_back(std::uint8_t(a));
+            return read;
+        }();
+        stateWords.clear();
+        for (std::uint8_t a : registers) stateWords.push_back(gpu.bp[a]);
+        for (int i = 0; i < 8; ++i) stateWords.push_back(gpu.tevColor[i]), stateWords.push_back(gpu.tevKonst[i]);
+        for (u32 x : {0x1009u, 0x100Au, 0x100Cu, 0x100Eu, 0x1010u, 0x103Fu}) stateWords.push_back(gpu.xf[x]);
+        std::uint64_t hash = 0xCBF29CE484222325ull;
+        for (u32 w : stateWords) hash = (hash ^ w) * 0x100000001B3ull;
+        if (auto found = states.find(hash); found != states.end() && found->second.words == stateWords) return void(state = found->second.state);
+        readGxDrawState(gpu, state);
+        if (states.size() >= 512) states.clear();
+        CachedState& entry = states[hash];
+        entry.words = stateWords, entry.state = state;
+    }
+
+    // dev.gx_timing: the clock around one of the per-call steps.
+    struct Step {
+        Step(Perf& perf, int which) : perf_(perf), which_(which), start_(timing() ? svcGetSystemTick() : 0) {}
+        ~Step() {
+            if (start_) perf_.stepTicks[which_] += svcGetSystemTick() - start_, ++perf_.steps[which_];
+        }
+        static bool timing() {
+            static const bool on = smgDevGxTiming();
+            return on;
+        }
+        Perf& perf_;
+        int which_;
+        u64 start_;
+    };
+
     void buildState(const GxCommandProcessor& gpu) {
         flushBatch();
-        readGxDrawState(gpu, state);
+        const Step step(perf, 0);
+        {
+            const Step read(perf, 3);
+            readState(gpu);
+        }
         pipeline.stateChanged();
-        for (u32 a = 0; a < 0x100; ++a)
-            if (gpu.bp[a] != bpAtBuild[a] && GxCommandProcessor::drawsRead(a)) ++perf.changed[a];
+        if (Step::timing()) {
+            const Step stats(perf, 4);
+            for (u32 a = 0; a < 0x100; ++a)
+                if (gpu.bp[a] != bpAtBuild[a] && GxCommandProcessor::drawsRead(a)) ++perf.changed[a];
+        }
         std::memcpy(bpAtBuild, gpu.bp, sizeof bpAtBuild);
         std::memcpy(colorAtBuild, gpu.tevColor, sizeof colorAtBuild);
         std::memcpy(konstAtBuild, gpu.tevKonst, sizeof konstAtBuild);
@@ -411,7 +469,10 @@ struct Renderer {
         scissorWhole = x0 == 0 && y0 == 0 && x1 == 400 && y1 == 240;
         scissor[0] = 240 - y1, scissor[1] = 400 - x1, scissor[2] = 240 - y0, scissor[3] = 400 - x0;
         gpuXf[0] = gpu.xf[0x1009], gpuXf[1] = gpu.xf[0x100E], gpuXf[2] = gpu.xf[0x1010], gpuXf[3] = gpu.xf[0x100C], gpuXf[4] = gpu.xf[0x100A];
-        pixel = preparePixel(state.material, state.program);
+        {
+            const Step prepare(perf, 5);
+            pixel = preparePixel(state.material, state.program);
+        }
         if (state.dstAlphaEnable && state.alphaUpdate) keepDstAlpha();
         writeMask = (state.colorUpdate ? GPU_WRITE_COLOR & ~GPU_WRITE_ALPHA : 0) | (state.alphaUpdate ? GPU_WRITE_ALPHA : 0) |
                     (pixel.depthWrite ? GPU_WRITE_DEPTH : 0);
@@ -577,7 +638,12 @@ struct Renderer {
         if (list[0] < 0x80 || list[0] >= 0xA8) return ++perf.refusedOpcode[list[0]], ++perf.refused[GxVertexPipeline::MeshCommand], GxVertexPipeline::MeshCommand;
         applyChangedMemory();
         ensureState(gpu);
-        if (!pipeline.prepare(gpu, state, frame, 0x90, 0)) return ++perf.refused[GxVertexPipeline::MeshUnsupported], GxVertexPipeline::MeshUnsupported;
+        bool prepared;
+        {
+            const Step step(perf, 2);
+            prepared = pipeline.prepare(gpu, state, frame, 0x90, 0);
+        }
+        if (!prepared) return ++perf.refused[GxVertexPipeline::MeshUnsupported], GxVertexPipeline::MeshUnsupported;
         if (scissorEmpty) return GxVertexPipeline::MeshEmpty;
         if (const unsigned why = pipeline.meshEligible()) return ++perf.refused[why], why;
         // The key: the list, its first and last words (another list at a freed address differs), where the colour comes
@@ -838,6 +904,7 @@ struct Renderer {
     }
 
     void applyState() {
+        const Step step(perf, 1);
         if (!applied || appliedVersion != stateVersion) {
             pixel.apply();
             C3D_DepthTest(pixel.depthTest, pixel.depthTest ? pixel.depthFunc : GPU_ALWAYS, static_cast<GPU_WRITEMASK>(writeMask));
@@ -925,6 +992,10 @@ struct Renderer {
                          "lists %.1f ms, texture copies %.1f ms (%.1f CPU taking %.1f ms, %.1f GPU), frame end %.1f ms, movie %.1f ms\n", perf.timed[0] * ms,
                          perf.timed[4] * ms, perf.listVertices / n, perf.timed[1] * ms, perf.timed[2] * ms, perf.cpuCopies / n, perf.cpuCopyTicks * ms, perf.gpuCopies / n,
                          perf.timed[5] * ms, perf.timed[3] * ms);
+            std::fprintf(stderr, "gx perf: of which per frame: building states %.1f ms (%.0f), applying them %.1f ms (%.0f), preparing the vertex "
+                         "pipeline %.1f ms (%.0f); building: reading GX %.1f ms, stats %.1f ms, pixel state %.1f ms\n", perf.stepTicks[0] * ms,
+                         perf.steps[0] / n, perf.stepTicks[1] * ms, perf.steps[1] / n, perf.stepTicks[2] * ms, perf.steps[2] / n, perf.stepTicks[3] * ms,
+                         perf.stepTicks[4] * ms, perf.stepTicks[5] * ms);
         }
         std::string listed;
         for (unsigned why = 0; why < GxVertexPipeline::MeshRefusals; ++why)
