@@ -1732,8 +1732,14 @@ adapt("src/nw4r/lyt/lyt_texMap.cpp", "nw4r/lyt/lyt_texMap.cpp", [
 ])
 # The Wii told a main-memory address from an ARAM offset by its value (0x80000000 up), and every 3DS address is
 # below that: main memory is the source exactly when copying into ARAM (direction 0; main.dol's own code agrees).
+# captureDolTexture's image is a texture the game only draws with (MarioShadow's), so its copy stays on the GPU as
+# JUTTexture::capture's does.
 adapt("src/Game/System/Overwrite.cpp", "Game/System/Overwrite.cpp", [
+    ('#include "Game/System/ShapePacketUserData.hpp"\n', '#include "Game/System/ShapePacketUserData.hpp"\n#include <smg/GxRender.hpp>\n', 1),
     ("    if (pCommand->mSrc < 0x80000000) {", "    if (pCommand->mTransferDirection != 0) {", 1),
+    ("    GXSetTexCopyDst(width, height, format, mipmap);\n    GXCopyTex(pBuffer, GX_FALSE);",
+     "    GXSetTexCopyDst(width, height, format, mipmap);\n    smg::gxRenderCopiesStayOnGpu(true);\n    GXCopyTex(pBuffer, GX_FALSE);\n"
+     "    smg::gxRenderCopiesStayOnGpu(false);", 1),
 ])
 # FIFO pointers share this queue with draw-sync tokens (below 0x10000) and the stop message (0x10000). The Wii's
 # pointers sat above 0x80000000; the 3DS's sit above 0x10000.
