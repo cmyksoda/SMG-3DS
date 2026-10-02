@@ -304,13 +304,18 @@ const CombinerProgram& cachedTev(const ModelMaterial& m) {
     std::memcpy(key.swapTables, m.swapTables, sizeof key.swapTables);
     std::copy(m.textures, m.textures + 8, key.textures);
     const std::size_t length = offsetof(TevKey, stages) + key.count * sizeof(TevStage);
-    std::uint64_t hash = 0xCBF29CE484222325ull;
-    for (std::size_t i = 0; i < length; ++i) hash = (hash ^ reinterpret_cast<const std::uint8_t*>(&key)[i]) * 0x100000001B3ull;
+    // By words (the zeroed key's tail rounds up harmlessly), with a 32-bit multiply: the ARM11 has no 64-bit one.
+    std::uint32_t hash = 0x811C9DC5u;
+    for (std::size_t i = 0; i < length; i += 4) {
+        std::uint32_t word;
+        std::memcpy(&word, reinterpret_cast<const std::uint8_t*>(&key) + i, 4);
+        hash = (hash ^ word) * 0x01000193u;
+    }
     struct Entry {
         TevKey key;
         CombinerProgram program;
     };
-    thread_local std::unordered_map<std::uint64_t, Entry> cache;
+    thread_local std::unordered_map<std::uint32_t, Entry> cache;
     if (auto found = cache.find(hash); found != cache.end() && !std::memcmp(&found->second.key, &key, length)) return found->second.program;
     if (cache.size() > 4096) cache.clear();
     ++tevCompiles;
