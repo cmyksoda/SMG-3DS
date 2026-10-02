@@ -93,9 +93,24 @@ std::uint64_t pack(bool differential, bool flip, const int c1[3], const int c2[3
     return w | std::uint64_t(msb) << 16 | lsb;
 }
 
+// How far the block's pixels sit from their own half's average, split one way or the other: the split to fit.
+long splitError(const Rgb block[16], bool flip) {
+    const Rgb a = average(block, flip, true), b = average(block, flip, false);
+    long error = 0;
+    for (unsigned x = 0; x < 4; ++x) for (unsigned y = 0; y < 4; ++y) {
+        const Rgb& p = block[x * 4 + y];
+        const Rgb& m = inFirst(x, y, flip) ? a : b;
+        error += long(p.r - m.r) * (p.r - m.r) + long(p.g - m.g) * (p.g - m.g) + long(p.b - m.b) * (p.b - m.b);
+    }
+    return error;
+}
+
+// One split, chosen by its halves' fit, and one mode: differential when the halves are close enough, else individual.
+// The exhaustive search over both took four times as long, which first frames of large scenes felt.
 std::uint64_t encodeBlock(const Rgb block[16]) {
     Choice best;
-    for (bool flip : {false, true}) {
+    const bool chosen = splitError(block, true) < splitError(block, false);
+    for (bool flip : {chosen}) {
         const Rgb a = average(block, flip, true), b = average(block, flip, false);
         // Differential mode keeps five bits per channel when the halves are close enough.
         const int d1[3]{a.r * 31 / 255, a.g * 31 / 255, a.b * 31 / 255};
@@ -114,6 +129,7 @@ std::uint64_t encodeBlock(const Rgb block[16]) {
             const long error = fitHalf(block, flip, true, {expand(c1[0]), expand(c1[1]), expand(c1[2])}, t1, x1) +
                                fitHalf(block, flip, false, {expand(c2[0]), expand(c2[1]), expand(c2[2])}, t2, x2);
             if (error < best.error) best = {error, pack(differential, flip, c1, c2, t1, t2, x1, x2)};
+            break;
         }
     }
     return best.word;
