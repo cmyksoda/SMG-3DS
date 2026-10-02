@@ -253,11 +253,66 @@ const CombinerProgram& cachedTev(const ModelMaterial& m) {
 
 std::uint32_t gxTevCompiles() { return tevCompiles; }
 
+bool gxColor0Bytes(const GxCommandProcessor& gpu, std::uint8_t out[4]) {
+    // BP 0xE2/0xE3 as the material keeps them (C0 is tevColors[0]): eleven-bit two's complement components.
+    const std::uint32_t ra = gpu.tevColor[2], bg = gpu.tevColor[3];
+    const std::int32_t c[4] = {static_cast<std::int32_t>(TEV_REGISTERL_GET_R(ra) << 21) >> 21, static_cast<std::int32_t>(TEV_REGISTERH_GET_G(bg) << 21) >> 21,
+                               static_cast<std::int32_t>(TEV_REGISTERH_GET_B(bg) << 21) >> 21, static_cast<std::int32_t>(TEV_REGISTERL_GET_A(ra) << 21) >> 21};
+    for (int i = 0; i < 4; ++i) {
+        if (c[i] < 0 || c[i] > 255) return false;
+        out[i] = static_cast<std::uint8_t>(c[i]);
+    }
+    return true;
+}
+
+namespace {
+// C0 can ride in the vertex colour when the program reads it and never writes it, never reads the rasterized colour
+// (whose place it takes), C0 is a byte colour, and a swap table leaves the rasterized colour as it is.
+bool color0CanRide(const GxCommandProcessor& gpu, const ModelMaterial& m, std::uint8_t& identitySwap) {
+    bool reads = false;
+    for (int i = 0; i < m.tevStageCount; ++i) {
+        const TevStage& s = m.stages[i];
+        for (int k = 0; k < 4; ++k) {
+            if (s.colorIn[k] == 10 || s.colorIn[k] == 11 || s.alphaIn[k] == 5) return false;  // RASC, RASA
+            reads |= s.colorIn[k] == 2 || s.colorIn[k] == 3 || s.alphaIn[k] == 1;            // C0, A0
+        }
+        if (s.colorReg == 1 || s.alphaReg == 1) return false;  // GX_TEVREG0
+    }
+    std::uint8_t bytes[4];
+    if (!reads || !gxColor0Bytes(gpu, bytes)) return false;
+    for (std::uint8_t t = 0; t < 4; ++t) {
+        const std::uint8_t* table = m.swapTables[t];
+        if (table[0] == 0 && table[1] == 1 && table[2] == 2 && table[3] == 3) return identitySwap = t, true;
+    }
+    return false;
+}
+} // namespace
+
 void readGxDrawState(const GxCommandProcessor& gpu, GxDrawState& out) {
     out = GxDrawState{};
     readTev(gpu, out);
     readPixel(gpu, out);
-    out.program = cachedTev(out.material);
+    std::uint8_t identitySwap = 0;
+    if (!color0CanRide(gpu, out.material, identitySwap)) {
+        out.program = cachedTev(out.material);
+        return;
+    }
+    // Compiled with C0 read as the rasterized colour and its value left out, so every C0 shares one program.
+    ModelMaterial riding = out.material;
+    riding.tevColors[0] = {0, 0, 0, 0};
+    for (int i = 0; i < riding.tevStageCount; ++i) {
+        TevStage& s = riding.stages[i];
+        bool used = false;
+        for (int k = 0; k < 4; ++k) {
+            if (s.colorIn[k] == 2 || s.colorIn[k] == 3) s.colorIn[k] = static_cast<std::uint8_t>(s.colorIn[k] + 8), used = true;
+            if (s.alphaIn[k] == 1) s.alphaIn[k] = 5, used = true;
+        }
+        if (used) s.channel = 4, s.rasSwap = identitySwap;  // GX_COLOR0A0
+    }
+    const CombinerProgram program = cachedTev(riding);  // a copy: the next lookup may empty the cache
+    if (!program.exact && cachedTev(out.material).exact) return void(out.program = cachedTev(out.material));
+    out.program = program;
+    out.color0InVertex = true;
 }
 
 float GxVertexPipeline::matrix(std::uint32_t row, int column) const { return asFloat(gpu_->xf[(row * 4 + column) & 0xFFF]); }
@@ -273,6 +328,11 @@ bool GxVertexPipeline::prepare(const GxCommandProcessor& gpu, const GxDrawState&
     perVertexMatrix_ = gpu.cp[0x50] & 1;
     defaultMatrix_ = gpu.xf[XfMatIndexA] & 0x3F;
     channel_ = (gpu.xf[XfNumChans] & 3) != 0;
+    color0InVertex_ = state.color0InVertex;
+    if (color0InVertex_ && !gxColor0Bytes(gpu, color0_)) {
+        unsupported = "C0 outside a byte while it rides in the vertex colour";
+        return false;
+    }
     lit_ = channel_ && (XF_COLOR0CNTRL_F_GET_LIGHTFUNC(gpu.xf[XfColor0Ctrl]) || XF_COLOR0CNTRL_F_GET_LIGHTFUNC(gpu.xf[XfAlpha0Ctrl]));
     fixedDepth_ = state.fixedDepth, depth01_ = state.depth01;
     units_ = static_cast<std::uint8_t>(state.program.unitCount);
@@ -420,7 +480,9 @@ std::size_t GxVertexPipeline::run(const std::uint8_t* data, std::uint16_t count,
         GxDrawVertex& d = vertices[i];
         for (int r = 0; r < 4; ++r) d.position[r] = m[r * 4] * v.position[0] + m[r * 4 + 1] * v.position[1] + m[r * 4 + 2] * v.position[2] + m[r * 4 + 3];
         if (fixedDepth_) d.position[2] = (depth01_ - 1) * d.position[3];
-        if (!channel_) {
+        if (color0InVertex_) {
+            std::memcpy(d.color, color0_, 4);
+        } else if (!channel_) {
             std::memset(d.color, 0, 4);
         } else {
             float view[3] = {0, 0, 0}, normal[3] = {0, 0, 0};

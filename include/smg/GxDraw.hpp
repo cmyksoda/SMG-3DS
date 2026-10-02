@@ -48,9 +48,14 @@ struct GxDrawState {
     int scissor[4] = {};  // left, top, right, bottom (exclusive), EFB pixels
     // A stage's indirect offset left out, its regular coordinates kept: the PICA has no dependent texture reads.
     bool indirectDropped = false;
+    // The program reads TEV register C0 as the vertex colour, which then holds C0: a primitive whose C0 alone differs
+    // (a particle's fading colour) joins the same draw instead of starting another.
+    bool color0InVertex = false;
     const char* unsupported = nullptr;
 };
 void readGxDrawState(const GxCommandProcessor& gpu, GxDrawState& out);
+// C0 as four bytes, false when a component is outside 0-255 (then it can't be a vertex colour).
+bool gxColor0Bytes(const GxCommandProcessor& gpu, std::uint8_t out[4]);
 // TEV programs compiled so far (readGxDrawState keeps each by what compileTev reads): how often its cache missed.
 std::uint32_t gxTevCompiles();
 
@@ -93,7 +98,8 @@ private:
     const GxDrawState* state_ = nullptr;
     const GxVertexLayout* layout_ = nullptr;
     std::uint8_t kind_ = 0, reject_ = 0, units_ = 0;
-    bool perVertexMatrix_ = false, channel_ = false, lit_ = false, fixedDepth_ = false;
+    bool perVertexMatrix_ = false, channel_ = false, lit_ = false, fixedDepth_ = false, color0InVertex_ = false;
+    std::uint8_t color0_[4] = {};
     std::uint32_t defaultMatrix_ = 0;
     float depth01_ = 0;
     TexGen texgens_[CombinerProgram::MaxUnits];

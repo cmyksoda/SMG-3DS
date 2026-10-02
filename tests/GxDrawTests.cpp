@@ -329,6 +329,39 @@ void dualTexgen() {
     pipeline.run(drawn[0].data.data(), 4, v, 0, indices);
     check(near(v[2].texcoord[0][0], 1.1f) && near(v[2].texcoord[0][1], 1.2f), "a texture matrix loaded between primitives takes effect");
 }
+
+// A program that reads C0 but not the rasterized colour takes C0 from the vertex colour, so primitives whose C0 alone
+// differs share one program; one that reads the rasterized colour keeps C0 a constant.
+void color0Rides() {
+    auto owned = std::make_unique<smg::GxCommandProcessor>(host());
+    smg::GxCommandProcessor& gpu = *owned;
+    Stream s;
+    clearState(s);                                 // colour (0, 0, 0, C0), alpha (0, 0, 0, A0), no channels
+    s.bp(0xF6000004), s.bp(0xF700000E);            // swap table 0: R, G, B, A
+    quad(s, {0, 1, 3, 2});
+    drawn.clear();
+    gpu.put(s.bytes.data(), static_cast<std::uint32_t>(s.bytes.size()));
+    smg::GxDrawState state;
+    smg::readGxDrawState(gpu, state);
+    check(state.color0InVertex && state.program.stages[0].colorSource[0] == smg::CombineSource::Primary, "C0 is read from the vertex colour");
+    smg::GxVertexPipeline pipeline;
+    smg::GxDrawVertex v[4];
+    std::uint16_t indices[12];
+    pipeline.prepare(gpu, state, {}, drawn[0].kind, drawn[0].format);
+    pipeline.run(drawn[0].data.data(), 4, v, 0, indices);
+    check(v[0].color[0] == 0x40 && v[0].color[1] == 0x80 && v[0].color[2] == 0xC0 && v[0].color[3] == 0xFF, "every vertex carries C0");
+    Stream fade;
+    fade.bp(0xE2020010);  // C0's red 0x10, alpha 0x20
+    gpu.put(fade.bytes.data(), static_cast<std::uint32_t>(fade.bytes.size()));
+    pipeline.prepare(gpu, state, {}, drawn[0].kind, drawn[0].format);
+    pipeline.run(drawn[0].data.data(), 4, v, 0, indices);
+    check(v[3].color[0] == 0x10 && v[3].color[3] == 0x20, "a new C0 reaches the next primitive under the same state");
+    Stream raster;
+    raster.bp(0xC008FFFA);  // colour (0, 0, 0, RASC)
+    gpu.put(raster.bytes.data(), static_cast<std::uint32_t>(raster.bytes.size()));
+    smg::readGxDrawState(gpu, state);
+    check(!state.color0InVertex, "a program that reads the rasterized colour keeps C0 a constant");
+}
 } // namespace
 
 // nw4r's layout material: black (C0) to white (C1) by the texture, which is the texture itself. The material keeps
@@ -371,6 +404,7 @@ int runGxDrawTests() {
     channels();
     pipelineAcrossPrimitives();
     dualTexgen();
+    color0Rides();
     std::printf("%u GX draw checks passed\n", checks);
     return 0;
 }

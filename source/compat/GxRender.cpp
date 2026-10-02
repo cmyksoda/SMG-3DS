@@ -22,6 +22,7 @@
 #include <map>
 #include <string>
 #include <tuple>
+#include <vector>
 
 extern "C" void smgHeartbeat();  // source/compat/GameScene.cpp
 
@@ -117,11 +118,27 @@ struct Renderer {
     struct Perf {
         u64 since = 0, phaseTicks[4] = {}, syncTicks = 0;
         u32 phaseFrames = 0;
-        u32 frames = 0, primitives = 0, vertices = 0, triangles = 0, draws = 0, sameState = 0;
+        u32 frames = 0, primitives = 0, vertices = 0, triangles = 0, draws = 0, sameState = 0, color0Rides = 0;
         u32 changed[0x100] = {};  // per BP register: state rebuilds it took part in
         u32 compilesBefore = gxTevCompiles();
     } perf;
-    u32 bpSeen[0x100] = {};
+    // The BP registers a draw reads and the TEV colour and konst words, as of the last state built.
+    u32 bpAtBuild[0x100] = {}, colorAtBuild[8] = {}, konstAtBuild[8] = {};
+
+    // Whether C0 is all that changed since the state was built (BP 0xE0-0xE7 hold either kind of colour: by word).
+    bool onlyColor0Changed(const GxCommandProcessor& gpu) const {
+        static const std::vector<std::uint8_t> addresses = [] {
+            std::vector<std::uint8_t> list;
+            for (u32 a = 0; a < 0x100; ++a)
+                if (GxCommandProcessor::drawsRead(a) && (a < 0xE0 || a > 0xE7)) list.push_back(static_cast<std::uint8_t>(a));
+            return list;
+        }();
+        for (std::uint8_t a : addresses)
+            if (gpu.bp[a] != bpAtBuild[a]) return false;
+        for (int i = 0; i < 8; ++i)
+            if (gpu.tevKonst[i] != konstAtBuild[i] || (i != 2 && i != 3 && gpu.tevColor[i] != colorAtBuild[i])) return false;
+        return true;
+    }
 
     void init() {
         C3D_Init(CommandBytes);
@@ -240,8 +257,15 @@ struct Renderer {
 
     void draw(const GxCommandProcessor& gpu, std::uint8_t kind, std::uint8_t format, std::uint16_t count, const std::uint8_t* data) {
         ++perf.primitives, perf.vertices += count;
-        if (!stateValid || gpu.bpChanges != stateBp || !(frame == stateFrame)) buildState(gpu);
-        else ++perf.sameState;
+        if (!stateValid || gpu.bpChanges != stateBp || !(frame == stateFrame)) {
+            std::uint8_t color0[4];
+            if (stateValid && frame == stateFrame && state.color0InVertex && onlyColor0Changed(gpu) && gxColor0Bytes(gpu, color0))
+                stateBp = gpu.bpChanges, ++perf.color0Rides;
+            else
+                buildState(gpu);
+        } else {
+            ++perf.sameState;
+        }
         if (!pipeline.prepare(gpu, state, frame, kind, format)) stop(pipeline.unsupported);
         if (scissorEmpty || !count) return;
         if (!inFrame) begin();
@@ -254,7 +278,10 @@ struct Renderer {
         flushBatch();
         readGxDrawState(gpu, state);
         for (u32 a = 0; a < 0x100; ++a)
-            if (gpu.bp[a] != bpSeen[a] && GxCommandProcessor::drawsRead(a)) ++perf.changed[a], bpSeen[a] = gpu.bp[a];
+            if (gpu.bp[a] != bpAtBuild[a] && GxCommandProcessor::drawsRead(a)) ++perf.changed[a];
+        std::memcpy(bpAtBuild, gpu.bp, sizeof bpAtBuild);
+        std::memcpy(colorAtBuild, gpu.tevColor, sizeof colorAtBuild);
+        std::memcpy(konstAtBuild, gpu.tevKonst, sizeof konstAtBuild);
         stateValid = true, stateBp = gpu.bpChanges, stateFrame = frame, ++stateVersion;
         if (state.unsupported) stop(state.unsupported);
         if (state.material.blend.type == 2 && state.material.blend.logic != 3) stop("a logic op other than copy");
@@ -317,10 +344,11 @@ struct Renderer {
         const double n = perf.frames;
         const double phase = perf.phaseFrames ? 1000.0 / SYSCLOCK_ARM11 / perf.phaseFrames : 0;
         std::fprintf(stderr, "gx perf: %lu frames, %.1f ms/frame: draw %.1f (%.1f of it waiting for the GPU and vblank), logic %.1f, "
-                     "animation %.1f, retrace wait %.1f; per frame %.0f primitives (%.0f same state), %.0f vertices, %.0f triangles, %.0f draws\n",
+                     "animation %.1f, retrace wait %.1f; per frame %.0f primitives (%.0f same state, %.0f with only C0 new), %.0f vertices, "
+                     "%.0f triangles, %.0f draws\n",
                      static_cast<unsigned long>(perf.frames), ms / n, perf.phaseTicks[0] * phase, perf.syncTicks * 1000.0 / SYSCLOCK_ARM11 / n,
                      perf.phaseTicks[1] * phase, perf.phaseTicks[2] * phase, perf.phaseTicks[3] * phase, perf.primitives / n,
-                     perf.sameState / n, perf.vertices / n, perf.triangles / n, perf.draws / n);
+                     perf.sameState / n, perf.color0Rides / n, perf.vertices / n, perf.triangles / n, perf.draws / n);
         // The registers behind most state changes, so batching can be aimed at them.
         std::string top;
         for (int k = 0; k < 6; ++k) {
