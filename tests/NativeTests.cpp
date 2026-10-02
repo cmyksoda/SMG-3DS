@@ -25,6 +25,7 @@ int runGxDrawTests();
 int runGxCopyTests();
 int runWiiDspTests();
 int runAudioDataTests();
+int runThpTests();
 
 int main() {
     gfxInitDefault();
@@ -48,6 +49,7 @@ int main() {
     runGxCopyTests();
     runWiiDspTests();
     runAudioDataTests();
+    runThpTests();
     runBmgTests();
     runColorTests();
     runLayoutTests();

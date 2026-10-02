@@ -238,7 +238,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
 add_library(smg_platform STATIC
   source/core/Input.cpp source/core/Motion.cpp source/core/Settings.cpp source/core/Session.cpp
   source/core/Archive.cpp source/core/Bcsv.cpp source/core/Model.cpp source/core/Texture.cpp source/core/Combiner.cpp
-  source/core/Stage.cpp source/core/StageGravity.cpp source/core/Mesh.cpp source/core/Etc1.cpp source/core/Kcl.cpp source/core/StageCollision.cpp source/core/StageLight.cpp source/core/Animation.cpp source/core/Actors.cpp source/core/J3DImage.cpp source/core/Dol.cpp source/core/GxCommands.cpp source/core/Bmg.cpp source/core/Kpad.cpp source/core/Layout.cpp source/core/GxDraw.cpp source/core/GxCopy.cpp source/core/Jpa.cpp source/core/WiiDsp.cpp source/core/AudioData.cpp)
+  source/core/Stage.cpp source/core/StageGravity.cpp source/core/Mesh.cpp source/core/Etc1.cpp source/core/Kcl.cpp source/core/StageCollision.cpp source/core/StageLight.cpp source/core/Animation.cpp source/core/Actors.cpp source/core/J3DImage.cpp source/core/Dol.cpp source/core/GxCommands.cpp source/core/Bmg.cpp source/core/Kpad.cpp source/core/Layout.cpp source/core/GxDraw.cpp source/core/GxCopy.cpp source/core/Jpa.cpp source/core/WiiDsp.cpp source/core/AudioData.cpp source/core/Thp.cpp)
 target_include_directories(smg_platform PUBLIC include)
 target_link_libraries(smg_platform PUBLIC petari_scene petari_anim)
 target_compile_options(smg_platform PRIVATE -Wall -Wextra -Werror)
@@ -378,7 +378,7 @@ if(NINTENDO_3DS)
     add_executable(native_validation source/platform/PureVirtual.cpp tests/NativeTests.cpp tests/MathTests.cpp tests/PadTests.cpp tests/BcsvTests.cpp
       tests/ModelTests.cpp tests/CombinerTests.cpp tests/GravityTests.cpp tests/Etc1Tests.cpp tests/GpuTests.cpp
       tests/NameObjTests.cpp tests/SceneTests.cpp tests/CollisionTests.cpp tests/AnimationTests.cpp tests/ActorTests.cpp tests/J3DTransformTests.cpp tests/J3DSkeletonTests.cpp
-      tests/GxCommandTests.cpp tests/BmgTests.cpp tests/ColorTests.cpp tests/LayoutTests.cpp tests/WideTests.cpp tests/GxDrawTests.cpp tests/GxCopyTests.cpp tests/WiiDspTests.cpp tests/AudioDataTests.cpp)
+      tests/GxCommandTests.cpp tests/BmgTests.cpp tests/ColorTests.cpp tests/LayoutTests.cpp tests/WideTests.cpp tests/GxDrawTests.cpp tests/GxCopyTests.cpp tests/WiiDspTests.cpp tests/AudioDataTests.cpp tests/ThpTests.cpp)
     set_target_properties(native_validation PROPERTIES SUFFIX ".elf")
     smg_no_missing_weak(native_validation)
     target_compile_definitions(native_validation PRIVATE SMG_TEST_RUNNER)
@@ -412,6 +412,9 @@ else()
   add_executable(gravity_tool tools/GravityTool.cpp)
   target_link_libraries(gravity_tool PRIVATE smg_native_scene smg_platform)
   target_compile_options(gravity_tool PRIVATE -Wall -Wextra -Werror)
+  add_executable(thp_audit tools/ThpAudit.cpp)
+  target_link_libraries(thp_audit PRIVATE smg_platform)
+  target_compile_options(thp_audit PRIVATE -Wall -Wextra -Werror)
   add_executable(resource_audit tools/AuditResources.cpp tools/AuditLayouts.cpp tools/AuditAudio.cpp tools/AuditJ3D.cpp)
   target_link_libraries(resource_audit PRIVATE smg_native_scene smg_platform)
   target_compile_options(resource_audit PRIVATE -Wall -Wextra -Werror)
@@ -483,6 +486,10 @@ else()
   target_link_libraries(gx_draw_tests PRIVATE smg_native_scene smg_platform)
   target_compile_options(gx_draw_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME gx_draw COMMAND gx_draw_tests)
+  add_executable(thp_tests tests/ThpTests.cpp)
+  target_link_libraries(thp_tests PRIVATE smg_native_scene smg_platform)
+  target_compile_options(thp_tests PRIVATE -Wall -Wextra -Werror)
+  add_test(NAME thp_movies COMMAND thp_tests)
   add_executable(gx_copy_tests tests/GxCopyTests.cpp)
   target_link_libraries(gx_copy_tests PRIVATE smg_native_scene smg_platform)
   target_compile_options(gx_copy_tests PRIVATE -Wall -Wextra -Werror)
