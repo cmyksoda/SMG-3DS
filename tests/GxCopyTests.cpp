@@ -3,6 +3,7 @@
 #include <private/pe_reg.h>
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -66,7 +67,8 @@ std::vector<std::uint8_t> make(smg::GxCommandProcessor& gpu, const Copy& c, smg:
 }
 
 void readsTheSdkCopy() {
-    smg::GxCommandProcessor gpu({});
+    auto owned = std::make_unique<smg::GxCommandProcessor>(smg::GxCommandProcessor::Host{});  // more than a 3DS thread's stack
+    smg::GxCommandProcessor& gpu = *owned;
     Copy c;
     c.width = 640, c.height = 456, c.rowBytes = 80 * 32;  // GX_CTF_A8
     smg::GxTextureCopy copy;
@@ -78,7 +80,8 @@ void readsTheSdkCopy() {
 }
 
 void a8Tiles() {
-    smg::GxCommandProcessor gpu({});
+    auto owned = std::make_unique<smg::GxCommandProcessor>(smg::GxCommandProcessor::Host{});
+    smg::GxCommandProcessor& gpu = *owned;
     Copy c;
     c.x = 8, c.y = 4, c.rowBytes = 2 * 32;
     smg::GxTextureCopy copy;
@@ -91,7 +94,8 @@ void a8Tiles() {
 }
 
 void intensity() {
-    smg::GxCommandProcessor gpu({});
+    auto owned = std::make_unique<smg::GxCommandProcessor>(smg::GxCommandProcessor::Host{});
+    smg::GxCommandProcessor& gpu = *owned;
     Copy c;
     c.format = 1, c.ccv = 3, c.rowBytes = 64;
     smg::GxTextureCopy copy;
@@ -103,7 +107,8 @@ void intensity() {
 }
 
 void filters() {
-    smg::GxCommandProcessor gpu({});
+    auto owned = std::make_unique<smg::GxCommandProcessor>(smg::GxCommandProcessor::Host{});
+    smg::GxCommandProcessor& gpu = *owned;
     Copy c;
     c.y = 4, c.rowBytes = 64;
     smg::GxTextureCopy copy;
@@ -119,7 +124,8 @@ void filters() {
 }
 
 void roundTrips() {
-    smg::GxCommandProcessor gpu({});
+    auto owned = std::make_unique<smg::GxCommandProcessor>(smg::GxCommandProcessor::Host{});
+    smg::GxCommandProcessor& gpu = *owned;
     const struct { unsigned format; smg::GxFormat texture; unsigned rowBytes; } cases[] = {
         {6, smg::GxFormat::RGBA8, 4 * 64}, {4, smg::GxFormat::RGB565, 4 * 32}, {5, smg::GxFormat::RGB5A3, 4 * 32},
         {3, smg::GxFormat::IA8, 4 * 32}, {0, smg::GxFormat::I4, 2 * 32}};
@@ -151,7 +157,8 @@ void roundTrips() {
 }
 
 void refusals() {
-    smg::GxCommandProcessor gpu({});
+    auto owned = std::make_unique<smg::GxCommandProcessor>(smg::GxCommandProcessor::Host{});
+    smg::GxCommandProcessor& gpu = *owned;
     smg::GxTextureCopy copy;
     Copy c;
     c.rowBytes = 64;
