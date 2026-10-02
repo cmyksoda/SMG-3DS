@@ -244,7 +244,7 @@ struct Renderer {
         if (clipUniform < 0 || texrowUniform < 0 || transformUniform < 0 || projectUniform[2] < 0 || materialUniform < 0 || alphaRegUniform < 0)
             stop("the GX shader's uniforms");
         // Every row goes to the GPU once, so setRow may skip one whose value citro3d already has.
-        for (const auto& [first, count] : {std::pair{clipUniform, 40}, {texrowUniform, 9}, {materialUniform, 1}, {ambientUniform, 1}, {lightUniform, 24}})
+        for (const auto& [first, count] : {std::pair{clipUniform, 58}, {texrowUniform, 9}, {materialUniform, 1}, {ambientUniform, 1}, {lightUniform, 24}})
             for (int i = 0; i < count; ++i) C3D_FVUnifSet(GPU_VERTEX_SHADER, first + i, 0, 0, 0, 0);
         ready = true;
     }
@@ -971,7 +971,7 @@ struct Renderer {
         if (u.fixedColor) sendFixed(1, u.color[0], u.color[1], u.color[2], u.color[3]);
         for (unsigned unit = u.units; unit < 3; ++unit) sendFixed(2 + int(unit), 0, 0, 0, 1);
         if (!u.lit) sendFixed(5, 0, 0, 0, 0);
-        if (!mesh.slots) sendFixed(6, 0, 0, 0, 0);
+        if (!mesh.slots) sendFixed(6, u.lit ? 4 : 0, 0, 0, 0);  // the one slot's first row
         C3D_BufInfo* buffers = C3D_GetBufInfo();
         BufInfo_Init(buffers);
         BufInfo_Add(buffers, mesh.block, sizeof(GxMeshVertex), sent.meshComponents, sent.meshPermutation);
@@ -992,22 +992,28 @@ struct Renderer {
         stepEnd(10, drawing);
     }
 
-    // Each slot's rows: four of the clip matrix unlit; lit, ten (clip, modelview, normal) for each compact slot.
+    // Each slot's rows: four of the clip matrix unlit; lit, view to clip in the first four and six (modelview, normal)
+    // for each compact slot after them.
     void slotUniforms(const GxMeshUniforms& u) {
-        const int rows = u.lit ? 10 : 4;
-        for (unsigned slot = 0; slot < 10; ++slot) {
-            if (!(u.slots >> slot & 1)) continue;
-            const int at = clipUniform + int(slot) * rows;
-            for (int r = 0; r < 4; ++r) {
-                const float* row = u.clip[slot] + r * 4;
-                setRow(at + r, row[0], row[1], row[2], row[3]);
+        if (!u.lit) {
+            for (unsigned slot = 0; slot < 10; ++slot) {
+                if (!(u.slots >> slot & 1)) continue;
+                for (int r = 0; r < 4; ++r) {
+                    const float* row = u.clip[slot] + r * 4;
+                    setRow(clipUniform + int(slot) * 4 + r, row[0], row[1], row[2], row[3]);
+                }
             }
-            if (!u.lit) continue;
+            return;
+        }
+        for (int r = 0; r < 4; ++r) setRow(clipUniform + r, u.toClip[r * 4], u.toClip[r * 4 + 1], u.toClip[r * 4 + 2], u.toClip[r * 4 + 3]);
+        for (unsigned slot = 0; slot < GxMesh::MaxLitSlots; ++slot) {
+            if (!(u.slots >> slot & 1)) continue;
+            const int at = clipUniform + 4 + int(slot) * 6;
             for (int r = 0; r < 3; ++r) {
                 const float* row = u.modelView[slot] + r * 4;
-                setRow(at + 4 + r, row[0], row[1], row[2], row[3]);
+                setRow(at + r, row[0], row[1], row[2], row[3]);
                 const float* normal = u.normal[slot] + r * 3;
-                setRow(at + 7 + r, normal[0], normal[1], normal[2], 0);
+                setRow(at + 3 + r, normal[0], normal[1], normal[2], 0);
             }
         }
     }

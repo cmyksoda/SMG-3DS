@@ -89,7 +89,8 @@ struct GxLighting {
 // The GPU path: a display list of primitives decoded once, in model space, for the PICA's vertex shader to transform
 // every time it is called. Each vertex carries what the shader reads: its position, colour, each texgen's input vector
 // (the CPU path's `in`, its fourth component one), its normal (for lighting) and its matrix slot's first uniform row:
-// slot x 4 unlit (each slot's four clip rows), its group's compact slot x 10 lit (clip, modelview and normal rows).
+// slot x 4 unlit (each slot's four clip rows); lit, 4 + its group's compact slot x 6 (modelview and normal rows, after
+// the four rows from view to clip the slots share).
 struct GxMeshVertex {
     float position[3];
     std::uint8_t color[4];
@@ -101,10 +102,11 @@ struct GxMesh {
     std::vector<GxMeshVertex> vertices;
     std::vector<std::uint16_t> indices;  // triangles; GX's culling is left to the PICA
     std::uint16_t slots = 0;             // per-vertex matrix slots named (bit per slot)
-    // Draws of its indices: lit, each names at most four slots (the shader's forty rows), its compact slots' real ones.
+    // Draws of its indices: lit, each names at most nine slots (the shader's rows), its compact slots' real ones.
+    static constexpr unsigned MaxLitSlots = 9;
     struct Group {
         std::uint32_t firstIndex = 0, indexCount = 0;
-        std::uint8_t slotMap[4] = {}, slotCount = 0;
+        std::uint8_t slotMap[MaxLitSlots] = {}, slotCount = 0;
     };
     std::vector<Group> groups;
     std::vector<std::uint32_t> origin;  // each vertex's place among the list's own vertices (a group's copies share one)
@@ -118,14 +120,16 @@ struct GxMeshUniforms {
     float clip[10][16];
     std::uint16_t slots = 0;
     float texgen[CombinerProgram::MaxUnits][3][4];
-    // Lit: channel 0's colour and alpha worked out on the GPU. Per compact slot the modelview and normal rows; per
+    // Lit: channel 0's colour and alpha worked out on the GPU. View to clip, shared; per compact slot the modelview and
+    // normal rows (their clip rows unused); per
     // light entry (up to four) its colour (0-1, zero in a part it doesn't light); position prescaled, a0; direction,
     // a1; a2, k0, k1, k2 (one and zeros unattenuated); -prescale, 1/prescale (a far light's position scaled to about
     // one); spot (else specular), diffuse, the cosine's floor (0 clamped, -2 signed).
     bool lit = false, rgbLit = false, alphaLit = false;
     unsigned lights = 0;
     float light[4][6][4];
-    float modelView[4][12], normal[4][9];
+    float toClip[16];
+    float modelView[GxMesh::MaxLitSlots][12], normal[GxMesh::MaxLitSlots][9];
     float ambient[4] = {};
     bool projective[CombinerProgram::MaxUnits] = {};
     unsigned units = 0;

@@ -465,8 +465,9 @@ void litMesh() {
         if (same) pipeline.meshUniforms(mesh.slots, mesh.groups[0], u);
         for (unsigned i = 0; same && i < 3; ++i) {
             const smg::GxMeshVertex& v = mesh.vertices[i];
-            const float* m = u.clip[0];
-            const float x = m[0] * v.position[0] + m[1] * v.position[1] + m[2] * v.position[2] + m[3];
+            float clip[4], color[4], tex[smg::CombinerProgram::MaxUnits][2];
+            smg::gxMeshModel(u, v, clip, color, tex);
+            const float x = clip[0];
             const smg::GxDrawVertex* match = nullptr;
             for (const auto& d : cpu.triangles)
                 if (std::fabs(d.position[0] - x) < 1e-3f) match = &d;
@@ -479,15 +480,15 @@ void litMesh() {
     }
 }
 
-// A lit model with six bones: its mesh splits into groups of at most four slots, and each vertex drawn through its
-// group's uniforms lands, and is lit, where the CPU path puts it.
+// A lit model with ten bones (GX's most): its mesh splits into groups of at most nine slots, and each vertex drawn
+// through its group's uniforms lands, and is lit, where the CPU path puts it.
 void litMeshGroups() {
     auto owned = std::make_unique<smg::GxCommandProcessor>(host());
     smg::GxCommandProcessor& gpu = *owned;
     Stream s;
     clearState(s);
     s.cp(0x50, 1 | 1 << 9 | 1 << 11), s.cp(0x60, 0), s.cp(0x70, 1 | 4 << 1 | 4 << 10);  // matrix index, position, normal
-    for (unsigned slot = 0; slot < 6; ++slot) {
+    for (unsigned slot = 0; slot < 10; ++slot) {
         const float x = 40.0f * slot, c = std::cos(0.3f * slot), n = std::sin(0.3f * slot);
         s.xff(slot * 12, {c, -n, 0, x, n, c, 0, 10, 0, 0, 1, 0});
         s.xff(0x400 + slot * 9, {c, -n, 0, n, c, 0, 0, 0, 1});
@@ -499,7 +500,7 @@ void litMeshGroups() {
     s.xf(0x600 + 3, {0x80604020});
     s.xff(0x600 + 4, {1, 0, 0, 1, 0, 0, 300, 100, 200, 0, 0, 0});
     gpu.put(s.bytes.data(), static_cast<std::uint32_t>(s.bytes.size()));
-    const unsigned slots[12] = {0, 1, 2, 2, 3, 0, 4, 5, 0, 5, 4, 1};
+    const unsigned slots[12] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1};
     Stream list;
     list.u8(0x90), list.u16(12);
     for (unsigned i = 0; i < 12; ++i) {
@@ -515,10 +516,10 @@ void litMeshGroups() {
     smg::GxMesh mesh;
     check(pipeline.prepare(gpu, state, {}, 0x90, 0) && pipeline.meshEligible() == smg::GxVertexPipeline::MeshOk &&
               pipeline.buildMesh(list.bytes.data(), static_cast<std::uint32_t>(list.bytes.size()), mesh) == smg::GxVertexPipeline::MeshOk,
-          "a lit list with six bones becomes a mesh");
-    check(mesh.groups.size() == 2 && mesh.groups[0].slotCount == 4 && mesh.groups[1].slotCount == 4 && mesh.groups[0].indexCount == 6 &&
-              mesh.groups[1].firstIndex == 6 && mesh.groups[1].indexCount == 6,
-          "its triangles split into two groups of four slots");
+          "a lit list with ten bones becomes a mesh");
+    check(mesh.groups.size() == 2 && mesh.groups[0].slotCount == 9 && mesh.groups[1].slotCount == 3 && mesh.groups[0].indexCount == 9 &&
+              mesh.groups[1].firstIndex == 9 && mesh.groups[1].indexCount == 3,
+          "its triangles split into a group of nine slots and one of the rest");
     bool same = cpu.triangles.size() == 12;
     smg::GxMeshUniforms u;
     for (std::size_t g = 0; same && g < mesh.groups.size(); ++g) {
@@ -526,12 +527,11 @@ void litMeshGroups() {
         else pipeline.meshUniforms(mesh.slots, mesh.groups[0], u);
         for (std::uint32_t i = mesh.groups[g].firstIndex; same && i < mesh.groups[g].firstIndex + mesh.groups[g].indexCount; ++i) {
             const smg::GxMeshVertex& v = mesh.vertices[mesh.indices[i]];
-            const unsigned k = static_cast<unsigned>(v.slot) / 10;
+            const unsigned k = (static_cast<unsigned>(v.slot) - 4) / 6;
             same = mesh.groups[g].slotMap[k] == slots[i];
-            const float* m = u.clip[k];
-            for (int r = 0; same && r < 4; ++r)
-                same = std::fabs(m[r * 4] * v.position[0] + m[r * 4 + 1] * v.position[1] + m[r * 4 + 2] * v.position[2] + m[r * 4 + 3] -
-                                 cpu.triangles[i].position[r]) < 1e-3f;
+            float clip[4], color[4], tex[smg::CombinerProgram::MaxUnits][2];
+            smg::gxMeshModel(u, v, clip, color, tex);
+            for (int r = 0; same && r < 4; ++r) same = std::fabs(clip[r] - cpu.triangles[i].position[r]) < 1e-3f * std::max(1.0f, std::fabs(clip[r]));
             float shaded[4];
             shaderLighting(u, v, shaded);
             for (int c = 0; same && c < 3; ++c) same = std::abs(int(std::lround(shaded[c] * 255)) - int(cpu.triangles[i].color[c])) <= 2;

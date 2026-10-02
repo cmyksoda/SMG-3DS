@@ -239,8 +239,15 @@ void GxLighting::apply(const float view[3], const float normal[3], const std::ui
 void gxMeshModel(const GxMeshUniforms& u, const GxMeshVertex& v, float clip[4], float color[4], float tex[CombinerProgram::MaxUnits][2]) {
     const auto dot3 = [](const float* a, const float* b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; };
     const auto dot4 = [](const float* row, const float* xyz) { return row[0] * xyz[0] + row[1] * xyz[1] + row[2] * xyz[2] + row[3]; };
-    const unsigned slot = static_cast<unsigned>(v.slot) / (u.lit ? 10 : 4);
-    for (int r = 0; r < 4; ++r) clip[r] = dot4(u.clip[slot] + r * 4, v.position);
+    const unsigned slot = u.lit ? (static_cast<unsigned>(v.slot) - 4) / 6 : static_cast<unsigned>(v.slot) / 4;
+    float view[3];
+    if (u.lit) {
+        // The slot's modelview, then the shared rows to clip space, as the shader does.
+        for (int r = 0; r < 3; ++r) view[r] = dot4(u.modelView[slot] + r * 4, v.position);
+        for (int r = 0; r < 4; ++r) clip[r] = dot4(u.toClip + r * 4, view);
+    } else {
+        for (int r = 0; r < 4; ++r) clip[r] = dot4(u.clip[slot] + r * 4, v.position);
+    }
     for (unsigned t = 0; t < u.units; ++t) {
         const float s = dot4(u.texgen[t][0], v.source[t]), w = dot4(u.texgen[t][1], v.source[t]);
         const float q = u.projective[t] ? dot4(u.texgen[t][2], v.source[t]) : 1;
@@ -251,10 +258,9 @@ void gxMeshModel(const GxMeshUniforms& u, const GxMeshVertex& v, float clip[4], 
         color[c] = (u.fixedColor || fromRegister ? u.color[c] : v.color[c]) / 255.0f;
     }
     if (!u.lit) return;
-    const float* mv = u.modelView[slot];
     const float* nm = u.normal[slot];
-    float view[3], n[3];
-    for (int r = 0; r < 3; ++r) view[r] = dot4(mv + r * 4, v.position), n[r] = dot3(nm + r * 3, v.normal);
+    float n[3];
+    for (int r = 0; r < 3; ++r) n[r] = dot3(nm + r * 3, v.normal);
     const float nl = dot3(n, n) > 0 ? 1 / std::sqrt(dot3(n, n)) : 0;
     for (float& c : n) c *= nl;
     float sum[4] = {u.ambient[0], u.ambient[1], u.ambient[2], u.ambient[3]};
@@ -709,6 +715,8 @@ unsigned GxVertexPipeline::buildMesh(const std::uint8_t* list, std::uint32_t siz
                 const unsigned slot = v.matrixIndex / 3;
                 m.slot = static_cast<float>(lit_ ? slot : slot * 4);  // lit: renumbered by group below
                 mesh.slots = static_cast<std::uint16_t>(mesh.slots | 1u << slot);
+            } else if (lit_) {
+                m.slot = 4;  // the one compact slot (the draw's fixed attribute)
             }
             mesh.vertices.push_back(m);
         }
@@ -738,8 +746,8 @@ unsigned GxVertexPipeline::buildMesh(const std::uint8_t* list, std::uint32_t siz
         for (std::uint32_t i = 0; i < mesh.origin.size(); ++i) mesh.origin[i] = i;
         return MeshOk;
     }
-    // Lit: triangles in order, a new group whenever one would name a fifth slot; each group's vertices its own copies,
-    // numbered by its compact slots.
+    // Lit: triangles in order, a new group whenever one would name a slot past the shader's; each group's vertices its
+    // own copies, numbered by its compact slots.
     std::vector<GxMeshVertex> vertices;
     std::vector<std::uint16_t> indices;
     std::vector<std::int32_t> copy(mesh.vertices.size(), -1);
@@ -753,7 +761,7 @@ unsigned GxVertexPipeline::buildMesh(const std::uint8_t* list, std::uint32_t siz
             for (int j = 0; j < k; ++j) known |= slots[j] == slots[k];
             fresh = static_cast<std::uint8_t>(fresh + !known);
         }
-        if (group.slotCount + fresh > 4) {
+        if (group.slotCount + fresh > GxMesh::MaxLitSlots) {
             group.indexCount = static_cast<std::uint32_t>(indices.size()) - group.firstIndex;
             mesh.groups.push_back(group);
             group = GxMesh::Group{};
@@ -771,7 +779,7 @@ unsigned GxVertexPipeline::buildMesh(const std::uint8_t* list, std::uint32_t siz
                 copy[source] = static_cast<std::int32_t>(vertices.size()), copied.push_back(source);
                 vertices.push_back(mesh.vertices[source]);
                 mesh.origin.push_back(source);
-                vertices.back().slot = static_cast<float>(slot * 10);
+                vertices.back().slot = static_cast<float>(4 + slot * 6);
             }
             indices.push_back(static_cast<std::uint16_t>(copy[source]));
         }
@@ -789,12 +797,13 @@ std::uint32_t GxVertexPipeline::meshSources() const {
 }
 
 void GxVertexPipeline::meshSlotUniforms(const GxMesh::Group& group, GxMeshUniforms& out) {
-    // Compact slots: the matrix rows, the modelview rows and the normal rows (XF 0x400, three of three per slot).
+    // View to clip, then compact slots: the modelview rows and the normal rows (XF 0x400, three of three per slot).
     out.slots = 0;
+    for (int r = 0; r < 4; ++r)
+        for (int c = 0; c < 4; ++c) out.toClip[r * 4 + c] = static_cast<float>(toClip_[r][c]);
     const unsigned count = perVertexMatrix_ ? group.slotCount : 1;
     for (unsigned k = 0; k < count; ++k) {
         const std::uint32_t row = perVertexMatrix_ ? group.slotMap[k] * 3u : defaultMatrix_;
-        std::memcpy(out.clip[k], clipMatrix(row), sizeof out.clip[k]);
         for (int r = 0; r < 3; ++r)
             for (int c = 0; c < 4; ++c) out.modelView[k][r * 4 + c] = matrix(row + r, c);
         const std::uint32_t normals = 0x400 + (row & 31) * 3;

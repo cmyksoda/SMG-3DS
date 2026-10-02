@@ -3,11 +3,12 @@
 ; With it on they are a cached mesh's (GxMeshVertex): a model-space position transformed by its matrix slot's
 ; four rows, and each texgen's input vector through its three rows, divided by q where the texgen projects; the
 ; colour's parts each from the vertex or the material register (rgbreg, alphareg), lit like GxLighting::apply.
-; Lit meshes take ten rows a slot (clip, modelview, normal) and up to four light entries of six rows (GxMeshUniforms):
-; the SDK puts directional lights at 1e18, past what the PICA's 24-bit floats square, so positions come prescaled; an
-; entry's settings are numbers mixed in, so colour and alpha can be lit differently in one loop.
+; Lit meshes share view-to-clip rows (clip[0-3]) and take six a slot after them (modelview, normal), up to nine slots,
+; and up to four light entries of six rows (GxMeshUniforms): the SDK puts directional lights at 1e18, past what the
+; PICA's 24-bit floats square, so positions come prescaled; an entry's settings are numbers mixed in, so colour and
+; alpha can be lit differently in one loop.
 .constf scale(0.00392156862, 1.0, 0.0, 0.0)
-.fvec clip[40]
+.fvec clip[58]
 .fvec texrow[9]
 .fvec material
 .fvec ambient
@@ -46,10 +47,22 @@
     .end
     ifu transform
         mova a0.x, inslot.x
-        dp4 outpos.x, clip[a0.x], inpos
-        dp4 outpos.y, clip[a0.x+1], inpos
-        dp4 outpos.z, clip[a0.x+2], inpos
-        dp4 outpos.w, clip[a0.x+3], inpos
+        ifu lit
+            ; r3 the view-space position, from the slot's modelview; then the shared rows to clip space
+            dp4 r3.x, clip[a0.x], inpos
+            dp4 r3.y, clip[a0.x+1], inpos
+            dp4 r3.z, clip[a0.x+2], inpos
+            mov r3.w, scale.y
+            dp4 outpos.x, clip[0], r3
+            dp4 outpos.y, clip[1], r3
+            dp4 outpos.z, clip[2], r3
+            dp4 outpos.w, clip[3], r3
+        .else
+            dp4 outpos.x, clip[a0.x], inpos
+            dp4 outpos.y, clip[a0.x+1], inpos
+            dp4 outpos.z, clip[a0.x+2], inpos
+            dp4 outpos.w, clip[a0.x+3], inpos
+        .end
         dp4 r0.x, texrow[0], intc0
         dp4 r0.y, texrow[1], intc0
         ifu project0
@@ -87,16 +100,13 @@
     end
 .end
 
-; r3 the view-space position, r4 the normal, r5 the sum of ambient and each light, then r2 scaled by it; r15 holds
-; zero and one (an instruction's second source can't be a uniform).
+; r3 the view-space position (from main), r4 the normal, r5 the sum of ambient and each light, then r2 scaled by it;
+; r15 holds zero and one (an instruction's second source can't be a uniform).
 .proc light_vertex
     mov r15.xy, scale.zy
-    dp4 r3.x, clip[a0.x+4], inpos
-    dp4 r3.y, clip[a0.x+5], inpos
-    dp4 r3.z, clip[a0.x+6], inpos
-    dp3 r4.x, clip[a0.x+7], innrm
-    dp3 r4.y, clip[a0.x+8], innrm
-    dp3 r4.z, clip[a0.x+9], innrm
+    dp3 r4.x, clip[a0.x+3], innrm
+    dp3 r4.y, clip[a0.x+4], innrm
+    dp3 r4.z, clip[a0.x+5], innrm
     dp3 r4.w, r4, r4
     rsq r4.w, r4.w
     mul r4.xyz, r4.xyz, r4.www
