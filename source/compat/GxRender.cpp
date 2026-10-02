@@ -843,6 +843,8 @@ struct Renderer {
         const std::uint8_t* list = gpu.memoryFunction()(address);
         if (!list || size < 3) return GxVertexPipeline::MeshUnsupported;
         if (list[0] < 0x80 || list[0] >= 0xA8) return ++perf.refusedOpcode[list[0]], ++perf.refused[GxVertexPipeline::MeshCommand], GxVertexPipeline::MeshCommand;
+        // A list in one 32-byte block (a particle's quad) is a draw of its own as a mesh; read, it joins its neighbours' draw.
+        if (size <= 32) return ++perf.refused[GxVertexPipeline::MeshSmall], GxVertexPipeline::MeshSmall;
         applyChangedMemory();
         ensureState(gpu);
         bool prepared;

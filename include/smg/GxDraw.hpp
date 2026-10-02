@@ -162,9 +162,9 @@ public:
     // Why a mesh can't be used (0 when it can): the state (1 unsupported, 2 depth texture, 3 lit with ambient from the
     // vertex, 4 lit with C0 riding in the vertex colour, 5 more than four light entries, 6 texgen) or the list (7 a
     // command other than a primitive, 8 a matrix index naming no whole slot, 9 more vertices than 16-bit indices reach,
-    // 10 nothing drawn).
+    // 10 nothing drawn), or the renderer's choice (11 small enough to join the CPU path's batch).
     enum MeshRefusal : unsigned { MeshOk, MeshUnsupported, MeshDepthTexture, MeshLit, MeshLitColor0, MeshLights, MeshTexgen, MeshCommand,
-                                  MeshMatrixIndex, MeshTooLarge, MeshEmpty, MeshRefusals };
+                                  MeshMatrixIndex, MeshTooLarge, MeshEmpty, MeshSmall, MeshRefusals };
     unsigned meshEligible() const;
     unsigned buildMesh(const std::uint8_t* list, std::uint32_t size, GxMesh& mesh) const;
     void meshUniforms(std::uint16_t slots, const GxMesh::Group& group, GxMeshUniforms& out);
