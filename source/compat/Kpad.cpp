@@ -63,6 +63,11 @@ void KPADSetDistParam(s32 channel, f32 playRadius, f32 sensitivity) {
     if (validChannel(channel)) sDist[channel] = {playRadius, sensitivity};
 }
 
+// Development only (settings.ini dev.skip_story=1): adapted ProloguePictureBook and MoviePlayingSequence end at once.
+BOOL smgDevSkipStory() { return input().settings().devSkipStory; }
+// Development only (dev.gx_dump=1): the renderer lists a frame's draws now and then (source/compat/GxRender.cpp).
+BOOL smgDevGxDump() { return input().settings().devGxDump; }
+
 // In stylus mode the pointer is on the screen only while the stylus touches it (adapted StarPointerGuidance asks).
 BOOL smgPointerIsStylus() { return input().settings().pointer == smg::PointerMode::Stylus; }
 

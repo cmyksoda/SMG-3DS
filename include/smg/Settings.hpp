@@ -30,6 +30,10 @@ struct Settings {
     // The galaxy and scenario the stage preview opens; a galaxy is a StageData folder name.
     std::string previewGalaxy = "EggStarGalaxy";
     int previewScenario = 1;
+    // For development only (dev.skip_story=1): the prologue's picture book and every movie end as soon as they start.
+    bool devSkipStory = false;
+    // For development only (dev.gx_dump=1): the renderer lists one frame's draws in the log every minute.
+    bool devGxDump = false;
     static constexpr int MinSpeed = 25, MaxSpeed = 300, SpeedStep = 25;
 };
 bool operator==(const Settings& a, const Settings& b);

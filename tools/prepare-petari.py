@@ -1586,6 +1586,26 @@ adapt("src/Game/Screen/StarPointerGuidance.cpp", "Game/Screen/StarPointerGuidanc
      "                                          mSpineFrame1P->isCurrentNerve(GET_NERVE(StarPointerGuidance, HostTypeNrvEndWait)))) {\n"
      "                mSpineFrame1P->setNerve(GET_NERVE(StarPointerGuidance, HostTypeNrvAppear1P));\n", 1),
 ])
+# For development (settings.ini dev.skip_story=1, off unless set): the prologue's picture book ends as it appears, and any
+# movie takes the skip the final battle's has once Bowser's third battle is won, so a boot reaches gameplay quickly.
+adapt("src/Game/Screen/ProloguePictureBook.cpp", "Game/Screen/ProloguePictureBook.cpp", [
+    ('#include "Game/Screen/ProloguePictureBook.hpp"\n',
+     '#include "Game/Screen/ProloguePictureBook.hpp"\n\nextern "C" BOOL smgDevSkipStory();  // source/compat/Kpad.cpp\n', 1),
+    ('    MR::startAnim(this, "Prologue", 0);\n    setNerve(GET_NERVE(ProloguePictureBook, ProloguePictureBookPlaying));\n',
+     '    MR::startAnim(this, "Prologue", 0);\n    if (smgDevSkipStory()) {\n        setNerve(GET_NERVE(ProloguePictureBook, ProloguePictureBookEnd));\n'
+     '    } else {\n        setNerve(GET_NERVE(ProloguePictureBook, ProloguePictureBookPlaying));\n    }\n', 1),
+])
+adapt("src/Game/Screen/MoviePlayingSequence.cpp", "Game/Screen/MoviePlayingSequence.cpp", [
+    ('#include "Game/Screen/MoviePlayingSequence.hpp"\n',
+     '#include "Game/Screen/MoviePlayingSequence.hpp"\n\nextern "C" BOOL smgDevSkipStory();  // source/compat/Kpad.cpp\n', 1),
+    ('    if (!MR::isEqualStringCase(mInfo->mMovieName, "/MovieData/FinalBattle.thp")) {\n        return false;\n    }\n\n'
+     '    if (!MR::isAlreadyVisitedStage("KoopaBattleVs3Galaxy")) {\n        return false;\n    }\n\n'
+     '    if (!MR::testCorePadButtonA(WPAD_CHAN0)) {\n        return false;\n    }\n',
+     '    if (!smgDevSkipStory()) {\n'
+     '        if (!MR::isEqualStringCase(mInfo->mMovieName, "/MovieData/FinalBattle.thp")) {\n            return false;\n        }\n\n'
+     '        if (!MR::isAlreadyVisitedStage("KoopaBattleVs3Galaxy")) {\n            return false;\n        }\n\n'
+     '        if (!MR::testCorePadButtonA(WPAD_CHAN0)) {\n            return false;\n        }\n    }\n', 1),
+])
 # Nor does the icon picker end with a "Mii" placeholder when there are no Miis (choosing it said "If you create a Mii in
 # the Mii Channel, you can use it as your icon!"): the slot stays empty like any past the last icon.
 adapt("src/Game/Screen/MiiSelect.cpp", "Game/Screen/MiiSelect.cpp", [
