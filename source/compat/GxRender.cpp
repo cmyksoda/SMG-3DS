@@ -363,6 +363,8 @@ struct Renderer {
     }
 
     // The vertices and indices written since the GPU last took a command list, out of the CPU's cache (Azahar has none).
+    // Meshes and textures flush their own memory when made, so a frame's end flushes only these and the command list:
+    // C3D_FrameEnd(0) would flush the whole linear heap each time, which a real console pays for in cache lines.
     void flushVertices() {
         if (used > flushed) GSPGPU_FlushDataCache(vertices + flushed, (used - flushed) * sizeof(GxDrawVertex));
         if (indexUsed > indexFlushed) GSPGPU_FlushDataCache(indices + indexFlushed, (indexUsed - indexFlushed) * sizeof(std::uint16_t));
@@ -375,7 +377,7 @@ struct Renderer {
         flushBatch();
         flushVertices();
         C3D_RenderTargetDetachOutput(target);
-        C3D_FrameEnd(0);
+        C3D_FrameEnd(GX_CMDLIST_FLUSH);
     }
     void resume() {
         C3D_FrameBegin(0);
@@ -1508,7 +1510,8 @@ struct Renderer {
         if (!inFrame) begin();
         flushBatch();
         if (dumping) std::fprintf(stderr, "gx dump: frame ends after %u draws\n", dumpIndex), dumping = false;
-        C3D_FrameEnd(0);
+        flushVertices();
+        C3D_FrameEnd(GX_CMDLIST_FLUSH);
         inFrame = false;
         stateValid = false;  // read again each frame, as a Z texture the CPU rewrites would be
         if (command >> 11 & 1) clearColor = copyClearColor(gpu), clearDepth = copyClearDepth(gpu), clearPending = true;
