@@ -23,9 +23,6 @@ void ARCGetStartAddrInMem() { unported("ARCGetStartAddrInMem"); }
 void ARCInitHandle() { unported("ARCInitHandle"); }
 void ARCOpenDir() { unported("ARCOpenDir"); }
 void ARCReadDir() { unported("ARCReadDir"); }
-// LC
-void LCDisable() { unported("LCDisable"); }
-void LCEnable() { unported("LCEnable"); }
 // NAND
 // OS
 void OSFillFPUContext() { unported("OSFillFPUContext"); }
@@ -48,15 +45,6 @@ void RSOLinkJump() { unported("RSOLinkJump"); }
 void RSOLinkList() { unported("RSOLinkList"); }
 void RSOListInit() { unported("RSOListInit"); }
 void RSOMakeJumpCode() { unported("RSOMakeJumpCode"); }
-// THP
-void THPAudioDecode() { unported("THPAudioDecode"); }
-void THPInit() { unported("THPInit"); }
-void THPVideoDecode() { unported("THPVideoDecode"); }
-// THPGX
-void THPGXRestore() { unported("THPGXRestore"); }
-void THPGXSetTexObjFilter() { unported("THPGXSetTexObjFilter"); }
-void THPGXYuv2RgbDraw() { unported("THPGXYuv2RgbDraw"); }
-void THPGXYuv2RgbSetup() { unported("THPGXYuv2RgbSetup"); }
 // WENC
 void WENCGetEncodeData() { unported("WENCGetEncodeData"); }
 // WPAD

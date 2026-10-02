@@ -303,7 +303,7 @@ if(NINTENDO_3DS)
       list(APPEND PETARI_BUILT_ELSEWHERE "${source}")
     endforeach()
   endforeach()
-  set(PETARI_GAME_SOURCES source/compat/Sdk.cpp source/compat/Nand.cpp source/compat/Rfl.cpp source/compat/GameScene.cpp source/compat/HomeButtonMenu.cpp source/compat/OsThreads.cpp source/compat/OsMemory.cpp source/compat/GameHeap.cpp source/compat/Dvd.cpp source/compat/Video.cpp source/compat/OsReset.cpp source/compat/GxRender.cpp source/compat/SystemConfig.cpp source/compat/Wpad.cpp source/compat/NativeResources.cpp source/compat/GxFifo.cpp source/compat/Nwc24.cpp source/compat/WiiAudio.cpp source/compat/Nw4rDb.cpp source/compat/DolTables.cpp source/compat/Kpad.cpp
+  set(PETARI_GAME_SOURCES source/compat/Sdk.cpp source/compat/Nand.cpp source/compat/Rfl.cpp source/compat/GameScene.cpp source/compat/HomeButtonMenu.cpp source/compat/OsThreads.cpp source/compat/OsMemory.cpp source/compat/GameHeap.cpp source/compat/Dvd.cpp source/compat/Video.cpp source/compat/OsReset.cpp source/compat/GxRender.cpp source/compat/SystemConfig.cpp source/compat/Wpad.cpp source/compat/NativeResources.cpp source/compat/GxFifo.cpp source/compat/Nwc24.cpp source/compat/WiiAudio.cpp source/compat/Nw4rDb.cpp source/compat/DolTables.cpp source/compat/Kpad.cpp source/compat/Thp.cpp
     "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/LiveActor/RailRiderCamera.cpp"
     "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/LiveActor/LiveActorSound.cpp")
   foreach(source ${PETARI_GAME_CANDIDATES})
@@ -320,7 +320,8 @@ if(NINTENDO_3DS)
   # nw4r reaches the game's own allocators.
   set(PETARI_SDK_SOURCES "${PETARI}/src/RVL_SDK/aralt/aralt.c" "${PETARI}/src/RVL_SDK/tpl/TPL.c"
     "${CMAKE_CURRENT_BINARY_DIR}/petari/RVL_SDK/mem/mem_allocator.c" "${PETARI}/src/RVL_SDK/dsp/dsp_task.c"
-    "${PETARI}/src/RVL_SDK/dsp/dsp_debug.c")
+    "${PETARI}/src/RVL_SDK/dsp/dsp_debug.c" "${CMAKE_CURRENT_BINARY_DIR}/petari/RVL_SDK/thp/THPAudio.c"
+    "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Screen/THPDraw.c")
   list(APPEND PETARI_GAME_SOURCES ${PETARI_SDK_SOURCES})
   set_source_files_properties(${PETARI_SDK_SOURCES} PROPERTIES LANGUAGE CXX)
   # The SDK's own GX (C sources that include C++ headers, so built as C++): every GX call the game makes writes the

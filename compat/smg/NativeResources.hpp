@@ -35,3 +35,7 @@ void smgNativeAudioArchive(void* archive, s32 size);
 void smgNativeJ3DModel(void* file);
 // A J3D animation file (BCK, BTK, BRK, BPK, BTP, BVA) turned in place the first time the loader meets it.
 void smgNativeJ3DAnimation(void* file);
+// Big-endian words or halves turned native in place, for formats read as plain structs (THP's headers): no marker, so
+// each caller turns its data exactly once.
+void smgNativeWords(void* words, u32 count);
+void smgNativeHalves(void* halves, u32 count);

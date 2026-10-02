@@ -101,6 +101,13 @@ u32 smgPeekEfb(u16 x, u16 y, int depth) {
     return value;
 }
 
+// THPGXYuv2RgbDraw (source/compat/Thp.cpp): the renderer is the FIFO's, as for peeks.
+void smgDrawMovieFrame(const u8* y, const u8* u, const u8* v, unsigned width, unsigned height, unsigned generation, int x, int top, int w, int h) {
+    sFifoLock.lock();
+    smg::gxRenderMovieFrame(y, u, v, width, height, generation, x, top, w, h);
+    sFifoLock.unlock();
+}
+
 volatile void* smgUnportedRegisters(const char* block) {
     std::fprintf(stderr, "The Wii's %s hardware registers are not the port's\n", block);
     std::abort();

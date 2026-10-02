@@ -1356,9 +1356,6 @@ for relative, types in [("Game/LiveActor/DynamicJointCtrl.cpp", ["f32"]), ("Game
                         ("Game/System/ScenarioDataParser.cpp", ["s32"])]:
     adapt("src/" + relative, relative, [(f"template const bool JMapInfo::getValue< {t} >", f"template bool JMapInfo::getValue< {t} >", 1)
                                         for t in types])
-adapt("src/Game/Screen/THPSimplePlayerWrapper.cpp", "Game/Screen/THPSimplePlayerWrapper.cpp", [
-    ("#include <cstring>", "#include <cstring>\n#include <revolution/sc.h>", 1),
-])
 adapt("src/Game/Screen/ReplaceTagProcessor.cpp", "Game/Screen/ReplaceTagProcessor.cpp", [
     # MSL's va_list was a one-element array of its register-save struct; va_copy copies any toolchain's.
     ("        *copy = *args;\n", "        va_copy(copy, args);\n", 2),
@@ -1730,6 +1727,35 @@ adapt("src/Game/RhythmLib/AudChordInfo.cpp", "Game/RhythmLib/AudChordInfo.cpp", 
      "    void* resource = pArchive->getResource((u16)id);\n    if (resource != nullptr && *(s32*)resource == 0) {\n"
      "        smgNativeChordTable(resource, pArchive->getResSize(resource));\n    }\n    bool loaded = setChordTableResource(resource);", 1),
 ])
+# THP movies (docs/PORTING.md, "Movies"): SCGetSoundMode needs sc.h. The player copies the file's big-endian headers into its structs, and each frame
+# starts with big-endian sizes; they turn native as each read lands. Audio records turn as they're decoded.
+adapt("src/Game/Screen/THPSimplePlayerWrapper.cpp", "Game/Screen/THPSimplePlayerWrapper.cpp", [
+    ('#include <cstring>\n', '#include <cstring>\n#include <revolution/sc.h>\n#include <smg/NativeResources.hpp>\n', 1),
+    ("    memcpy(&mHeader, WorkBuffer, sizeof(mHeader));\n", "    memcpy(&mHeader, WorkBuffer, sizeof(mHeader));\n    smgNativeWords(&mHeader.version, 11);\n", 1),
+    ("    memcpy(&mFrameComp, WorkBuffer, sizeof(mFrameComp));\n",
+     "    memcpy(&mFrameComp, WorkBuffer, sizeof(mFrameComp));\n    smgNativeWords(&mFrameComp.numComponents, 1);\n", 1),
+    ("    memcpy(&mVideoInfo, WorkBuffer, sizeof(mVideoInfo));\n", "    memcpy(&mVideoInfo, WorkBuffer, sizeof(mVideoInfo));\n    smgNativeWords(&mVideoInfo, 3);\n", 1),
+    ("    memcpy(&mAudioInfo, WorkBuffer, sizeof(mAudioInfo));\n", "    memcpy(&mAudioInfo, WorkBuffer, sizeof(mAudioInfo));\n    smgNativeWords(&mAudioInfo, 4);\n", 1),
+    ("    mCurOffset += mReadSize;\n    mReadSize = *(u32*)mReadBuffer[mReadIndex].ptr;\n",
+     "    mCurOffset += mReadSize;\n    smgNativeWords(mReadBuffer[mReadIndex].ptr, 2 + mFrameComp.numComponents);\n"
+     "    mReadSize = *(u32*)mReadBuffer[mReadIndex].ptr;\n", 1),
+    ("    mCurOffset += mReadSize;\n    mReadSize = *(s32*)mReadBuffer[mReadIndex].ptr;\n",
+     "    mCurOffset += mReadSize;\n    smgNativeWords(mReadBuffer[mReadIndex].ptr, 2 + mFrameComp.numComponents);\n"
+     "    mReadSize = *(s32*)mReadBuffer[mReadIndex].ptr;\n", 1),
+])
+adapt("src/RVL_SDK/thp/THPAudio.c", "RVL_SDK/thp/THPAudio.c", [
+    ('#include "revolution/thp.h"\n', '#include "revolution/thp.h"\n#include <smg/NativeResources.hpp>\n#include <cstring>\n', 1),
+    ("    header = (THPAudioRecordHeader*)audioFrame;\n",
+     "    THPAudioRecordHeader native;\n    memcpy(&native, audioFrame, sizeof native);\n    smgNativeWords(&native, 2);\n"
+     "    smgNativeHalves(native.lCoef, (sizeof native - 8) / 2);\n    header = &native;\n", 1),
+    # thp.h declares both extern; C let the definitions say static, C++ (which the port builds the SDK's C as) doesn't.
+    ("static s32 __THPAudioGetNewSample(", "s32 __THPAudioGetNewSample(", 1),
+    ("static void __THPAudioInitialize(", "void __THPAudioInitialize(", 1),
+])
+# THPGXYuv2RgbDraw is the port's (source/compat/Thp.cpp): it draws frames THPVideoDecode decoded into the port's planes.
+adapt("src/Game/Screen/THPDraw.c", "Game/Screen/THPDraw.c", [],
+      drop=["void THPGXYuv2RgbDraw(u8* y_data, u8* u_data, u8* v_data, s16 x, s16 y, s16 textureWidth, s16 textureHeight, s16 polygonWidth, s16 polygonHeight) {"],
+      reason="the port decodes movie frames into its own planes")
 # A failed allocation panics with an empty message on the Wii; the port's names the heap, size and alignment, after a
 # census of what fills the heap (source/compat/GameHeap.cpp).
 adapt("src/Game/System/HeapMemoryWatcher.cpp", "Game/System/HeapMemoryWatcher.cpp", [

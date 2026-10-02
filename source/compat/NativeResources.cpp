@@ -175,3 +175,13 @@ void smgNativeAudioArchive(void* archive, s32 size) {
         std::abort();
     }
 }
+
+void smgNativeWords(void* words, u32 count) {
+    auto* w = static_cast<u32*>(words);
+    for (u32 i = 0; i < count; ++i) w[i] = __builtin_bswap32(w[i]);
+}
+
+void smgNativeHalves(void* halves, u32 count) {
+    auto* h = static_cast<u16*>(halves);
+    for (u32 i = 0; i < count; ++i) h[i] = __builtin_bswap16(h[i]);
+}

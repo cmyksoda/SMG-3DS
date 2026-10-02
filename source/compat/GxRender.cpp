@@ -11,6 +11,7 @@
 #include <smg/GxRender.hpp>
 #include <smg/Pica.hpp>
 #include <smg/Texture.hpp>
+#include <smg/Thp.hpp>
 #include <revolution/os.h>
 #include <algorithm>
 #include <array>
@@ -90,6 +91,13 @@ struct Renderer {
     bool scratchReady = false;
     // The first GPU copy of each format and size is checked against the CPU's copy of the same pixels (noteGpuCopy).
     std::vector<u64> checkedKinds;
+    // A THP movie's frames as RGB565, two textures taken in turn so a new frame never overwrites one the GPU may still draw.
+    struct MovieFrame {
+        C3D_Tex texture{};
+        const std::uint8_t* key = nullptr;
+        unsigned generation = 0;
+        bool ready = false;
+    } movie[2];
     GxFrame frame;
     bool indirectNoted = false;
 
@@ -494,6 +502,76 @@ struct Renderer {
         C3D_TexEnvBufUpdate(C3D_Both, 0);
     }
 
+    // THPGXYuv2RgbDraw: a decoded frame's planes (smg::decodeThpVideo) turned to RGB once, drawn over the EFB rectangle the
+    // game's quad covers, its colour replacing what is there (no blending, depth or alpha written).
+    void movieFrame(const std::uint8_t* y, const std::uint8_t* u, const std::uint8_t* v, unsigned width, unsigned height, unsigned generation,
+                    int x, int top, int w, int h) {
+        MovieFrame& m = movie[generation & 1];
+        const unsigned tw = textureSide(float(width)), th = textureSide(float(height));
+        if (m.ready && (m.texture.width != tw || m.texture.height != th)) C3D_TexDelete(&m.texture), m.ready = false;
+        if (!m.ready) {
+            if (!C3D_TexInit(&m.texture, tw, th, GPU_RGB565)) stop("a movie frame with no memory for its texture");
+            C3D_TexSetFilter(&m.texture, GPU_LINEAR, GPU_LINEAR);
+            C3D_TexSetWrap(&m.texture, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+            m.ready = true, m.key = nullptr;
+        }
+        if (!inFrame) begin();
+        if (m.key != y || m.generation != generation) {
+            // Rows go in upside down and in 8x8 tiles, as tile() lays every texture out for the PICA.
+            auto* texels = static_cast<std::uint16_t*>(m.texture.data);
+            for (unsigned iy = 0; iy < height; ++iy) {
+                const unsigned row = th - 1 - iy;
+                const std::uint8_t *ys = y + std::size_t(iy) * width, *us = u + std::size_t(iy / 2) * (width / 2), *vs = v + std::size_t(iy / 2) * (width / 2);
+                std::uint16_t* tiles = texels + std::size_t(row / 8) * (tw / 8) * 64;
+                const unsigned rowBits = (row & 1) << 1 | (row & 2) << 2 | (row & 4) << 3;
+                for (unsigned ix = 0; ix < width; ++ix) {
+                    std::uint8_t rgb[3];
+                    thpPixel(ys[ix], us[ix / 2], vs[ix / 2], rgb);
+                    const unsigned morton = (ix & 1) | (ix & 2) << 1 | (ix & 4) << 2 | rowBits;
+                    tiles[(ix / 8) * 64 + morton] = std::uint16_t((rgb[0] >> 3) << 11 | (rgb[1] >> 2) << 5 | rgb[2] >> 3);
+                }
+            }
+            C3D_TexFlush(&m.texture);
+            m.key = y, m.generation = generation;
+        }
+        roomFor(6);
+        GxDrawVertex* out = vertices + used;
+        const float s1 = float(width) / float(tw), t1 = float(height) / float(th);
+        const auto corner = [&](float ex, float ey, float s, float t) {
+            GxDrawVertex vertex{};
+            const float cx = 2 * ex / frame.width - 1, cy = 1 - 2 * ey / frame.height;
+            vertex.position[0] = cy, vertex.position[1] = -cx, vertex.position[2] = -0.5f, vertex.position[3] = 1;
+            vertex.texcoord[0][0] = s, vertex.texcoord[0][1] = t;
+            return vertex;
+        };
+        const GxDrawVertex a = corner(x, top, 0, 0), b = corner(x + w, top, s1, 0), c = corner(x + w, top + h, s1, t1), d = corner(x, top + h, 0, t1);
+        unsigned n = 0;
+        for (const GxDrawVertex& vertex : {a, b, c, a, c, d}) out[n++] = vertex;
+        C3D_BindProgram(&program);
+        C3D_AttrInfo* attributes = C3D_GetAttrInfo();
+        AttrInfo_Init(attributes);
+        AttrInfo_AddLoader(attributes, 0, GPU_FLOAT, 4);
+        AttrInfo_AddLoader(attributes, 1, GPU_UNSIGNED_BYTE, 4);
+        for (int unit = 0; unit < 3; ++unit) AttrInfo_AddLoader(attributes, 2 + unit, GPU_FLOAT, 2);
+        C3D_BufInfo* buffers = C3D_GetBufInfo();
+        BufInfo_Init(buffers);
+        BufInfo_Add(buffers, out, sizeof(GxDrawVertex), 5, 0x43210);
+        for (int stage = 0; stage < int(CombinerProgram::MaxStages); ++stage) C3D_TexEnvInit(C3D_GetTexEnv(stage));
+        C3D_TexEnv* env = C3D_GetTexEnv(0);
+        C3D_TexEnvSrc(env, C3D_Both, GPU_TEXTURE0);
+        C3D_TexEnvFunc(env, C3D_Both, GPU_REPLACE);
+        C3D_TexEnvBufUpdate(C3D_Both, 0);
+        C3D_AlphaTest(false, GPU_ALWAYS, 0);
+        C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
+        C3D_DepthTest(false, GPU_ALWAYS, static_cast<GPU_WRITEMASK>(GPU_WRITE_COLOR & ~GPU_WRITE_ALPHA));
+        C3D_CullFace(GPU_CULL_NONE);
+        C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
+        C3D_TexBind(0, &m.texture);
+        C3D_DrawArrays(GPU_TRIANGLES, 0, static_cast<int>(n));
+        used += n;
+        fresh[0] = fresh[1] = false;
+    }
+
     // What has been drawn so far, read back from the target once the GPU has finished it; depth (D24S8) moves as raw
     // four-byte pixels too.
     const u32* readEfb(bool depth) {
@@ -555,6 +633,12 @@ void gxRenderPrimitive(const GxCommandProcessor& gpu, std::uint8_t kind, std::ui
 }
 
 void gxRenderCopiesStayOnGpu(bool stay) { sCopiesStayOnGpu = stay; }
+
+void gxRenderMovieFrame(const std::uint8_t* y, const std::uint8_t* u, const std::uint8_t* v, unsigned width, unsigned height, unsigned generation,
+                        int x, int top, int w, int h) {
+    const PortMemory memory;
+    renderer().movieFrame(y, u, v, width, height, generation, x, top, w, h);
+}
 
 std::uint32_t gxRenderPeek(const GxCommandProcessor& gpu, unsigned x, unsigned y, bool depth) {
     const PortMemory memory;

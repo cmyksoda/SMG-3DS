@@ -10,6 +10,9 @@ void gxRenderCopy(const GxCommandProcessor& gpu, std::uint32_t command);
 // While on, texture copies are kept in the PICA's memory and never written to the Wii's: for copies only the GPU reads
 // (JUTTexture::capture's). Every other copy is encoded into memory by the CPU, as the pixel engine writes it.
 void gxRenderCopiesStayOnGpu(bool stay);
+// A THP movie frame's planes (smg::decodeThpVideo), drawn over the EFB rectangle (x, top, w, h); `generation` changes per decode.
+void gxRenderMovieFrame(const std::uint8_t* y, const std::uint8_t* u, const std::uint8_t* v, unsigned width, unsigned height, unsigned generation,
+                        int x, int top, int w, int h);
 // GXPeekARGB (0xAARRGGBB) or GXPeekZ (24 bits, nearer smaller) of one EFB pixel, after everything drawn so far.
 std::uint32_t gxRenderPeek(const GxCommandProcessor& gpu, unsigned x, unsigned y, bool depth);
 } // namespace smg
