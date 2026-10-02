@@ -22,9 +22,9 @@ std::uint32_t field(std::uint32_t reg, int shift, int size) { return reg >> shif
 constexpr int VcdLo = 0x50, VcdHi = 0x60, VatA = 0x70, VatB = 0x80, VatC = 0x90, ArrayBase = 0xA0, ArrayStride = 0xB0;
 
 // The BP registers a draw reads (smg::readGxDrawState): generation mode, indirect stages, scissor, TEV orders, depth and
-// blend modes, the texture maps' modes, sizes and addresses, TEV stages and colours, alpha test, depth texture, konst selects.
+// blend modes, destination alpha, the texture maps' modes, sizes and addresses, TEV stages and colours, alpha test, depth texture, konst selects.
 bool drawsReadRegister(std::uint32_t address) {
-    if (address == 0x00 || address == 0x20 || address == 0x21 || address == 0x40 || address == 0x41) return true;
+    if (address == 0x00 || address == 0x20 || address == 0x21 || address == 0x40 || address == 0x41 || address == 0x42) return true;
     if ((address >= 0x10 && address <= 0x1F) || (address >= 0x28 && address <= 0x2F) || (address >= 0xC0 && address <= 0xE7) ||
         (address >= 0xF3 && address <= 0xFD))
         return true;

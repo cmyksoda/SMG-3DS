@@ -26,6 +26,7 @@
 
 extern "C" void smgHeartbeat();          // source/compat/GameScene.cpp
 extern "C" unsigned smgMovieDecodes();  // source/compat/Thp.cpp
+extern "C" int smgDevGxDump();           // source/compat/Kpad.cpp
 
 namespace smg {
 namespace {
@@ -114,7 +115,12 @@ struct Renderer {
         bool ready = false;
     } movie[2];
     GxFrame frame{640, 480, true};
-    bool indirectNoted = false;
+    bool indirectNoted = false, dstAlphaNoted = false;
+    // dev.gx_dump: one frame's draws, copies and states listed in the log every minute of the game's clock.
+    bool dumping = false;
+    std::uint32_t gpuXf[5] = {};  // channels, colour/alpha control, material, ambient as the state was built
+    unsigned dumpIndex = 0;
+    u64 nextDump = 0;
     // Per-frame costs, logged every few seconds (perfLine): what each optimization is measured by.
     struct Perf {
         u64 since = 0, phaseTicks[4] = {}, syncTicks = 0;
@@ -165,6 +171,10 @@ struct Renderer {
         clearPending = false;
         startBuffers();
         inFrame = true;
+        if (smgDevGxDump() && svcGetSystemTick() >= nextDump) {
+            dumping = true, dumpIndex = 0, nextDump = svcGetSystemTick() + 60ull * SYSCLOCK_ARM11;
+            std::fprintf(stderr, "gx dump: frame begins (EFB %gx%g)\n", frame.width, frame.height);
+        }
     }
 
     // Every draw reads one buffer from its start, in the shader's layout; set once per command list.
@@ -300,9 +310,92 @@ struct Renderer {
         scissorEmpty = x1 <= x0 || y1 <= y0;
         scissorWhole = x0 == 0 && y0 == 0 && x1 == 400 && y1 == 240;
         scissor[0] = 240 - y1, scissor[1] = 400 - x1, scissor[2] = 240 - y0, scissor[3] = 400 - x0;
+        gpuXf[0] = gpu.xf[0x1009], gpuXf[1] = gpu.xf[0x100E], gpuXf[2] = gpu.xf[0x1010], gpuXf[3] = gpu.xf[0x100C], gpuXf[4] = gpu.xf[0x100A];
         pixel = preparePixel(state.material, state.program);
+        if (state.dstAlphaEnable && state.alphaUpdate) keepDstAlpha();
         writeMask = (state.colorUpdate ? GPU_WRITE_COLOR & ~GPU_WRITE_ALPHA : 0) | (state.alphaUpdate ? GPU_WRITE_ALPHA : 0) |
                     (pixel.depthWrite ? GPU_WRITE_DEPTH : 0);
+    }
+
+    // GXSetDstAlpha: the EFB takes a constant alpha while the TEV's blends and is tested. The PICA blends and tests with
+    // the alpha it writes, so that holds exactly only when neither reads the source alpha; then a last stage replaces it.
+    void keepDstAlpha() {
+        const auto readsSource = [](GPU_BLENDFACTOR f) { return f == GPU_SRC_ALPHA || f == GPU_ONE_MINUS_SRC_ALPHA; };
+        if (readsSource(pixel.source) || readsSource(pixel.destination) || pixel.alphaTest) {
+            if (!dstAlphaNoted) std::fprintf(stderr, "The Wii GPU's drawing: destination alpha with a blend or test that reads the source alpha keeps the source alpha\n");
+            dstAlphaNoted = true;
+            return;
+        }
+        const unsigned last = std::min(state.program.stageCount, CombinerProgram::MaxStages - 1);
+        C3D_TexEnv& env = pixel.env[last];
+        if (last == state.program.stageCount) {
+            C3D_TexEnvInit(&env);
+            C3D_TexEnvSrc(&env, C3D_RGB, GPU_PREVIOUS);
+        } else if ((env.srcRgb & 0xF) == GPU_CONSTANT || (env.srcRgb >> 4 & 0xF) == GPU_CONSTANT || (env.srcRgb >> 8 & 0xF) == GPU_CONSTANT) {
+            if (!dstAlphaNoted) std::fprintf(stderr, "The Wii GPU's drawing: destination alpha on a sixth stage that reads its constant shares the constant\n");
+            dstAlphaNoted = true;
+        }
+        C3D_TexEnvSrc(&env, C3D_Alpha, GPU_CONSTANT);
+        C3D_TexEnvOpAlpha(&env, GPU_TEVOP_A_SRC_ALPHA);
+        C3D_TexEnvFunc(&env, C3D_Alpha, GPU_REPLACE);
+        env.color = (env.color & 0x00FFFFFF) | u32(state.dstAlpha) << 24;
+        pixel.alphaEquation = GPU_BLEND_ADD, pixel.alphaSource = GPU_ONE, pixel.alphaDestination = GPU_ZERO;
+    }
+
+    // One draw for the dump: its size, where it lands on the screen (EFB pixels), and the state that draws it.
+    bool dumpBatch() {
+        float lo[2] = {1e9f, 1e9f}, hi[2] = {-1e9f, -1e9f};
+        for (std::size_t i = batchStart; i < indexUsed; ++i) {
+            const float* p = vertices[indices[i]].position;
+            if (p[3] <= 0) continue;
+            // Undo the quarter turn: x = -y / w, y = x / w in [-1, 1], then EFB pixels with y down.
+            const float ex = (-p[1] / p[3] + 1) * frame.width / 2, ey = (1 - p[0] / p[3]) * frame.height / 2;
+            lo[0] = std::min(lo[0], ex), lo[1] = std::min(lo[1], ey), hi[0] = std::max(hi[0], ex), hi[1] = std::max(hi[1], ey);
+        }
+        const ModelMaterial& m = state.material;
+        std::string stages;
+        for (int s = 0; s < m.tevStageCount; ++s) {
+            const TevStage& t = m.stages[s];
+            char text[96];
+            std::snprintf(text, sizeof text, " [%x%x%x%x op%u %x%x%x%x op%u map%d ch%u]", t.colorIn[0], t.colorIn[1], t.colorIn[2], t.colorIn[3], t.colorOp,
+                          t.alphaIn[0], t.alphaIn[1], t.alphaIn[2], t.alphaIn[3], t.alphaOp, t.texMap == 0xFF ? -1 : t.texMap, t.channel);
+            stages += text;
+        }
+        std::string maps;
+        for (unsigned u = 0; u < state.program.unitCount; ++u) {
+            const GxTextureMap& t = state.textures[state.program.units[u].texture];
+            char text[64];
+            std::snprintf(text, sizeof text, " %08lx:%ux%u:f%u", static_cast<unsigned long>(t.address), t.width, t.height, t.format);
+            maps += text;
+        }
+        // The colours the combiner reads: konst and C0, and what the vertices' colour (the rasterized channel) came out as.
+        unsigned colourLo[4] = {255, 255, 255, 255}, colourHi[4] = {}, colourSum[4] = {}, counted = 0;
+        for (std::size_t i = batchStart; i < indexUsed && counted < 4096; ++i, ++counted)
+            for (int c = 0; c < 4; ++c) {
+                const unsigned v = vertices[indices[i]].color[c];
+                colourLo[c] = std::min(colourLo[c], v), colourHi[c] = std::max(colourHi[c], v), colourSum[c] += v;
+            }
+        const auto byte = [](float v) { return int(std::lround(v * 255)); };
+        std::string konst;
+        for (int k = 0; k < 4; ++k) {
+            char text[48];
+            std::snprintf(text, sizeof text, " K%d=%d,%d,%d,%d", k, byte(m.konstColors[k][0]), byte(m.konstColors[k][1]), byte(m.konstColors[k][2]),
+                          byte(m.konstColors[k][3]));
+            konst += text;
+        }
+        std::fprintf(stderr, "gx dump:   colours: vertex lo %u,%u,%u,%u avg %u,%u,%u,%u hi %u,%u,%u,%u; C0=%d,%d,%d,%d%s; ksel %x/%x; xf chans %lu ctrl "
+                     "%08lx/%08lx mat %08lx amb %08lx\n", colourLo[0], colourLo[1], colourLo[2], colourLo[3], counted ? colourSum[0] / counted : 0,
+                     counted ? colourSum[1] / counted : 0, counted ? colourSum[2] / counted : 0, counted ? colourSum[3] / counted : 0, colourHi[0],
+                     colourHi[1], colourHi[2], colourHi[3], byte(m.tevColors[0][0]), byte(m.tevColors[0][1]), byte(m.tevColors[0][2]),
+                     byte(m.tevColors[0][3]), konst.c_str(), m.stages[0].konstColor, m.stages[0].konstAlpha, static_cast<unsigned long>(gpuXf[0]),
+                     static_cast<unsigned long>(gpuXf[1]), static_cast<unsigned long>(gpuXf[2]), static_cast<unsigned long>(gpuXf[3]),
+                     static_cast<unsigned long>(gpuXf[4]));
+        std::fprintf(stderr, "gx dump: draw %u: %u tris, box (%.0f,%.0f)-(%.0f,%.0f); blend %u %u/%u, colour %d alpha %d, dst alpha %d:%u, z %d/%u/%d, "
+                     "alpha test %u%s%u, C0 %s; tev%s; maps%s%s\n", dumpIndex++, unsigned((indexUsed - batchStart) / 3), lo[0], lo[1], hi[0], hi[1],
+                     m.blend.type, m.blend.source, m.blend.destination, state.colorUpdate, state.alphaUpdate, state.dstAlphaEnable, state.dstAlpha,
+                     m.depth.enable, m.depth.function, m.depth.update, m.alphaTest.compare0, m.alphaTest.op ? "|" : "&", m.alphaTest.compare1,
+                     state.color0InVertex ? "rides" : "const", stages.c_str(), maps.c_str(), state.program.exact ? "" : " (approximated)");
+        return lo[0] <= 1 && lo[1] <= 1 && hi[0] >= frame.width - 1 && hi[1] >= frame.height - 1;
     }
 
     // The pending primitives as one draw, under the state they share.
@@ -318,10 +411,21 @@ struct Renderer {
                 C3D_TexBind(unit, &texture(state.textures[state.program.units[unit].texture]));
             applied = true, appliedVersion = stateVersion;
         }
+        const bool wholeScreen = dumping && dumpBatch();
         C3D_DrawElements(GPU_TRIANGLES, static_cast<int>(indexUsed - batchStart), C3D_UNSIGNED_SHORT, indices + batchStart);
         ++perf.draws, perf.triangles += (indexUsed - batchStart) / 3;
         batchStart = indexUsed;
         fresh[0] = fresh[1] = false;
+        if (wholeScreen) dumpEfbAverage("after it");
+    }
+
+    // The EFB's average colour so far, read back (dumps only): which full-screen pass changes the picture, and how.
+    void dumpEfbAverage(const char* when) {
+        const u32* pixels = readEfb(false);
+        unsigned long long sum[4] = {};
+        for (unsigned i = 0; i < 240 * 400; ++i)
+            for (int c = 0; c < 4; ++c) sum[c] += pixels[i] >> (24 - 8 * c) & 0xFF;
+        std::fprintf(stderr, "gx dump:   EFB %s: average %llu,%llu,%llu,%llu\n", when, sum[0] / 96000, sum[1] / 96000, sum[2] / 96000, sum[3] / 96000);
     }
 
     // A Wii frame's commands can outgrow citro3d's buffer (or its vertices the port's): the frame is ended and begun
@@ -403,6 +507,11 @@ struct Renderer {
     void textureCopy(const GxCommandProcessor& gpu, std::uint32_t command) {
         GxTextureCopy copy;
         if (const char* why = readTextureCopy(gpu, command, copy)) stop(why);
+        if (dumping)
+            std::fprintf(stderr, "gx dump: copy (%u,%u %ux%u) to 0x%08lx format %u%s%s%s\n", copy.x, copy.y, copy.width, copy.height,
+                         static_cast<unsigned long>(copy.address), copy.format, copy.intensity ? " intensity" : "", copy.halfScale ? " half" : "",
+                         copy.clear ? " clear" : "");
+        if (dumping) flushBatch(), dumpEfbAverage("at the copy");
         if (!inFrame) begin();
         flushBatch();
         if (!sCopiesStayOnGpu || !gpuCopy(gpu, copy)) {
@@ -714,6 +823,7 @@ struct Renderer {
         frame.width = static_cast<float>((size & 0x3FF) + 1), frame.height = static_cast<float>((size >> 10 & 0x3FF) + 1);
         if (!inFrame) begin();
         flushBatch();
+        if (dumping) std::fprintf(stderr, "gx dump: frame ends after %u draws\n", dumpIndex), dumping = false;
         C3D_FrameEnd(0);
         inFrame = false;
         stateValid = false;  // read again each frame, as a Z texture the CPU rewrites would be

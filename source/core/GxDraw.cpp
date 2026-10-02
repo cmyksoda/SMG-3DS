@@ -113,6 +113,8 @@ void readPixel(const GxCommandProcessor& gpu, GxDrawState& out) {
     m.blend.source = static_cast<std::uint8_t>(PE_CMODE0_GET_SFACTOR(blend)), m.blend.destination = static_cast<std::uint8_t>(PE_CMODE0_GET_DFACTOR(blend));
     m.blend.logic = static_cast<std::uint8_t>(PE_CMODE0_GET_LOGICOP(blend));
     out.colorUpdate = PE_CMODE0_GET_COLOR_MASK(blend), out.alphaUpdate = PE_CMODE0_GET_ALPHA_MASK(blend);
+    out.dstAlphaEnable = gpu.bp[0x42] >> PE_CMODE1_CONSTANT_ALPHA_ENABLE_SHIFT & 1;
+    out.dstAlpha = static_cast<std::uint8_t>(PE_CMODE1_GET_CONSTANT_ALPHA(gpu.bp[0x42]));
     const std::uint32_t depth = gpu.bp[0x40];
     m.depth.enable = PE_ZMODE_GET_ENABLE(depth), m.depth.function = static_cast<std::uint8_t>(PE_ZMODE_GET_FUNC(depth));
     m.depth.update = PE_ZMODE_GET_MASK(depth);

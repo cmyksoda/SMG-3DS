@@ -200,6 +200,8 @@ PicaPixel preparePixel(const ModelMaterial& m, const CombinerProgram& program) {
         out.equation = GPU_BLEND_REVERSE_SUBTRACT;
         out.source = out.destination = GPU_ONE;
     }
+    // GX blends alpha as it blends colour, subtracting it too (Dolphin's reference does the same).
+    out.alphaEquation = out.equation, out.alphaSource = out.source, out.alphaDestination = out.destination;
     out.depthTest = m.depth.enable;
     out.depthFunc = depthFunction(m.depth.function);
     out.depthWrite = m.depth.enable && m.depth.update;
@@ -212,7 +214,7 @@ void PicaPixel::apply() const {
     C3D_TexEnvBufUpdate(C3D_RGB, bufferUpdate[0]);
     C3D_TexEnvBufUpdate(C3D_Alpha, bufferUpdate[1]);
     C3D_AlphaTest(alphaTest, alphaFunc, alphaReference);
-    C3D_AlphaBlend(equation, GPU_BLEND_ADD, source, destination, source, destination);
+    C3D_AlphaBlend(equation, alphaEquation, source, destination, alphaSource, alphaDestination);
     C3D_DepthTest(depthTest, depthTest ? depthFunc : GPU_ALWAYS, depthWrite ? GPU_WRITE_ALL : GPU_WRITE_COLOR);
 }
 } // namespace smg

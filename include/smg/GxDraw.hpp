@@ -42,6 +42,9 @@ struct GxDrawState {
     // BP 0xF4/0xF5: depth from the last TEV stage's texture (op 1 add, 2 replace), its texel size 0 u8, 1 u16, 2 u24.
     std::uint8_t depthTextureOp = 0, depthTextureType = 0;
     std::uint32_t depthTextureOffset = 0;
+    // BP 0x42 (GXSetDstAlpha): the EFB keeps this alpha instead of the TEV's, which still blends and is tested.
+    bool dstAlphaEnable = false;
+    std::uint8_t dstAlpha = 0;
     // Set by whoever reads the depth texture: every vertex at this depth (0 near, 1 far).
     bool fixedDepth = false;
     float depth01 = 0;

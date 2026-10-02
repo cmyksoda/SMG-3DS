@@ -25,8 +25,8 @@ struct PicaPixel {
     bool alphaTest = false;
     GPU_TESTFUNC alphaFunc = GPU_ALWAYS;
     int alphaReference = 0;
-    GPU_BLENDEQUATION equation = GPU_BLEND_ADD;
-    GPU_BLENDFACTOR source = GPU_ONE, destination = GPU_ZERO;
+    GPU_BLENDEQUATION equation = GPU_BLEND_ADD, alphaEquation = GPU_BLEND_ADD;
+    GPU_BLENDFACTOR source = GPU_ONE, destination = GPU_ZERO, alphaSource = GPU_ONE, alphaDestination = GPU_ZERO;
     bool depthTest = true, depthWrite = true;
     GPU_TESTFUNC depthFunc = GPU_GEQUAL;
     void apply() const;
