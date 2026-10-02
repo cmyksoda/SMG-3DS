@@ -987,6 +987,12 @@ void J3DPSMtxArrayConcat(Mtx mA, Mtx mB, Mtx mAB, u32 count) {
 }
 #endif  // clang-format on""", 1),
 ])
+# J3DModelX's draw flags are a bitfield read back as a word to pick extra display lists, list i when bit i is set.
+# Metrowerks packs a struct's first bitfield into the word's top bit, GCC into its bottom, so flag _1E (the shadow
+# capture's list 1) sits at bit 30 here: list i is the flag GCC keeps at bit 31 - i.
+adapt("src/Game/Player/J3DModelX.cpp", "Game/Player/J3DModelX.cpp", [
+    ("if (*reinterpret_cast< u32* >(&mFlags) & (1 << i)) {", "if (*reinterpret_cast< u32* >(&mFlags) & (1u << (31 - i))) {", 1),
+])
 # Each weighted envelope is its joints' animated matrices times their inverse binds, weighted; its scale flag
 # holds only if every joint in the mix is unscaled.
 adapt("src/JSystem/J3DGraphAnimator/J3DMtxBuffer.cpp", "JSystem/J3DGraphAnimator/J3DMtxBuffer.cpp", [
