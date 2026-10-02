@@ -100,6 +100,11 @@ struct Renderer {
     } movie[2];
     GxFrame frame;
     bool indirectNoted = false;
+    // Per-frame costs, logged every few seconds (perfLine): what each optimization is measured by.
+    struct Perf {
+        u64 since = 0, renderTicks = 0;
+        u32 frames = 0, primitives = 0, vertices = 0, triangles = 0, draws = 0, sameState = 0, lastBpChanges = ~0u;
+    } perf;
 
     void init() {
         C3D_Init(CommandBytes);
@@ -195,6 +200,9 @@ struct Renderer {
     }
 
     void draw(const GxCommandProcessor& gpu, std::uint8_t kind, std::uint8_t format, std::uint16_t count, const std::uint8_t* data) {
+        ++perf.primitives, perf.vertices += count;
+        if (gpu.bpChanges == perf.lastBpChanges) ++perf.sameState;
+        perf.lastBpChanges = gpu.bpChanges;
         GxDraw& d = drawing;
         buildGxDraw(gpu, kind, format, count, data, frame, d);
         if (d.unsupported) stop(d.unsupported);
@@ -242,6 +250,23 @@ struct Renderer {
         C3D_DrawArrays(GPU_TRIANGLES, 0, static_cast<int>(d.triangles.size()));
         fresh[0] = fresh[1] = false;
         used += d.triangles.size();
+        ++perf.draws, perf.triangles += d.triangles.size() / 3;
+    }
+
+    void perfLine() {
+        const u64 now = svcGetSystemTick();
+        ++perf.frames;
+        if (!perf.since) perf.since = now;
+        const double ms = double(now - perf.since) * 1000.0 / SYSCLOCK_ARM11;
+        if (ms < 4000) return;
+        const double n = perf.frames;
+        std::fprintf(stderr, "gx perf: %lu frames, %.1f ms/frame, render path %.1f ms/frame; per frame %.0f primitives (%.0f same state), "
+                     "%.0f vertices, %.0f triangles, %.0f draws\n", static_cast<unsigned long>(perf.frames), ms / n,
+                     double(perf.renderTicks) * 1000.0 / SYSCLOCK_ARM11 / n, perf.primitives / n, perf.sameState / n, perf.vertices / n,
+                     perf.triangles / n, perf.draws / n);
+        const u32 last = perf.lastBpChanges;
+        perf = Perf{};
+        perf.since = now, perf.lastBpChanges = last;
     }
 
     // A Wii frame's commands can outgrow citro3d's buffer (or its vertices the port's): the frame is ended and begun
@@ -629,7 +654,9 @@ Renderer& renderer() {
 
 void gxRenderPrimitive(const GxCommandProcessor& gpu, std::uint8_t kind, std::uint8_t format, std::uint16_t count, const std::uint8_t* vertices) {
     const PortMemory memory;
+    const u64 start = svcGetSystemTick();
     renderer().draw(gpu, kind, format, count, vertices);
+    renderer().perf.renderTicks += svcGetSystemTick() - start;
 }
 
 void gxRenderCopiesStayOnGpu(bool stay) { sCopiesStayOnGpu = stay; }
@@ -637,7 +664,9 @@ void gxRenderCopiesStayOnGpu(bool stay) { sCopiesStayOnGpu = stay; }
 void gxRenderMovieFrame(const std::uint8_t* y, const std::uint8_t* u, const std::uint8_t* v, unsigned width, unsigned height, unsigned generation,
                         int x, int top, int w, int h) {
     const PortMemory memory;
+    const u64 start = svcGetSystemTick();
     renderer().movieFrame(y, u, v, width, height, generation, x, top, w, h);
+    renderer().perf.renderTicks += svcGetSystemTick() - start;
 }
 
 std::uint32_t gxRenderPeek(const GxCommandProcessor& gpu, unsigned x, unsigned y, bool depth) {
@@ -647,7 +676,10 @@ std::uint32_t gxRenderPeek(const GxCommandProcessor& gpu, unsigned x, unsigned y
 
 void gxRenderCopy(const GxCommandProcessor& gpu, std::uint32_t command) {
     const PortMemory memory;
+    const u64 start = svcGetSystemTick();
     renderer().copy(gpu, command);
+    renderer().perf.renderTicks += svcGetSystemTick() - start;
+    if (command >> 14 & 1) renderer().perfLine();
     // Every 300th frame the game's state is logged (source/compat/GameScene.cpp), from the thread that draws.
     static unsigned frames = 0;
     if (++frames % 300 == 0) smgHeartbeat();
