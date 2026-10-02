@@ -638,6 +638,58 @@ triangles, draws, TEV programs compiled, and the BP registers behind state chang
 clock at about one tick per instruction and charges 150 ticks for each `svcGetSystemTick`, so ticks are read only a
 few times a frame; a New 3DS at 804 MHz should run faster than these numbers.
 
+**Meshes the PICA transforms.** Batching left about 1,100 instructions a vertex, and a 3D scene's vertices are almost
+all in display lists (J3D draws every shape as one), called again each frame with the same bytes. So the command
+processor offers each `GX_CallDisplayList` to the host first (`GxCommandProcessor::Host::displayList`). When the state
+is one the GPU path covers and the list holds only primitives, the renderer decodes it once into a mesh
+(`GxVertexPipeline::buildMesh`: model-space positions, colours, normals, each texgen's input vector, the vertex's matrix
+slot) kept in linear memory, and from then on draws it with the PICA's vertex shader doing the work (`shaders/gx.v.pica`):
+each slot's whole transform as uniform rows, each texgen's folded matrix, and lighting. A mesh is keyed by the list's
+address, size, first and last words, where its colour comes from, its texgens' sources and whether it is lit, and keeps
+the CP registers it was decoded under; only its own formats' tables and the arrays it reads count, since the matrix
+arrays change every frame without touching it. The game's cache maintenance (`DCFlushRange`, `DCStoreRange`,
+`DCInvalidateRange`, `DCZeroRange`) marks memory as changed through a bitmap of the pages meshes came from and a small
+queue the renderer drains; the hook never takes the FIFO's lock, as it can run holding the CPU's (taking it hung the
+title). A mesh over changed memory is dropped. Lighting runs in the shader as `GxLighting::apply` does it: up to four
+light entries, each a light under one colour part's settings. Spot or specular attenuation and the diffuse function are
+numbers mixed in, not branches, so an actor (colour lit by lights 0 and 1, alpha by light 2 with other settings) is one
+loop. Positions come prescaled, as the SDK puts directional lights at 1e18 and the PICA's 24-bit floats overflow near
+1.8e19 when squared. An instruction's second source can't be a uniform (picasso: "invalid source2 register"), so zero
+and one live in a temporary. A lit slot takes ten rows (clip, modelview, normal); four fit, so a lit list naming more
+slots is drawn in groups of four (`GxMesh::Group`, its vertices copied per group), each group's draw reserving its own
+room in the command list, since `GPUCMD_Add` drops what doesn't fit without a word. `gxMeshModel` is the shader in C++:
+host tests check it against the CPU path for point, directional, spot and specular light and for six-bone groups, and
+`dev.gx_check=1` checks every new mesh in the game the same way, vertex by vertex and index by index. In the Star
+Festival plaza a frame went from 605 ms (CPU path, batched) to about 117 ms, with the picture the same to within 0.6% of
+the pixels' range over Mario.
+
+**The FIFO without a lock per word, and copies that stay.** With the renderer switched off (`dev.gx_null=1`) the game's
+own work still took 45 to 50 ms a frame, much of it in GX writes: each word took the FIFO's lock (a fair lock built on a
+mutex and a condition variable). The lock is now an atomic ticket lock that only waits through the kernel's arbiter, and
+the main GX thread's writes gather in a 16 KB buffer as the Wii's write-gather pipe gathers them, handed to the command
+processor at `GXFlush` (which the SDK calls before every wait for draw-done or a token), before a peek or a movie frame,
+when the copy mode changes and when full; the processor reads a whole flushed buffer in place. The writes themselves are
+inline stores (`smg/GxFifoWrite.h`: which thread from the thread-local storage register, then bytes stored big-endian);
+another thread, or a full buffer, takes `GxFifo.cpp`'s way. One EFB copy a frame still went through the CPU, reading
+the whole target back and encoding it, then decoding it again for the next draw: Mario's shadow, which `MarioShadow`
+captures with `JUTTexture::captureDolTexture` into a texture it only draws with. That copy cost 25 ms a frame; it now
+stays on the GPU as `JUTTexture::capture`'s do, and the plaza takes about 80 to 85 ms a frame.
+
+**The haze.** The Star Festival looked washed out, as if the brightness were turned up. Frame dumps (`dev.gx_dump=1`,
+which lists a frame's draws with their state and the EFB's average after each) found it in the bloom's blur: six taps of
+one map, more than the PICA's three texture units, and each tap past the third read as one (white). A tap whose map a
+unit already samples now shares that unit, which keeps five of the six weights and the picture right
+(`CombinerTests` checks a six-tap blur is never brighter than its map).
+
+**Development settings.** Keys in `settings.ini` for development only, written back only when on: `dev.skip_story=1`
+skips the prologue's storybook and movies; `dev.gx_dump=1` dumps a frame's draws to the log once a minute;
+`dev.gx_null=1` draws nothing, to measure the game's own work; `dev.gx_timing=1` adds the renderer's parts to the perf
+line (CPU-path primitives, display lists, texture copies, frame ends; each clock read costs Azahar 150 cycles, so it
+slows what it measures a little) with the vertices of refused lists by reason; `dev.gx_check=1` checks each new mesh
+against the CPU path. Azahar runs the 3DS CPU at its base 268 MHz although the port switches a New 3DS to 804 MHz
+(`osSetSpeedupEnable`), so every millisecond figure here is a slow-clock one; how much faster hardware is can only be
+measured on hardware.
+
 **More byte-order traps.** Data the GPU reads must hold the Wii's bytes even when the source wrote it as wider
 integers: `MainLoopFramework`'s `clearZTexData` (Z24X8 texels as `u32`s) cleared every frame to near on ARM, and every
 3D draw then failed its depth test. The SDK's GX read `GXColor` arguments through `u32` casts (TEV, konst, fog, light
