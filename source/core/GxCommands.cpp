@@ -1,4 +1,5 @@
 #include <smg/GxCommands.hpp>
+#include <algorithm>
 #include <cstring>
 
 namespace smg {
@@ -193,6 +194,28 @@ void GxVertexLayout::read(const std::uint8_t* at, GxVertex& vertex) const {
     }
 }
 
+std::uint16_t GxVertexLayout::indexedArrays() const {
+    std::uint16_t arrays = 0;
+    const Attribute* attributes[12] = {&position_, &normal_, &color_[0], &color_[1], &texcoord_[0], &texcoord_[1], &texcoord_[2],
+                                       &texcoord_[3], &texcoord_[4], &texcoord_[5], &texcoord_[6], &texcoord_[7]};
+    for (int i = 0; i < 12; ++i)
+        if (attributes[i]->type >= 2) arrays = static_cast<std::uint16_t>(arrays | 1u << i);
+    return arrays;
+}
+
+void GxVertexLayout::indexedSpan(const std::uint8_t* at, const std::uint8_t*& lo, const std::uint8_t*& hi) const {
+    at += matrixIndex_;
+    for (int i = 0; i < 8; ++i) at += texMatrixIndexes_ >> i & 1;
+    const auto widen = [&](const Attribute& a) {
+        if (!a.type) return;
+        if (a.type == 1) return void(at += a.directSize);
+        const std::uint8_t* element = source(a, at);
+        lo = std::min(lo, element), hi = std::max(hi, element + a.directSize);
+    };
+    widen(position_), widen(normal_), widen(color_[0]), widen(color_[1]);
+    for (const Attribute& t : texcoord_) widen(t);
+}
+
 bool GxCommandProcessor::drawsRead(std::uint32_t address) { return drawsReadRegister(address); }
 
 const GxVertexLayout& GxCommandProcessor::layout(std::uint8_t format) const {
@@ -268,7 +291,8 @@ std::uint32_t GxCommandProcessor::command(const std::uint8_t* at, std::uint32_t 
     }
     if (opcode == 0x40) {  // call a display list at its physical address
         if (available < 9) return 0;
-        run(host_.memory(word(at + 1)), word(at + 5));
+        ++displayListCalls, displayListBytes += word(at + 5);
+        if (!host_.displayList || !host_.displayList(word(at + 1), word(at + 5))) run(host_.memory(word(at + 1)), word(at + 5));
         return 9;
     }
     if (opcode >= 0x80 && opcode < 0xC0) {  // a primitive: its vertex count, then the vertices in its format

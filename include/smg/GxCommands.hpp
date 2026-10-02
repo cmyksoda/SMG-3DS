@@ -19,6 +19,10 @@ public:
     GxVertexLayout(const GxCommandProcessor& gpu, std::uint8_t format);
     // Overwrites the attributes the format has; the others keep what `vertex` held.
     void read(const std::uint8_t* at, GxVertex& vertex) const;
+    // The arrays (0 position, 1 normal, 2-3 colours, 4-11 texture coordinates) this format reads by index, a bit each.
+    std::uint16_t indexedArrays() const;
+    // Widens [lo, hi) over the array elements the vertex at `at` reads by index (what a cached copy depends on).
+    void indexedSpan(const std::uint8_t* at, const std::uint8_t*& lo, const std::uint8_t*& hi) const;
     std::uint32_t size = 0;
 
 private:
@@ -58,6 +62,8 @@ public:
         void (*primitive)(std::uint8_t kind, std::uint8_t format, std::uint16_t count, const std::uint8_t* vertices);
         // BP 0x52: the pixel engine copies the EFB out (to the display, or to a texture), its settings in bp[0x49...0x52].
         void (*copy)(std::uint32_t command);
+        // A display list called (physical address, bytes): true when the host drew it whole, so it isn't read here.
+        bool (*displayList)(std::uint32_t physical, std::uint32_t size) = nullptr;
     };
     explicit GxCommandProcessor(const Host& host) : host_(host) {}
 
@@ -85,6 +91,8 @@ public:
     // Loads that changed something, by kind: equal counts mean that part of the state is as it was. bpChanges counts only
     // the BP registers a draw reads (TEV, textures, pixel tests, scissor, culling), so a run of primitives can share one draw.
     std::uint32_t bpChanges = 0, xfChanges = 0, cpChanges = 0;
+    // Display lists called, and their bytes (for the renderer's perf line).
+    std::uint32_t displayListCalls = 0, displayListBytes = 0;
 
 private:
     // One command from `at` if all of it is there: its length, or 0 to wait for more bytes.
