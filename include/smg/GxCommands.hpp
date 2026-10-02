@@ -17,6 +17,9 @@ class GxVertexLayout {
 public:
     GxVertexLayout() = default;
     GxVertexLayout(const GxCommandProcessor& gpu, std::uint8_t format);
+    // After a CP change: when the format's words are the ones it was read from, only its arrays' bases and strides
+    // are read again (J3D sets the arrays before every shape) and this returns true.
+    bool refresh(const GxCommandProcessor& gpu, std::uint8_t format);
     // Overwrites the attributes the format has; the others keep what `vertex` held.
     void read(const std::uint8_t* at, GxVertex& vertex) const;
     // The arrays (0 position, 1 normal, 2-3 colours, 4-11 texture coordinates) this format reads by index, a bit each.
@@ -32,7 +35,7 @@ private:
     struct Attribute;
     using Decoder = void (*)(const Attribute&, const std::uint8_t*&, float*);
     struct Attribute {
-        std::uint8_t type = 0, format = 0, count = 0, shift = 0, skip = 0, componentSize = 0, directSize = 0;
+        std::uint8_t type = 0, format = 0, count = 0, shift = 0, skip = 0, componentSize = 0, directSize = 0, arrayIndex = 0;
         std::uint32_t base = 0, stride = 0;
         float scale = 1;
         const std::uint8_t* array = nullptr;
@@ -44,6 +47,8 @@ private:
     static Decoder pick(const Attribute& a);
     bool matrixIndex_ = false;
     std::uint8_t texMatrixIndexes_ = 0;
+    std::uint32_t words_[5] = {};  // VCD low and high, VAT A, B and C as read
+    bool read_ = false;
     Attribute position_, normal_, color_[2], texcoord_[8];
     std::uint8_t texcoords_[8] = {}, texcoordCount_ = 0;  // the sets the format has, in order
 };

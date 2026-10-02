@@ -86,6 +86,7 @@ void readColor(const std::uint8_t* at, std::uint32_t format, bool native, std::u
 
 GxVertexLayout::GxVertexLayout(const GxCommandProcessor& gpu, std::uint8_t format) {
     const std::uint32_t lo = gpu.cp[VcdLo], hi = gpu.cp[VcdHi], a = gpu.cp[VatA + format], b = gpu.cp[VatB + format], c = gpu.cp[VatC + format];
+    words_[0] = lo, words_[1] = hi, words_[2] = a, words_[3] = b, words_[4] = c, read_ = true;
     matrixIndex_ = field(lo, 0, 1);
     size = matrixIndex_;
     for (int i = 0; i < 8; ++i) {
@@ -96,6 +97,7 @@ GxVertexLayout::GxVertexLayout(const GxCommandProcessor& gpu, std::uint8_t forma
         at.type = static_cast<std::uint8_t>(type), at.format = static_cast<std::uint8_t>(fmt), at.count = static_cast<std::uint8_t>(count);
         at.shift = static_cast<std::uint8_t>(shift), at.componentSize = static_cast<std::uint8_t>(componentSize(fmt));
         at.base = gpu.cp[ArrayBase + array], at.stride = gpu.cp[ArrayStride + array], at.directSize = static_cast<std::uint8_t>(direct);
+        at.arrayIndex = static_cast<std::uint8_t>(array);
         at.scale = 1.0f / static_cast<float>(1u << at.shift);
         // The host's memory is one offset from the Wii's addresses, so an array's elements follow its base there too.
         if (type >= 2) at.array = gpu.memoryFunction()(at.base);
@@ -218,9 +220,25 @@ void GxVertexLayout::indexedSpan(const std::uint8_t* at, const std::uint8_t*& lo
 
 bool GxCommandProcessor::drawsRead(std::uint32_t address) { return drawsReadRegister(address); }
 
+bool GxVertexLayout::refresh(const GxCommandProcessor& gpu, std::uint8_t format) {
+    if (!read_ || words_[0] != gpu.cp[VcdLo] || words_[1] != gpu.cp[VcdHi] || words_[2] != gpu.cp[VatA + format] ||
+        words_[3] != gpu.cp[VatB + format] || words_[4] != gpu.cp[VatC + format])
+        return false;
+    for (Attribute* at : {&position_, &normal_, &color_[0], &color_[1], &texcoord_[0], &texcoord_[1], &texcoord_[2], &texcoord_[3], &texcoord_[4],
+                          &texcoord_[5], &texcoord_[6], &texcoord_[7]}) {
+        if (at->type < 2) continue;
+        at->base = gpu.cp[ArrayBase + at->arrayIndex], at->stride = gpu.cp[ArrayStride + at->arrayIndex];
+        at->array = gpu.memoryFunction()(at->base);
+    }
+    return true;
+}
+
 const GxVertexLayout& GxCommandProcessor::layout(std::uint8_t format) const {
     format &= 7;
-    if (layoutChanges_[format] != cpChanges) layouts_[format] = GxVertexLayout(*this, format), layoutChanges_[format] = cpChanges;
+    if (layoutChanges_[format] != cpChanges) {
+        if (!layouts_[format].refresh(*this, format)) layouts_[format] = GxVertexLayout(*this, format);
+        layoutChanges_[format] = cpChanges;
+    }
     return layouts_[format];
 }
 

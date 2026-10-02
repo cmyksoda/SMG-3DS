@@ -143,6 +143,14 @@ void vertices() {
     const smg::GxVertex indexed = gpu->readVertex(&index, 2);
     check(indexed.position[0] == 10.0f && indexed.position[1] == -3.0f && indexed.position[2] == 0.5f,
           "an indexed position read from its array at base plus index times stride, in the CPU's order");
+    // J3D moves the arrays before each shape: the layout follows the new base without being read again.
+    const float moved[] = {-7.0f, 4.0f, 2.0f};
+    std::memcpy(displayList.data() + 40 + 12, moved, sizeof moved);
+    gpu->cp[0xA0] = 40, ++gpu->cpChanges;
+    const smg::GxVertex follows = gpu->readVertex(&index, 2);
+    check(follows.position[0] == -7.0f && follows.position[2] == 2.0f, "a layout follows its array's new base");
+    gpu->cp[0x50] = 3u << 9, ++gpu->cpChanges;
+    check(gpu->vertexSize(2) == 2, "and is read again when the descriptor changes (index16)");
     delete gpu;
 }
 } // namespace
