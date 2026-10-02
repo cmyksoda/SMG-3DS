@@ -773,9 +773,8 @@ adapt("libs/RVL_SDK/include/revolution/gx/GXVert.h", "include/revolution/gx/GXVe
     ("#ifdef __MWERKS__\nvolatile PPCWGPipe GXWGFifo : 0xCC008000;\n#else\nvolatile PPCWGPipe GXWGFifo;\n#endif",
      "#ifdef __MWERKS__\nvolatile PPCWGPipe GXWGFifo : 0xCC008000;\n#define GXWGFIFO_PUT(td, v) (GXWGFifo.td = (td)(v))\n#else\n"
      "extern volatile PPCWGPipe GXWGFifo;\n"
-     "// The pipe to the GPU is the port's FIFO, which takes each value big-endian as the Wii's pipe does\n"
-     "// (source/compat/GxFifo.cpp; programs without the whole game stop at their first write).\n"
-     "#ifdef __cplusplus\nextern \"C\" {\n#endif\nvoid smgGXFifo_u8(u8);\nvoid smgGXFifo_s8(s8);\nvoid smgGXFifo_u16(u16);\nvoid smgGXFifo_s16(s16);\nvoid smgGXFifo_u32(u32);\nvoid smgGXFifo_s32(s32);\nvoid smgGXFifo_f32(f32);\n#ifdef __cplusplus\n}\n#endif\n#define GXWGFIFO_PUT(td, v) smgGXFifo_##td((td)(v))\n#endif", 1),
+     "// The pipe to the GPU is the port's FIFO, which takes each value big-endian as the Wii's pipe does.\n"
+     "#include <smg/GxFifoWrite.h>\n#define GXWGFIFO_PUT(td, v) smgGXFifo_##td((td)(v))\n#endif", 1),
     ("GXWGFifo.td = (td)x;", "GXWGFIFO_PUT(td, x);", 4),
     ("GXWGFifo.td = (td)y;", "GXWGFIFO_PUT(td, y);", 3),
     ("GXWGFifo.td = (td)z;", "GXWGFIFO_PUT(td, z);", 2),
@@ -1536,7 +1535,7 @@ adapt("libs/RVL_SDK/include/revolution/gx/GXRegs.h", "include/revolution/gx/GXRe
     (f"#define GX_WRITE_{kind}({arg}) gxfifo.{field} = ({cast})({arg})", f"#define GX_WRITE_{kind}({arg}) smgGXFifo_{cast}(({cast})({arg}))", 1)
     for kind, arg, field, cast in [("U8", "ub", "u8", "u8"), ("U16", "us", "u16", "u16"), ("S16", "us", "s16", "u16"),
                                    ("U32", "ui", "u32", "u32"), ("F32", "f", "f32", "f32")]
-] + [("#define MEM_PE_REQCOUNTH_IDX", "#ifdef __cplusplus\nextern \"C\" {\n#endif\nvoid smgGXFifo_u8(u8);\nvoid smgGXFifo_s8(s8);\nvoid smgGXFifo_u16(u16);\nvoid smgGXFifo_s16(s16);\nvoid smgGXFifo_u32(u32);\nvoid smgGXFifo_s32(s32);\nvoid smgGXFifo_f32(f32);\n#ifdef __cplusplus\n}\n#endif\n\n#define MEM_PE_REQCOUNTH_IDX", 1),
+] + [("#define MEM_PE_REQCOUNTH_IDX", "#include <smg/GxFifoWrite.h>\n\n#define MEM_PE_REQCOUNTH_IDX", 1),
       # Upstream's fallbacks for other compilers are empty, fit only for an editor's parser: the counters read
       # nothing and FAST_FLAG_SET, which packs every register's fields, does nothing. GCC gets real ones:
       # Metrowerks' counter reader, and rlwimi's insert under its mask in C.

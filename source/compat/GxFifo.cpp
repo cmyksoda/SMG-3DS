@@ -96,37 +96,28 @@ void put(const u8* bytes, u32 count) {
     sFifoLock.unlock();
 }
 
-// The main GX thread's writes, as the Wii's write-gather pipe gathers them: plain stores here, handed to the command
-// processor at GXFlush (which the SDK calls before every wait for draw-done or a token), before a peek, a movie frame
-// or a change of how copies are kept, and when full. The Wii's GPU reads its FIFO behind the CPU in the same way.
-// Other threads (rare GX writers, which may never flush) write through at once.
-u32 sBufferedThread = 0;
+// The main GX thread's writes, as the Wii's write-gather pipe gathers them: inline stores (smg/GxFifoWrite.h), handed
+// to the command processor at GXFlush (which the SDK calls before every wait for draw-done or a token), before a peek,
+// a movie frame or a change of how copies are kept, and when full. The Wii's GPU reads its FIFO behind the CPU in the
+// same way. Other threads (rare GX writers, which may never flush) write through at once.
 alignas(4) u8 sBuffer[0x4000];
-u32 sBuffered = 0;
+} // namespace
 
-void flushBuffer() {
-    if (!sBuffered) return;
-    put(sBuffer, sBuffered);
-    sBuffered = 0;
+extern "C" {
+unsigned char* smgFifoAt = sBuffer;
+unsigned char* smgFifoEnd = sBuffer;  // nothing gathers until the first writer is known
+void* smgFifoThread = nullptr;
 }
 
-inline void write(const u8* bytes, u32 count) {
-    const u32 self = reinterpret_cast<u32>(getThreadLocalStorage());
-    if (!sBufferedThread) sBufferedThread = self;  // the first GX writer, GXInit's: the game's main thread
-    if (self != sBufferedThread) return put(bytes, count);
-    if (sBuffered + count > sizeof sBuffer) flushBuffer();
-    std::memcpy(sBuffer + sBuffered, bytes, count);
-    sBuffered += count;
+namespace {
+void flushBuffer() {
+    if (smgFifoAt == sBuffer) return;
+    put(sBuffer, static_cast<u32>(smgFifoAt - sBuffer));
+    smgFifoAt = sBuffer;
 }
 
 void flushIfBuffering() {
-    if (reinterpret_cast<u32>(getThreadLocalStorage()) == sBufferedThread) flushBuffer();
-}
-
-void putBigEndian(u32 value, u32 bytes) {
-    u8 order[4];
-    for (u32 i = 0; i < bytes; ++i) order[i] = static_cast<u8>(value >> (8 * (bytes - 1 - i)));
-    write(order, bytes);
+    if (getThreadLocalStorage() == smgFifoThread) flushBuffer();
 }
 } // namespace
 
@@ -165,15 +156,14 @@ volatile void* smgUnportedRegisters(const char* block) {
 
 void smgGXFifoFlush() { flushIfBuffering(); }
 
-void smgGXFifo_u8(u8 value) { write(&value, 1); }
-void smgGXFifo_s8(s8 value) { write(reinterpret_cast<const u8*>(&value), 1); }
-void smgGXFifo_u16(u16 value) { putBigEndian(value, 2); }
-void smgGXFifo_s16(s16 value) { putBigEndian(static_cast<u16>(value), 2); }
-void smgGXFifo_u32(u32 value) { putBigEndian(value, 4); }
-void smgGXFifo_s32(s32 value) { putBigEndian(static_cast<u32>(value), 4); }
-void smgGXFifo_f32(f32 value) {
-    u32 bits;
-    std::memcpy(&bits, &value, 4);
-    putBigEndian(bits, 4);
+void smgGXFifoSlow(unsigned value, unsigned bytes) {
+    void* const self = getThreadLocalStorage();
+    if (!smgFifoThread) smgFifoThread = self, smgFifoEnd = sBuffer + sizeof sBuffer;  // the first GX writer, GXInit's: the main thread
+    u8 order[4];
+    for (unsigned i = 0; i < bytes; ++i) order[i] = static_cast<u8>(value >> (8 * (bytes - 1 - i)));
+    if (self != smgFifoThread) return put(order, bytes);
+    if (smgFifoAt + bytes > smgFifoEnd) flushBuffer();
+    std::memcpy(smgFifoAt, order, bytes);
+    smgFifoAt += bytes;
 }
 }
