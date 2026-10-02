@@ -325,6 +325,17 @@ void GxCommandProcessor::put(unsigned stream, const std::uint8_t* bytes, std::ui
     if (stream >= Streams) return host_.unsupported("a FIFO stream past the processor's", stream);
     std::uint8_t* pending = pending_[stream];
     std::uint32_t& size = pendingSize_[stream];
+    if (!size && count > 8) {
+        // A buffer of whole commands (a flushed write buffer): read where it is, keeping only an unfinished tail.
+        std::uint32_t read = 0;
+        while (read < count) {
+            const std::uint32_t used = command(bytes + read, count - read);
+            if (!used) break;
+            read += used;
+        }
+        bytes += read, count -= read;
+        if (!count) return void(needed_[stream] = 0);
+    }
     if (size + count > sizeof pending_[stream]) {
         host_.unsupported("a command longer than the FIFO's staging", size + count);
         return;

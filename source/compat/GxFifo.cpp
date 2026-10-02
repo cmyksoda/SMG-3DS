@@ -5,11 +5,16 @@
 #include <smg/GxRender.hpp>
 #include <revolution/os.h>
 #include <revolution/os/OSInterrupt.h>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
 extern "C" void smgRaiseInterrupt(__OSInterrupt interrupt);
+// GX words written so far, for the renderer's perf line (source/compat/GxRender.cpp).
+extern "C" {
+unsigned smgFifoWrites = 0;
+}
 
 namespace {
 // The processor interface, command processor, pixel engine and memory interface blocks, 4 KiB each on the Wii.
@@ -37,57 +42,91 @@ smg::GxCommandProcessor& processor() {
 }
 
 // Turns go in the order threads asked. The main thread blocks only on the 3DS's frame sync, inside a draw, so with
-// libctru's unfair locks it relocks first every time and a set-up thread's GX writes never got in.
+// libctru's unfair locks it relocks first every time and a set-up thread's GX writes never got in. A ticket lock in
+// atomics: every GX word written takes it, so an uncontended turn costs two atomic adds; only a wait asks the kernel.
 class FairLock {
 public:
     void lock() {
         const u32 self = reinterpret_cast<u32>(getThreadLocalStorage());
         if (owner_ == self) return void(++depth_);
-        LightLock_Lock(&guard_);
-        const u32 ticket = next_++;
-        while (serving_ != ticket) CondVar_Wait(&turn_, &guard_);
+        const s32 ticket = next_.fetch_add(1, std::memory_order_relaxed);
+        for (s32 serving; (serving = serving_.load(std::memory_order_acquire)) != ticket;) {
+            // The kernel waits while the word is below the ticket; across the counters' wrap that test fails, so yield.
+            if (serving < ticket) syncArbitrateAddress(reinterpret_cast<s32*>(&serving_), ARBITRATION_WAIT_IF_LESS_THAN, ticket);
+            else svcSleepThread(0);
+        }
         owner_ = self, depth_ = 1;
-        LightLock_Unlock(&guard_);
     }
     void unlock() {
         if (--depth_) return;
-        LightLock_Lock(&guard_);
         owner_ = 0;
-        if (next_ != ++serving_) CondVar_Broadcast(&turn_);
-        LightLock_Unlock(&guard_);
+        const s32 next = serving_.fetch_add(1, std::memory_order_release) + 1;
+        if (next_.load(std::memory_order_relaxed) != next)
+            syncArbitrateAddress(reinterpret_cast<s32*>(&serving_), ARBITRATION_SIGNAL, ARBITRATION_SIGNAL_ALL);
     }
 
 private:
-    LightLock guard_ = 1;
-    CondVar turn_ = 0;
-    u32 next_ = 0, serving_ = 0;
+    std::atomic<s32> next_{0}, serving_{0};
     volatile u32 owner_ = 0;
     unsigned depth_ = 0;
 };
+static_assert(sizeof(std::atomic<s32>) == sizeof(s32), "the arbiter waits on the counter's own word");
 
 // Each thread writing GX has its own stream, so a thread preempted in the middle of a command (the Wii's single
 // write-gather pipe allowed that too, in a narrower window) can't have another thread's commands spliced into it.
 FairLock sFifoLock;
+// Each stream's thread, by its thread-local storage pointer (a thread_local here would cost a call per word).
+u32 sStreamOwners[smg::GxCommandProcessor::Streams] = {};
 unsigned sStreamsGiven = 0;
 
 void put(const u8* bytes, u32 count) {
-    thread_local int stream = -1;
+    const u32 self = reinterpret_cast<u32>(getThreadLocalStorage());
     sFifoLock.lock();
-    if (stream < 0) {
+    unsigned stream = 0;
+    while (stream < sStreamsGiven && sStreamOwners[stream] != self) ++stream;
+    if (stream == sStreamsGiven) {
         if (sStreamsGiven == smg::GxCommandProcessor::Streams) {
             std::fputs("The Wii GPU's FIFO: more threads write GX than the port keeps streams for\n", stderr);
             std::abort();
         }
-        stream = static_cast<int>(sStreamsGiven++);
+        sStreamOwners[sStreamsGiven++] = self;
     }
-    processor().put(static_cast<unsigned>(stream), bytes, count);
+    ++smgFifoWrites;
+    processor().put(stream, bytes, count);
     sFifoLock.unlock();
+}
+
+// The main GX thread's writes, as the Wii's write-gather pipe gathers them: plain stores here, handed to the command
+// processor at GXFlush (which the SDK calls before every wait for draw-done or a token), before a peek, a movie frame
+// or a change of how copies are kept, and when full. The Wii's GPU reads its FIFO behind the CPU in the same way.
+// Other threads (rare GX writers, which may never flush) write through at once.
+u32 sBufferedThread = 0;
+alignas(4) u8 sBuffer[0x4000];
+u32 sBuffered = 0;
+
+void flushBuffer() {
+    if (!sBuffered) return;
+    put(sBuffer, sBuffered);
+    sBuffered = 0;
+}
+
+inline void write(const u8* bytes, u32 count) {
+    const u32 self = reinterpret_cast<u32>(getThreadLocalStorage());
+    if (!sBufferedThread) sBufferedThread = self;  // the first GX writer, GXInit's: the game's main thread
+    if (self != sBufferedThread) return put(bytes, count);
+    if (sBuffered + count > sizeof sBuffer) flushBuffer();
+    std::memcpy(sBuffer + sBuffered, bytes, count);
+    sBuffered += count;
+}
+
+void flushIfBuffering() {
+    if (reinterpret_cast<u32>(getThreadLocalStorage()) == sBufferedThread) flushBuffer();
 }
 
 void putBigEndian(u32 value, u32 bytes) {
     u8 order[4];
     for (u32 i = 0; i < bytes; ++i) order[i] = static_cast<u8>(value >> (8 * (bytes - 1 - i)));
-    put(order, bytes);
+    write(order, bytes);
 }
 } // namespace
 
@@ -104,6 +143,7 @@ volatile void* smgGXRegisters(int unit) { return sRegisters[unit]; }
 
 // GXPeekARGB and GXPeekZ, from any thread: the renderer is the FIFO's, so its lock is taken (after the CPU, as ever).
 u32 smgPeekEfb(u16 x, u16 y, int depth) {
+    flushIfBuffering();
     sFifoLock.lock();
     const u32 value = smg::gxRenderPeek(processor(), x, y, depth != 0);
     sFifoLock.unlock();
@@ -112,6 +152,7 @@ u32 smgPeekEfb(u16 x, u16 y, int depth) {
 
 // THPGXYuv2RgbDraw (source/compat/Thp.cpp): the renderer is the FIFO's, as for peeks.
 void smgDrawMovieFrame(const u8* y, const u8* u, const u8* v, unsigned width, unsigned height, unsigned generation, int x, int top, int w, int h) {
+    flushIfBuffering();
     sFifoLock.lock();
     smg::gxRenderMovieFrame(y, u, v, width, height, generation, x, top, w, h);
     sFifoLock.unlock();
@@ -122,8 +163,10 @@ volatile void* smgUnportedRegisters(const char* block) {
     std::abort();
 }
 
-void smgGXFifo_u8(u8 value) { put(&value, 1); }
-void smgGXFifo_s8(s8 value) { put(reinterpret_cast<const u8*>(&value), 1); }
+void smgGXFifoFlush() { flushIfBuffering(); }
+
+void smgGXFifo_u8(u8 value) { write(&value, 1); }
+void smgGXFifo_s8(s8 value) { write(reinterpret_cast<const u8*>(&value), 1); }
 void smgGXFifo_u16(u16 value) { putBigEndian(value, 2); }
 void smgGXFifo_s16(s16 value) { putBigEndian(static_cast<u16>(value), 2); }
 void smgGXFifo_u32(u32 value) { putBigEndian(value, 4); }

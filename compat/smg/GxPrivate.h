@@ -13,6 +13,8 @@ volatile void* smgGXRegisters(int unit);
 volatile void* smgAudioRegisters(void);
 // GXPeekARGB and GXPeekZ's pixel (source/compat/GxFifo.cpp): 0xAARRGGBB, or Z with nearer smaller.
 u32 smgPeekEfb(u16 x, u16 y, int depth);
+// GXFlush: the calling thread's GX writes so far reach the command processor (source/compat/GxFifo.cpp).
+void smgGXFifoFlush(void);
 // Any other Wii hardware block: touching it stops the program by name.
 volatile void* smgUnportedRegisters(const char* block);
 #ifdef __cplusplus

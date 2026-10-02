@@ -29,6 +29,8 @@
 
 extern "C" void smgHeartbeat();          // source/compat/GameScene.cpp
 extern "C" unsigned smgMovieDecodes();  // source/compat/Thp.cpp
+extern "C" unsigned smgFifoWrites;       // source/compat/GxFifo.cpp
+extern "C" void smgGXFifoFlush();
 extern "C" int smgDevGxDump();           // source/compat/Kpad.cpp
 extern "C" void (*smgGpuMemoryChanged)(const void* start, u32 size);  // source/compat/Os.cpp
 
@@ -164,7 +166,7 @@ struct Renderer {
         u32 meshInvalidated = 0, meshOverflows = 0, meshBudgetDrops = 0, meshMismatches = 0, flushesQueued = 0;
         u32 refused[GxVertexPipeline::MeshRefusals] = {}, refusedOpcode[0x100] = {};
         u32 changed[0x100] = {};  // per BP register: state rebuilds it took part in
-        u32 compilesBefore = gxTevCompiles(), moviesBefore = smgMovieDecodes(), listsBefore = 0, listBytesBefore = 0;
+        u32 compilesBefore = gxTevCompiles(), moviesBefore = smgMovieDecodes(), listsBefore = 0, listBytesBefore = 0, writesBefore = smgFifoWrites;
     } perf;
     // The BP registers a draw reads and the TEV colour and konst words, as of the last state built.
     u32 bpAtBuild[0x100] = {}, colorAtBuild[8] = {}, konstAtBuild[8] = {};
@@ -730,8 +732,8 @@ struct Renderer {
             perf.refusedOpcode[most - perf.refusedOpcode] = 0;
         }
         std::fprintf(stderr, "gx perf: display lists refused by reason (per frame):%s; meshes invalidated %.1f, overflows %.1f, over budget %.1f, "
-                     "key mismatches %.1f, flushes queued %.1f\n", refusals.c_str(), perf.meshInvalidated / n, perf.meshOverflows / n,
-                     perf.meshBudgetDrops / n, perf.meshMismatches / n, perf.flushesQueued / n);
+                     "key mismatches %.1f, flushes queued %.1f; GX FIFO writes %.0f per frame\n", refusals.c_str(), perf.meshInvalidated / n,
+                     perf.meshOverflows / n, perf.meshBudgetDrops / n, perf.meshMismatches / n, perf.flushesQueued / n, (smgFifoWrites - perf.writesBefore) / n);
         perf = Perf{};
         perf.since = now, perf.listsBefore = lastGpu->displayListCalls, perf.listBytesBefore = lastGpu->displayListBytes;
     }
@@ -1107,7 +1109,10 @@ void gxRenderPrimitive(const GxCommandProcessor& gpu, std::uint8_t kind, std::ui
     renderer().draw(gpu, kind, format, count, vertices);
 }
 
-void gxRenderCopiesStayOnGpu(bool stay) { sCopiesStayOnGpu = stay; }
+void gxRenderCopiesStayOnGpu(bool stay) {
+    smgGXFifoFlush();  // copies already written take the way they were written under
+    sCopiesStayOnGpu = stay;
+}
 
 bool gxRenderDisplayList(const GxCommandProcessor& gpu, std::uint32_t address, std::uint32_t size) {
     const PortMemory memory;

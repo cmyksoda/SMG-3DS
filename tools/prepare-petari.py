@@ -2083,8 +2083,10 @@ adapt("src/RVL_SDK/gx/GXInit.c", "RVL_SDK/gx/GXInit.c", [
 adapt("src/RVL_SDK/gx/GXDisplayList.c", "RVL_SDK/gx/GXDisplayList.c", [('#include "revolution/gx.h"\n', '#include "revolution/gx.h"\n#include <smg/GxPrivate.h>\n', 1)])
 # GXPeekARGB and GXPeekZ read the EFB through the Wii's memory window onto it; reading the port's render target back
 # is still to come, so each stops by name.
+# GXFlush pushes the write-gather pipe out to the GPU: the port hands the thread's write buffer to its command processor.
 adapt("src/RVL_SDK/gx/GXMisc.c", "RVL_SDK/gx/GXMisc.c", [
     ('#include "revolution/gx.h"\n', '#include "revolution/gx.h"\n#include <smg/GxPrivate.h>\n', 1),
+    ("    GX_WRITE_U32(0);\n    PPCSync();\n}", "    GX_WRITE_U32(0);\n    smgGXFifoFlush();\n    PPCSync();\n}", 1),
     # The EFB's pixels come from the port's renderer, which reads its target back.
     ("void GXPeekARGB(u16 x, u16 y, u32* color) {\n    u32 addr = (u32) OSPhysicalToUncached(0x8000000);\n    SC_PE_PI_EFB_ADDR_SET_X(addr, x);\n"
      "    SC_PE_PI_EFB_ADDR_SET_Y(addr, y);\n    SC_PE_PI_EFB_ADDR_SET_TYPE(addr,  0);\n    *color = (*(u32 *)addr);\n}",
