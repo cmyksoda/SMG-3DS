@@ -13,6 +13,9 @@
 #include <cstdlib>
 #include <cstring>
 
+// The program's CPU fault handler, installed per thread (source/probe/MarioProbe.cpp).
+extern "C" void smgCatchFaults();
+
 namespace {
 [[noreturn]] void unported(const char* what) {
     std::fprintf(stderr, "The Wii SDK's %s is not the port's yet\n", what);
@@ -64,6 +67,7 @@ int nativePriority(OSPriority priority) {
 }
 
 void run(void* argument) {
+    smgCatchFaults();
     auto* thread = static_cast<OSThread*>(argument);
     Native* native = nativeOf(thread);
     tCurrent = thread;
@@ -420,6 +424,7 @@ void insertAlarm(OSAlarm* alarm, OSTime fire, OSAlarmHandler handler) {
 }
 
 void alarms(void*) {
+    smgCatchFaults();
     while (true) {
         LightLock_Lock(&sAlarmLock);
         OSAlarm* due = sFirstAlarm;

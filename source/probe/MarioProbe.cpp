@@ -33,6 +33,19 @@ static void logCallers() {
     std::fputc('\n', stderr);
 }
 
+// A CPU fault (an abort or an undefined instruction) names itself as a stop does: what, where, and the callers on the
+// faulting stack. Azahar delivers it only with enable_exception_handler on; each of the game's threads installs it.
+extern "C" [[noreturn]] void smgFault(ERRF_ExceptionInfo* exception, CpuRegisters* registers) {
+    static const char* const kinds[] = {"prefetch abort", "data abort", "undefined instruction", "VFP exception"};
+    std::fprintf(stderr, "mario-probe: %s at pc %08lx, address %08lx, lr %08lx, sp %08lx\n", kinds[exception->type & 3],
+                 static_cast<unsigned long>(registers->pc), static_cast<unsigned long>(exception->far),
+                 static_cast<unsigned long>(registers->lr), static_cast<unsigned long>(registers->sp));
+    logCallers();
+    svcExitProcess();
+}
+
+extern "C" void smgCatchFaults() { threadOnException(smgFault, RUN_HANDLER_ON_FAULTING_STACK, WRITE_DATA_TO_FAULTING_STACK); }
+
 // Every stop ends in abort, on any thread (linked with --wrap=abort; newlib's signal handlers are per thread). libctru's
 // exit would unmount the SD card under the game's own threads (the DVD worker, mid-read), so a stop ends at once.
 extern "C" [[noreturn]] void __wrap_abort() {
@@ -51,6 +64,7 @@ void smgGameMain();
 int main() {
     std::fprintf(stderr, "mario-probe: main\n");
     osSetSpeedupEnable(true);  // the New 3DS's 804 MHz clock and L2 cache; 268 MHz without
+    smgCatchFaults();
     gfxInitDefault();
     consoleInit(GFX_BOTTOM, nullptr);  // the top screen is the game's
     // consoleInit takes stderr for the screen too; stops belong in the log, which outlives the app.
