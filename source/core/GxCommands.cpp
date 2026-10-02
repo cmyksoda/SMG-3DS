@@ -120,11 +120,53 @@ GxVertexLayout::GxVertexLayout(const GxCommandProcessor& gpu, std::uint8_t forma
     for (int i = 0; i < 8; ++i) {
         set(texcoord_[i], field(hi, 2 * i, 2), 4 + i, tex[i][1], tex[i][0] + 1, tex[i][2], (tex[i][0] + 1) * componentSize(tex[i][1]));
         if (texcoord_[i].type) texcoords_[texcoordCount_++] = static_cast<std::uint8_t>(i);
+        texcoord_[i].decode = pick(texcoord_[i]);
+    }
+    position_.decode = pick(position_), normal_.decode = pick(normal_);
+}
+
+template <int Kind, int Format, int Count>
+void GxVertexLayout::decodeAs(const Attribute& a, const std::uint8_t*& at, float* out) {
+    constexpr int size = Format == 4 ? 4 : Format >= 2 ? 2 : 1;
+    constexpr bool native = Kind != 1;  // arrays are the CPU's (native here), the stream the GPU's
+    const std::uint8_t* data;
+    if constexpr (Kind == 1) {
+        data = at, at += Count * size;
+    } else if constexpr (Kind == 2) {
+        data = a.array + *at * a.stride, at += 1;
+    } else {
+        data = a.array + (std::uint32_t(at[0]) << 8 | at[1]) * a.stride, at += 2;
+    }
+    for (int i = 0; i < Count; ++i) {
+        const std::uint8_t* c = data + i * size;
+        if constexpr (Format == 0) out[i] = c[0] * a.scale;
+        else if constexpr (Format == 1) out[i] = static_cast<std::int8_t>(c[0]) * a.scale;
+        else if constexpr (Format == 2) out[i] = static_cast<float>(half(c, native)) * a.scale;
+        else if constexpr (Format == 3) out[i] = static_cast<std::int16_t>(half(c, native)) * a.scale;
+        else {
+            const std::uint32_t bits = word(c, native);
+            std::memcpy(&out[i], &bits, 4);
+        }
     }
 }
 
+void GxVertexLayout::decodeAny(const Attribute& a, const std::uint8_t*& at, float* out) {
+    components(source(a, at), a.format, a.count, a.scale, a.type != 1, out);
+}
+
+GxVertexLayout::Decoder GxVertexLayout::pick(const Attribute& a) {
+    // NBT's extra indexes, or its binormal and tangent in the stream, take the general path.
+    if (!a.type || a.skip || a.format > 4 || a.count < 1 || a.count > 3 || (a.type == 1 && a.directSize != a.count * a.componentSize)) return &decodeAny;
+#define SMG_DECODERS(kind, format) {&decodeAs<kind, format, 1>, &decodeAs<kind, format, 2>, &decodeAs<kind, format, 3>}
+#define SMG_KIND(kind) {SMG_DECODERS(kind, 0), SMG_DECODERS(kind, 1), SMG_DECODERS(kind, 2), SMG_DECODERS(kind, 3), SMG_DECODERS(kind, 4)}
+    static constexpr Decoder table[3][5][3] = {SMG_KIND(1), SMG_KIND(2), SMG_KIND(3)};
+#undef SMG_KIND
+#undef SMG_DECODERS
+    return table[a.type - 1][a.format][a.count - 1];
+}
+
 // An attribute's own bytes: in the stream when direct, else in its array at the index the stream gives.
-inline const std::uint8_t* GxVertexLayout::source(const Attribute& a, const std::uint8_t*& at) const {
+const std::uint8_t* GxVertexLayout::source(const Attribute& a, const std::uint8_t*& at) {
     if (a.type == 1) {
         const std::uint8_t* here = at;
         at += a.directSize;
@@ -139,15 +181,15 @@ void GxVertexLayout::read(const std::uint8_t* at, GxVertex& vertex) const {
     if (matrixIndex_) vertex.matrixIndex = *at++;
     if (texMatrixIndexes_)
         for (int i = 0; i < 8; ++i) if (texMatrixIndexes_ >> i & 1) vertex.texMatrixIndex[i] = *at++;
-    if (position_.type) components(source(position_, at), position_.format, position_.count, position_.scale, position_.type != 1, vertex.position);
-    if (normal_.type) components(source(normal_, at), normal_.format, 3, normal_.scale, normal_.type != 1, vertex.normal);
+    if (position_.type) position_.decode(position_, at, vertex.position);
+    if (normal_.type) normal_.decode(normal_, at, vertex.normal);
     for (int channel = 0; channel < 2; ++channel) {
         const Attribute& c = color_[channel];
         if (c.type) readColor(source(c, at), c.format, c.type != 1, vertex.color[channel]);
     }
     for (std::uint8_t k = 0; k < texcoordCount_; ++k) {
         const Attribute& t = texcoord_[texcoords_[k]];
-        components(source(t, at), t.format, t.count, t.scale, t.type != 1, vertex.texcoord[texcoords_[k]]);
+        t.decode(t, at, vertex.texcoord[texcoords_[k]]);
     }
 }
 

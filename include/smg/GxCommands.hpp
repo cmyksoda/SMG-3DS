@@ -23,14 +23,21 @@ public:
 
 private:
     // type: 0 none, 1 direct, 2 an 8-bit index, 3 a 16-bit one. count: components; skip: extra index bytes (NBT's three).
-    // An indexed attribute's array starts at `array` in the host's memory; scale is 1 / 2^shift.
+    // An indexed attribute's array starts at `array` in the host's memory; scale is 1 / 2^shift. `decode` reads its
+    // components and moves past it, made for its kind, format and count (decodeAs) or general (decodeAny).
+    struct Attribute;
+    using Decoder = void (*)(const Attribute&, const std::uint8_t*&, float*);
     struct Attribute {
         std::uint8_t type = 0, format = 0, count = 0, shift = 0, skip = 0, componentSize = 0, directSize = 0;
         std::uint32_t base = 0, stride = 0;
         float scale = 1;
         const std::uint8_t* array = nullptr;
+        Decoder decode = nullptr;
     };
-    const std::uint8_t* source(const Attribute& a, const std::uint8_t*& at) const;
+    static const std::uint8_t* source(const Attribute& a, const std::uint8_t*& at);
+    template <int Kind, int Format, int Count> static void decodeAs(const Attribute& a, const std::uint8_t*& at, float* out);
+    static void decodeAny(const Attribute& a, const std::uint8_t*& at, float* out);
+    static Decoder pick(const Attribute& a);
     bool matrixIndex_ = false;
     std::uint8_t texMatrixIndexes_ = 0;
     Attribute position_, normal_, color_[2], texcoord_[8];

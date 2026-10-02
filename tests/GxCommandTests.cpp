@@ -180,6 +180,61 @@ void streams() {
     delete gpu;
 }
 
+namespace {
+// Every kind (in the stream big-endian, by an 8-bit index, by a 16-bit one), format and component count a position or
+// texture coordinate can take reads the same values: indexed arrays are the CPU's (native), the stream the GPU's.
+void vertexDecoders() {
+    auto* gpu = new smg::GxCommandProcessor(host());
+    const unsigned sizes[5] = {1, 1, 2, 2, 4};
+    unsigned cases = 0;
+    for (unsigned format = 0; format < 5; ++format)
+        for (unsigned count = 1; count <= 3; ++count)
+            for (unsigned kind = 1; kind <= 3; ++kind) {
+                const bool position = count >= 2, shifted = format < 4;  // positions take XY or XYZ, texcoord 0 S or ST
+                const unsigned shift = shifted ? 3 : 0, size = sizes[format], stride = count * size + 4;
+                float want[3];
+                std::uint8_t bigEndian[12], native[12];
+                for (unsigned i = 0; i < count; ++i) {
+                    const int raw[5] = {200 - int(i) * 10, -50 + int(i) * 7, 50000 - int(i), -12345 + int(i) * 1000, 0};
+                    std::uint32_t bits = static_cast<std::uint32_t>(raw[format]);
+                    want[i] = static_cast<float>(raw[format]) / static_cast<float>(1u << shift);
+                    if (format == 4) want[i] = 1.5f + static_cast<float>(i), std::memcpy(&bits, &want[i], 4);
+                    for (unsigned b = 0; b < size; ++b) {
+                        bigEndian[i * size + b] = static_cast<std::uint8_t>(bits >> (8 * (size - 1 - b)));
+                        native[i * size + b] = static_cast<std::uint8_t>(bits >> (8 * b));
+                    }
+                }
+                displayList.assign(0x200, 0);
+                std::memcpy(displayList.data() + 0x100 + 2 * stride, native, count * size);
+                std::vector<std::uint8_t> stream;
+                const auto cpLoad = [&](unsigned address, std::uint32_t value) { stream.push_back(0x08), stream.push_back(address), put32(stream, value); };
+                if (position) {
+                    cpLoad(0x50, kind << 9), cpLoad(0x60, 0);
+                    cpLoad(0x70, (count == 3) | format << 1 | shift << 4);
+                    cpLoad(0xA0, 0x100), cpLoad(0xB0, stride);
+                } else {
+                    cpLoad(0x50, 0), cpLoad(0x60, kind);
+                    cpLoad(0x70, (count == 2) << 21 | format << 22 | shift << 25);
+                    cpLoad(0xA4, 0x100), cpLoad(0xB4, stride);
+                }
+                gpu->put(stream.data(), static_cast<std::uint32_t>(stream.size()));
+                std::vector<std::uint8_t> vertex;
+                if (kind == 1) vertex.assign(bigEndian, bigEndian + count * size);
+                else if (kind == 2) vertex.push_back(2);
+                else vertex.push_back(0), vertex.push_back(2);
+                check(gpu->vertexSize(0) == vertex.size(), "the vertex size matches its kind and format");
+                const smg::GxVertex v = gpu->readVertex(vertex.data(), 0);
+                const float* got = position ? v.position : v.texcoord[0];
+                bool same = true;
+                for (unsigned i = 0; i < count; ++i) same &= got[i] == want[i];
+                check(same, "every kind, format and count decodes to the same values");
+                ++cases;
+            }
+    check(cases == 45, "all 45 decoders were read");
+    delete gpu;
+}
+} // namespace
+
 int runGxCommandTests() {
     streams();
     registerLoads();
@@ -188,6 +243,7 @@ int runGxCommandTests() {
     pixelEngine();
     displayLists();
     vertices();
+    vertexDecoders();
     std::printf("%u GX command processor checks passed\n", checks);
     return 0;
 }
