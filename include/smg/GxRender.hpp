@@ -1,5 +1,6 @@
 #pragma once
 #include <smg/GxCommands.hpp>
+#include <atomic>
 #include <cstdint>
 
 namespace smg {
@@ -16,6 +17,13 @@ void gxRenderMemoryChanged(const void* start, std::uint32_t size);
 // side writes the switch into the GX stream (the port's command 0x01); the renderer's takes it there, in order.
 void gxRenderCopiesStayOnGpu(bool stay);
 void gxRenderKeepCopiesOnGpu(bool stay);
+// The GX stream's reader (source/compat/GxFifo.cpp): ticks spent reading and drawing it, ticks the game waited for the
+// render thread, bytes read, and the core the render thread runs on (-1: none, the game's own thread draws).
+struct GxThreadClock {
+    std::atomic<std::uint32_t> busy{0}, gameWaits{0}, bytes{0};
+    int core = -1;
+};
+GxThreadClock& gxThreadClock();
 // A THP movie frame's planes (smg::decodeThpVideo), drawn over the EFB rectangle (x, top, w, h); `generation` changes per decode.
 void gxRenderMovieFrame(const std::uint8_t* y, const std::uint8_t* u, const std::uint8_t* v, unsigned width, unsigned height, unsigned generation,
                         int x, int top, int w, int h);

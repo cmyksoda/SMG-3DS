@@ -5,12 +5,14 @@
 #include <smg/GxRender.hpp>
 #include <revolution/os.h>
 #include <revolution/os/OSInterrupt.h>
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
 extern "C" void smgRaiseInterrupt(__OSInterrupt interrupt);
+extern "C" int smgDevGxInline();  // source/compat/Kpad.cpp
 // GX words written so far, for the renderer's perf line (source/compat/GxRender.cpp).
 extern "C" {
 unsigned smgFifoWrites = 0;
@@ -73,16 +75,19 @@ private:
 };
 static_assert(sizeof(std::atomic<s32>) == sizeof(s32), "the arbiter waits on the counter's own word");
 
+// The processor and the renderer are one thread's at a time: the render thread's, or (inline, and for peeks and
+// movie frames once the render thread is idle) the caller's.
+FairLock sFifoLock;
+smg::GxThreadClock sClock;
+
 // Each thread writing GX has its own stream, so a thread preempted in the middle of a command (the Wii's single
 // write-gather pipe allowed that too, in a narrower window) can't have another thread's commands spliced into it.
-FairLock sFifoLock;
-// Each stream's thread, by its thread-local storage pointer (a thread_local here would cost a call per word).
+LightLock sStreamLock = 1;
 u32 sStreamOwners[smg::GxCommandProcessor::Streams] = {};
 unsigned sStreamsGiven = 0;
 
-void put(const u8* bytes, u32 count) {
-    const u32 self = reinterpret_cast<u32>(getThreadLocalStorage());
-    sFifoLock.lock();
+unsigned streamOf(u32 self) {
+    LightLock_Lock(&sStreamLock);
     unsigned stream = 0;
     while (stream < sStreamsGiven && sStreamOwners[stream] != self) ++stream;
     if (stream == sStreamsGiven) {
@@ -92,16 +97,170 @@ void put(const u8* bytes, u32 count) {
         }
         sStreamOwners[sStreamsGiven++] = self;
     }
+    LightLock_Unlock(&sStreamLock);
+    return stream;
+}
+
+void process(unsigned stream, const u8* bytes, u32 count) {
+    const u64 start = svcGetSystemTick();
+    sFifoLock.lock();
     ++smgFifoWrites;
     processor().put(stream, bytes, count);
     sFifoLock.unlock();
+    sClock.busy.fetch_add(static_cast<u32>(svcGetSystemTick() - start), std::memory_order_relaxed);
+    sClock.bytes.fetch_add(count, std::memory_order_relaxed);
 }
 
-// The main GX thread's writes, as the Wii's write-gather pipe gathers them: inline stores (smg/GxFifoWrite.h), handed
-// to the command processor at GXFlush (which the SDK calls before every wait for draw-done or a token), before a peek,
-// a movie frame or a change of how copies are kept, and when full. The Wii's GPU reads its FIFO behind the CPU in the
-// same way. Other threads (rare GX writers, which may never flush) write through at once.
+// The main GX thread's writes, as the Wii's write-gather pipe gathers them: inline stores (smg/GxFifoWrite.h). Inline,
+// they gather here and are read at GXFlush (which the SDK calls before every wait for draw-done or a token), before a
+// peek, a movie frame or a change of how copies are kept, and when full. Other threads write through at once.
 alignas(4) u8 sBuffer[0x4000];
+
+// The render thread: the stream is read and drawn on another core behind the game, as the Wii's GPU reads its FIFO
+// behind the CPU. The game waits for it only where Wii games wait for their GPU (draw done, tokens) and where the port
+// reads the GPU's results (peeks, movie frames); its interrupts are raised from there, as the audio thread raises its own.
+// The game thread's writes go into a ring, handed over a piece at a time: at GXFlush, and every Chunk bytes.
+constexpr u32 RingBytes = 0x80000, Chunk = 0x4000;
+alignas(4) u8 sRing[RingBytes];
+struct Entry {
+    const u8* bytes;     // in the ring, or null for `word`: another thread's single write
+    u32 size, ringBytes;  // bytes to read, and ring bytes freed once read (a skip to the ring's start frees its tail)
+    u8 stream, word[4];
+};
+constexpr unsigned MaxEntries = 1024;
+Entry sEntries[MaxEntries];
+LightLock sQueueLock = 1;
+CondVar sWork = 0, sDone = 0;
+unsigned sHead = 0, sTail = 0;  // entries [sTail, sHead), under sQueueLock
+bool sBusy = false;
+u32 sProduced = 0, sConsumed = 0;  // ring bytes as running totals: the game thread's, and the render thread's (under the lock)
+Thread sRenderThread = nullptr;
+void* sRenderTls = nullptr;
+u8* sPublishFrom = sRing;  // the game thread's first byte not handed over yet
+unsigned sMainStream = 0;
+
+void renderLoop(void*) {
+    sRenderTls = getThreadLocalStorage();
+    for (;;) {
+        LightLock_Lock(&sQueueLock);
+        while (sTail == sHead) {
+            sBusy = false;
+            CondVar_Broadcast(&sDone);
+            CondVar_Wait(&sWork, &sQueueLock);
+        }
+        const Entry entry = sEntries[sTail % MaxEntries];
+        sBusy = true;
+        LightLock_Unlock(&sQueueLock);
+        if (entry.size) process(entry.stream, entry.bytes ? entry.bytes : entry.word, entry.size);
+        LightLock_Lock(&sQueueLock);
+        ++sTail, sConsumed += entry.ringBytes;
+        CondVar_Broadcast(&sDone);
+        LightLock_Unlock(&sQueueLock);
+    }
+}
+
+// The game waiting on the render thread (for room, or for it to finish): timed for the perf line.
+template <class Done> void waitFor(Done done) {
+    const u64 start = svcGetSystemTick();
+    LightLock_Lock(&sQueueLock);
+    while (!done()) CondVar_Wait(&sDone, &sQueueLock);
+    LightLock_Unlock(&sQueueLock);
+    sClock.gameWaits.fetch_add(static_cast<u32>(svcGetSystemTick() - start), std::memory_order_relaxed);
+}
+
+void enqueue(const Entry& entry) {
+    for (;;) {
+        LightLock_Lock(&sQueueLock);
+        if (sHead - sTail < MaxEntries) break;
+        LightLock_Unlock(&sQueueLock);
+        waitFor([] { return sHead - sTail < MaxEntries; });
+    }
+    sEntries[sHead++ % MaxEntries] = entry;
+    CondVar_Signal(&sWork);
+    LightLock_Unlock(&sQueueLock);
+}
+
+// What the game thread wrote since it last handed over.
+void publish() {
+    const u32 size = static_cast<u32>(smgFifoAt - sPublishFrom);
+    if (!size) return;
+    sProduced += size;
+    enqueue({sPublishFrom, size, size, static_cast<u8>(sMainStream), {}});
+    sPublishFrom = smgFifoAt;
+}
+
+// Room for `bytes` more at the game thread's write point, in one piece: a skip to the ring's start when its end is
+// near, a wait while the render thread is a whole ring behind.
+void makeRoom(u32 bytes) {
+    publish();
+    for (;;) {
+        LightLock_Lock(&sQueueLock);
+        const u32 consumed = sConsumed;
+        LightLock_Unlock(&sQueueLock);
+        const u32 free = RingBytes - (sProduced - consumed), toEnd = RingBytes - static_cast<u32>(smgFifoAt - sRing);
+        if (toEnd < bytes) {
+            if (free < toEnd) {
+                waitFor([consumed] { return sConsumed != consumed; });
+                continue;
+            }
+            sProduced += toEnd;
+            enqueue({nullptr, 0, toEnd, 0, {}});
+            smgFifoAt = sPublishFrom = sRing;
+            continue;
+        }
+        if (free >= bytes) {
+            smgFifoEnd = smgFifoAt + std::min({free, toEnd, Chunk});
+            return;
+        }
+        waitFor([consumed] { return sConsumed != consumed; });
+    }
+}
+
+// Everything handed over so far read and drawn, before another thread reads what the GPU made.
+void drain() {
+    if (!sRenderThread || getThreadLocalStorage() == sRenderTls) return;
+    waitFor([] { return sHead == sTail && !sBusy; });
+}
+
+// The New 3DS's third core, which the game's own threads (all on the app core, by priority) never use; else the
+// system core at the app's largest share of it; else none, and the stream is drawn on the game's thread as it flushes.
+void startRenderThread() {
+    if (smgDevGxInline()) return void(std::fputs("The Wii GPU's FIFO: drawn on the game's thread (dev.gx_inline)\n", stderr));
+    constexpr size_t Stack = 0x20000;
+    sRenderThread = threadCreate(renderLoop, nullptr, Stack, 0x18, 2, true);
+    sClock.core = 2;
+    if (!sRenderThread && R_SUCCEEDED(APT_SetAppCpuTimeLimit(80))) sRenderThread = threadCreate(renderLoop, nullptr, Stack, 0x18, 1, true), sClock.core = 1;
+    if (!sRenderThread) sClock.core = -1;
+    std::fprintf(stderr, "The Wii GPU's FIFO: drawn %s\n", sRenderThread ? sClock.core == 2 ? "on core 2" : "on core 1 (80%)" : "on the game's thread (no core free)");
+}
+
+void begin(void* self) {
+    smgFifoThread = self;
+    sMainStream = streamOf(reinterpret_cast<u32>(self));
+    startRenderThread();
+    if (sRenderThread) smgFifoAt = sPublishFrom = sRing, smgFifoEnd = sRing + Chunk;
+    else smgFifoAt = sBuffer, smgFifoEnd = sBuffer + sizeof sBuffer;
+}
+
+void flushBuffer() {
+    if (sRenderThread) return publish();
+    if (smgFifoAt == sBuffer) return;
+    process(sMainStream, sBuffer, static_cast<u32>(smgFifoAt - sBuffer));
+    smgFifoAt = sBuffer;
+}
+
+void flushIfBuffering() {
+    if (getThreadLocalStorage() == smgFifoThread) flushBuffer();
+}
+
+// Another thread's write: after what the game thread has handed over, as before its own buffered words.
+void writeThrough(void* self, const u8* bytes, unsigned count) {
+    const unsigned stream = streamOf(reinterpret_cast<u32>(self));
+    if (!sRenderThread || self == sRenderTls) return process(stream, bytes, count);
+    Entry entry{nullptr, count, 0, static_cast<u8>(stream), {}};
+    std::memcpy(entry.word, bytes, count);
+    enqueue(entry);
+}
 } // namespace
 
 extern "C" {
@@ -109,18 +268,6 @@ unsigned char* smgFifoAt = sBuffer;
 unsigned char* smgFifoEnd = sBuffer;  // nothing gathers until the first writer is known
 void* smgFifoThread = nullptr;
 }
-
-namespace {
-void flushBuffer() {
-    if (smgFifoAt == sBuffer) return;
-    put(sBuffer, static_cast<u32>(smgFifoAt - sBuffer));
-    smgFifoAt = sBuffer;
-}
-
-void flushIfBuffering() {
-    if (getThreadLocalStorage() == smgFifoThread) flushBuffer();
-}
-} // namespace
 
 extern "C" void (*smgGpuMemoryChanged)(const void* start, u32 size);  // source/compat/Os.cpp
 
@@ -130,21 +277,28 @@ namespace {
 const bool sMemoryHooked = (smgGpuMemoryChanged = &smg::gxRenderMemoryChanged, true);
 } // namespace
 
+namespace smg {
+GxThreadClock& gxThreadClock() { return sClock; }
+} // namespace smg
+
 extern "C" {
 volatile void* smgGXRegisters(int unit) { return sRegisters[unit]; }
 
-// GXPeekARGB and GXPeekZ, from any thread: the renderer is the FIFO's, so its lock is taken (after the CPU, as ever).
+// GXPeekARGB and GXPeekZ, from any thread: after everything written before them is drawn. From the render thread (a
+// draw-sync callback run as its token is read) the renderer is already this thread's.
 u32 smgPeekEfb(u16 x, u16 y, int depth) {
     flushIfBuffering();
+    drain();
     sFifoLock.lock();
     const u32 value = smg::gxRenderPeek(processor(), x, y, depth != 0);
     sFifoLock.unlock();
     return value;
 }
 
-// THPGXYuv2RgbDraw (source/compat/Thp.cpp): the renderer is the FIFO's, as for peeks.
+// THPGXYuv2RgbDraw (source/compat/Thp.cpp): drawn in order after what was written before it, as for peeks.
 void smgDrawMovieFrame(const u8* y, const u8* u, const u8* v, unsigned width, unsigned height, unsigned generation, int x, int top, int w, int h) {
     flushIfBuffering();
+    drain();
     sFifoLock.lock();
     smg::gxRenderMovieFrame(y, u, v, width, height, generation, x, top, w, h);
     sFifoLock.unlock();
@@ -159,11 +313,14 @@ void smgGXFifoFlush() { flushIfBuffering(); }
 
 void smgGXFifoSlow(unsigned value, unsigned bytes) {
     void* const self = getThreadLocalStorage();
-    if (!smgFifoThread) smgFifoThread = self, smgFifoEnd = sBuffer + sizeof sBuffer;  // the first GX writer, GXInit's: the main thread
+    if (!smgFifoThread) begin(self);  // the first GX writer, GXInit's: the main thread
     u8 order[4];
     for (unsigned i = 0; i < bytes; ++i) order[i] = static_cast<u8>(value >> (8 * (bytes - 1 - i)));
-    if (self != smgFifoThread) return put(order, bytes);
-    if (smgFifoAt + bytes > smgFifoEnd) flushBuffer();
+    if (self != smgFifoThread) return writeThrough(self, order, bytes);
+    if (smgFifoAt + bytes > smgFifoEnd) {
+        if (sRenderThread) makeRoom(bytes);
+        else flushBuffer();
+    }
     std::memcpy(smgFifoAt, order, bytes);
     smgFifoAt += bytes;
 }

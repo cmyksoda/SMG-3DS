@@ -66,6 +66,11 @@ constexpr u32 TargetTileRow = 240 * 8 * 4, ScratchTileRow = 256 * 8 * 4;
 
 bool sCopiesStayOnGpu = false;
 
+// GameSystem::frameLoop's phases (smgFramePhase), timed on the game's thread and read by the perf line on the renderer's:
+// drawing, the logic step, animation, waiting for the GPU's draw done (endFrame), the retrace wait.
+constexpr int Phases = 5;
+std::atomic<u32> sPhaseTicks[Phases] = {}, sPhaseFrames{0};
+
 // Which 4 KiB pages some mesh was made from, one bit each over the address space: read without a lock by the flush
 // hook, so the game's many flushes of other memory (matrices every frame) cost one load. Set as meshes are made,
 // cleared when all are dropped; a stale bit only queues a range for nothing.
@@ -173,8 +178,7 @@ struct Renderer {
     u64 nextDump = 0;
     // Per-frame costs, logged every few seconds (perfLine): what each optimization is measured by.
     struct Perf {
-        u64 since = 0, phaseTicks[4] = {}, syncTicks = 0;
-        u32 phaseFrames = 0;
+        u64 since = 0, syncTicks = 0;
         u32 frames = 0, primitives = 0, vertices = 0, triangles = 0, draws = 0, sameState = 0, color0Rides = 0;
         u32 meshDraws = 0, meshTriangles = 0, meshesMade = 0;
         u32 meshInvalidated = 0, meshOverflows = 0, meshBudgetDrops = 0, meshMismatches = 0, flushesQueued = 0;
@@ -969,13 +973,19 @@ struct Renderer {
         const double ms = double(now - perf.since) * 1000.0 / SYSCLOCK_ARM11;
         if (ms < 4000) return;
         const double n = perf.frames;
-        const double phase = perf.phaseFrames ? 1000.0 / SYSCLOCK_ARM11 / perf.phaseFrames : 0;
+        double phases[Phases];
+        const u32 phaseFrames = sPhaseFrames.exchange(0, std::memory_order_relaxed);
+        for (int p = 0; p < Phases; ++p)
+            phases[p] = phaseFrames ? sPhaseTicks[p].exchange(0, std::memory_order_relaxed) * 1000.0 / SYSCLOCK_ARM11 / phaseFrames : 0;
+        GxThreadClock& clock = gxThreadClock();
+        const double tick = 1000.0 / SYSCLOCK_ARM11 / n;
         // t= is the emulated clock (drives time their actions by it when Azahar runs faster than real time).
-        std::fprintf(stderr, "gx perf: t=%.0f, %lu frames, %.1f ms/frame: draw %.1f (%.1f of it waiting for the GPU), logic %.1f, "
-                     "animation %.1f, retrace wait %.1f; per frame %.0f primitives (%.0f same state, %.0f with only C0 new), %.0f vertices, "
-                     "%.0f triangles, %.0f draws\n",
-                     double(now) / SYSCLOCK_ARM11, static_cast<unsigned long>(perf.frames), ms / n, perf.phaseTicks[0] * phase, perf.syncTicks * 1000.0 / SYSCLOCK_ARM11 / n,
-                     perf.phaseTicks[1] * phase, perf.phaseTicks[2] * phase, perf.phaseTicks[3] * phase, perf.primitives / n,
+        std::fprintf(stderr, "gx perf: t=%.0f, %lu frames, %.1f ms/frame: game thread draw %.1f, logic %.1f, animation %.1f, waiting for the GPU "
+                     "%.1f, retrace wait %.1f; GX stream read %s %.1f ms (%.1f of it waiting for the PICA), game waiting for room %.1f ms, %.0f KB; per "
+                     "frame %.0f primitives (%.0f same state, %.0f with only C0 new), %.0f vertices, %.0f triangles, %.0f draws\n",
+                     double(now) / SYSCLOCK_ARM11, static_cast<unsigned long>(perf.frames), ms / n, phases[0], phases[1], phases[2], phases[3], phases[4],
+                     clock.core == 2 ? "on core 2" : clock.core == 1 ? "on core 1" : "on the game's thread", clock.busy.exchange(0) * tick,
+                     perf.syncTicks * tick, clock.gameWaits.exchange(0) * tick, clock.bytes.exchange(0) / 1024.0 / n, perf.primitives / n,
                      perf.sameState / n, perf.color0Rides / n, perf.vertices / n, perf.triangles / n, perf.draws / n);
         // The registers behind most state changes, so batching can be aimed at them.
         std::string top;
@@ -1488,20 +1498,19 @@ void gxRenderCopy(const GxCommandProcessor& gpu, std::uint32_t command) {
         renderer().copy(gpu, command);
     }
     if (command >> 14 & 1) renderer().perfLine();
-    // Every 300th frame the game's state is logged (source/compat/GameScene.cpp), from the thread that draws.
-    static unsigned frames = 0;
-    if (++frames % 300 == 0) smgHeartbeat();
 }
 } // namespace smg
 
-// GameSystem::frameLoop's phases (adapted): 0 drawing begins, 1 the logic step, 2 animation, 3 the retrace wait. Ticks
-// are read only here, a few times a frame: Azahar charges 150 cycles for each read.
+// GameSystem::frameLoop's phases (adapted): 0 drawing begins, 1 the logic step, 2 animation, 3 waiting for the GPU's
+// draw done, 4 the retrace wait. Ticks are read only here, a few times a frame: Azahar charges 150 cycles for each read.
 extern "C" void smgFramePhase(int phase) {
     static u64 last = 0;
     static int current = -1;
+    static unsigned frames = 0;
     const u64 now = svcGetSystemTick();
-    auto& perf = smg::renderer().perf;
-    if (current >= 0) perf.phaseTicks[current] += now - last;
-    if (phase == 0 && current >= 0) ++perf.phaseFrames;
+    if (current >= 0) smg::sPhaseTicks[current].fetch_add(static_cast<u32>(now - last), std::memory_order_relaxed);
+    if (phase == 0 && current >= 0) smg::sPhaseFrames.fetch_add(1, std::memory_order_relaxed);
     current = phase, last = now;
+    // Every 300th frame the game's state is logged (source/compat/GameScene.cpp), from the game's own thread.
+    if (phase == 0 && ++frames % 300 == 0) smgHeartbeat();
 }

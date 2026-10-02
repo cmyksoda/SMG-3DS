@@ -42,6 +42,8 @@ struct Settings {
     bool devGxTiming = false;
     // For development only (dev.gx_check=1): each new mesh is checked against the CPU path, vertex by vertex.
     bool devGxCheck = false;
+    // For development only (dev.gx_inline=1): the GX stream is drawn on the game's thread, not the render thread.
+    bool devGxInline = false;
     static constexpr int MinSpeed = 25, MaxSpeed = 300, SpeedStep = 25;
 };
 bool operator==(const Settings& a, const Settings& b);
