@@ -1,5 +1,5 @@
-// The Wii's OS services that need no hardware: cache controls (nothing outside the CPU reads what they flush;
-// the renderer flushes its own buffers for the 3DS GPU), interrupt and scheduler state, the console and panics.
+// The Wii's OS services that need no hardware: cache controls (the renderer flushes its own buffers for the 3DS GPU;
+// they only tell it which memory changed), interrupt and scheduler state, the console and panics.
 #include <revolution/base/PPCArch.h>
 #include <revolution/os.h>
 #include <revolution/os/OSCache.h>
@@ -22,13 +22,21 @@ u32 __OSBusClock = 243000000;
 // Which floating-point exceptions trap; the 3DS's VFP traps none, whatever is set here.
 u32 __OSFpscrEnableBits = 0;
 
-void DCFlushRange(void*, u32) {}
-void DCStoreRange(void*, u32) {}
-void DCStoreRangeNoSync(void*, u32) {}
-void DCInvalidateRange(void*, u32) {}
+// The Wii's code flushes whatever its GPU will read after the CPU wrote it, and invalidates what a DMA will fill: the
+// renderer, which keeps display lists' meshes on the 3DS GPU (source/compat/GxRender.cpp), hears of every such range.
+extern "C" {
+void (*smgGpuMemoryChanged)(const void* start, u32 size) = nullptr;
+}
+void DCFlushRange(void* start, u32 size) { if (smgGpuMemoryChanged) smgGpuMemoryChanged(start, size); }
+void DCStoreRange(void* start, u32 size) { if (smgGpuMemoryChanged) smgGpuMemoryChanged(start, size); }
+void DCStoreRangeNoSync(void* start, u32 size) { if (smgGpuMemoryChanged) smgGpuMemoryChanged(start, size); }
+void DCInvalidateRange(void* start, u32 size) { if (smgGpuMemoryChanged) smgGpuMemoryChanged(start, size); }
 // dcbz zeroes whole cache lines, the one cache operation whose effect code sees. Only the bytes asked for are
 // cleared: the port's heap does not keep the Wii's 32-byte alignment, so rounding out could reach a neighbour.
-void DCZeroRange(void* start, u32 size) { std::memset(start, 0, size); }
+void DCZeroRange(void* start, u32 size) {
+    std::memset(start, 0, size);
+    if (smgGpuMemoryChanged) smgGpuMemoryChanged(start, size);
+}
 void PPCSync() { __sync_synchronize(); }
 
 namespace {

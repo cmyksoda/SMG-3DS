@@ -7,6 +7,10 @@ namespace smg {
 // EFB copy (to the display, ending the frame).
 void gxRenderPrimitive(const GxCommandProcessor& gpu, std::uint8_t kind, std::uint8_t format, std::uint16_t count, const std::uint8_t* vertices);
 void gxRenderCopy(const GxCommandProcessor& gpu, std::uint32_t command);
+// GX_CallDisplayList, before the command processor reads it: true when the renderer drew the list itself (GPU path).
+bool gxRenderDisplayList(const GxCommandProcessor& gpu, std::uint32_t address, std::uint32_t size);
+// The CPU changed memory the GPU reads (the game's cache flushes): cached meshes made from it are dropped.
+void gxRenderMemoryChanged(const void* start, std::uint32_t size);
 // While on, texture copies are kept in the PICA's memory and never written to the Wii's: for copies only the GPU reads
 // (JUTTexture::capture's). Every other copy is encoded into memory by the CPU, as the pixel engine writes it.
 void gxRenderCopiesStayOnGpu(bool stay);

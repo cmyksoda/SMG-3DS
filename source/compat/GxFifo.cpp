@@ -31,6 +31,7 @@ smg::GxCommandProcessor& processor() {
             smg::gxRenderPrimitive(processor(), kind, format, count, vertices);
         },
         [](std::uint32_t command) { smg::gxRenderCopy(processor(), command); },
+        [](std::uint32_t physical, std::uint32_t size) { return smg::gxRenderDisplayList(processor(), physical, size); },
     });
     return instance;
 }
@@ -88,6 +89,14 @@ void putBigEndian(u32 value, u32 bytes) {
     for (u32 i = 0; i < bytes; ++i) order[i] = static_cast<u8>(value >> (8 * (bytes - 1 - i)));
     put(order, bytes);
 }
+} // namespace
+
+extern "C" void (*smgGpuMemoryChanged)(const void* start, u32 size);  // source/compat/Os.cpp
+
+namespace {
+// The game's cache flushes, from any thread, some holding the CPU's lock: only noted here, never waiting on the FIFO's
+// (whose holders may take the CPU's); the renderer reads the notes when it next draws.
+const bool sMemoryHooked = (smgGpuMemoryChanged = &smg::gxRenderMemoryChanged, true);
 } // namespace
 
 extern "C" {

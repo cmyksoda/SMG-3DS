@@ -1,6 +1,18 @@
-; The GX renderer's vertices arrive transformed to clip space on the CPU (source/core/GxDraw.cpp): this passes them
-; on, with the channel colour's bytes as fractions and the coordinates each combiner unit samples.
-.constf scale(0.00392156862, 0.0, 0.0, 0.0)
+; The GX renderer's two kinds of vertices. With `transform` off they arrive transformed on the CPU
+; (source/core/GxDraw.cpp's GxVertexPipeline): position in clip space and each combiner unit's coordinates.
+; With it on they are a cached mesh's (GxMeshVertex): a model-space position transformed by its matrix slot's
+; four rows, and each texgen's input vector through its three rows, divided by q where the texgen projects; an unlit
+; colour's parts each from the vertex or the material register (rgbreg, alphareg).
+.constf scale(0.00392156862, 1.0, 0.0, 0.0)
+.fvec clip[40]
+.fvec texrow[9]
+.fvec material
+.bool transform
+.bool rgbreg
+.bool alphareg
+.bool project0
+.bool project1
+.bool project2
 .out outpos position
 .out outclr color
 .out outtc0 texcoord0
@@ -11,12 +23,52 @@
 .alias intc0 v2
 .alias intc1 v3
 .alias intc2 v4
+.alias inslot v5
 
 .proc main
-    mov outpos, inpos
-    mul outclr, scale.xxxx, inclr
-    mov outtc0, intc0
-    mov outtc1, intc1
-    mov outtc2, intc2
+    mul r2, scale.xxxx, inclr
+    ifu rgbreg
+        mov r2.xyz, material.xyz
+    .end
+    ifu alphareg
+        mov r2.w, material.w
+    .end
+    mov outclr, r2
+    ifu transform
+        mova a0.x, inslot.x
+        dp4 outpos.x, clip[a0.x], inpos
+        dp4 outpos.y, clip[a0.x+1], inpos
+        dp4 outpos.z, clip[a0.x+2], inpos
+        dp4 outpos.w, clip[a0.x+3], inpos
+        dp4 r0.x, texrow[0], intc0
+        dp4 r0.y, texrow[1], intc0
+        ifu project0
+            dp4 r1.x, texrow[2], intc0
+            rcp r1.x, r1.x
+            mul r0.xy, r0.xy, r1.xx
+        .end
+        mov outtc0, r0
+        dp4 r0.x, texrow[3], intc1
+        dp4 r0.y, texrow[4], intc1
+        ifu project1
+            dp4 r1.x, texrow[5], intc1
+            rcp r1.x, r1.x
+            mul r0.xy, r0.xy, r1.xx
+        .end
+        mov outtc1, r0
+        dp4 r0.x, texrow[6], intc2
+        dp4 r0.y, texrow[7], intc2
+        ifu project2
+            dp4 r1.x, texrow[8], intc2
+            rcp r1.x, r1.x
+            mul r0.xy, r0.xy, r1.xx
+        .end
+        mov outtc2, r0
+    .else
+        mov outpos, inpos
+        mov outtc0, intc0
+        mov outtc1, intc1
+        mov outtc2, intc2
+    .end
     end
 .end

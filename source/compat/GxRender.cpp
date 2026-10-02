@@ -15,6 +15,7 @@
 #include <revolution/os.h>
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -22,11 +23,14 @@
 #include <map>
 #include <string>
 #include <tuple>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 extern "C" void smgHeartbeat();          // source/compat/GameScene.cpp
 extern "C" unsigned smgMovieDecodes();  // source/compat/Thp.cpp
 extern "C" int smgDevGxDump();           // source/compat/Kpad.cpp
+extern "C" void (*smgGpuMemoryChanged)(const void* start, u32 size);  // source/compat/Os.cpp
 
 namespace smg {
 namespace {
@@ -47,6 +51,20 @@ constexpr u32 DisplayTransferFlags = GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_
 constexpr u32 TargetTileRow = 240 * 8 * 4, ScratchTileRow = 256 * 8 * 4;
 
 bool sCopiesStayOnGpu = false;
+
+// Which 4 KiB pages some mesh was made from, one bit each over the address space: read without a lock by the flush
+// hook, so the game's many flushes of other memory (matrices every frame) cost one load. Set as meshes are made,
+// cleared when all are dropped; a stale bit only queues a range for nothing.
+std::atomic<std::uint32_t> sMeshPageBits[1u << 15];
+
+// Ranges the game flushed over mesh pages (gxRenderMemoryChanged), kept until the renderer next looks: the hook runs on
+// any thread, the renderer only under the FIFO's lock. A leaf lock; past the queue's end every mesh is dropped.
+struct ChangedMemory {
+    LightLock lock = 1;
+    std::uintptr_t start[1024], end[1024];
+    unsigned count = 0;
+    bool overflowed = false;
+} sChanged;
 
 // What a texture read of each EFB copy format (the PE's numbering) names: one channel reads as I4/I8, two as IA4/IA8.
 std::uint8_t copyReadFormat(std::uint8_t copy) {
@@ -117,6 +135,22 @@ struct Renderer {
     GxFrame frame{640, 480, true};
     bool indirectNoted = false, dstAlphaNoted = false;
     // dev.gx_dump: one frame's draws, copies and states listed in the log every minute of the game's clock.
+    const GxCommandProcessor* lastGpu = nullptr;
+    // The GPU path (gx.v.pica with `transform` on): display lists of primitives kept as meshes in linear memory,
+    // each drawn whole with its matrix slots and texgen rows as uniforms.
+    int clipUniform = -1, texrowUniform = -1, transformUniform = -1, projectUniform[3] = {-1, -1, -1};
+    int materialUniform = -1, rgbRegUniform = -1, alphaRegUniform = -1;
+    struct CachedMesh {
+        std::vector<u32> key;
+        std::vector<std::pair<std::uint8_t, u32>> depends;  // the CP registers it was decoded under, and their values
+        void* block = nullptr;  // vertices, then indices
+        u32 vertexCount = 0, indexCount = 0;
+        std::uint16_t slots = 0;
+        std::uintptr_t range[2][2] = {};  // the memory it was made from, [lo, hi): the display list, the array elements
+    };
+    std::unordered_map<std::uint64_t, CachedMesh> meshes;
+    std::unordered_set<std::uintptr_t> meshPages;  // 4 KiB pages some mesh was made from
+    std::size_t meshBytes = 0;
     bool dumping = false;
     std::uint32_t gpuXf[5] = {};  // channels, colour/alpha control, material, ambient as the state was built
     unsigned dumpIndex = 0;
@@ -126,8 +160,11 @@ struct Renderer {
         u64 since = 0, phaseTicks[4] = {}, syncTicks = 0;
         u32 phaseFrames = 0;
         u32 frames = 0, primitives = 0, vertices = 0, triangles = 0, draws = 0, sameState = 0, color0Rides = 0;
+        u32 meshDraws = 0, meshTriangles = 0, meshesMade = 0;
+        u32 meshInvalidated = 0, meshOverflows = 0, meshBudgetDrops = 0, meshMismatches = 0, flushesQueued = 0;
+        u32 refused[GxVertexPipeline::MeshRefusals] = {}, refusedOpcode[0x100] = {};
         u32 changed[0x100] = {};  // per BP register: state rebuilds it took part in
-        u32 compilesBefore = gxTevCompiles(), moviesBefore = smgMovieDecodes();
+        u32 compilesBefore = gxTevCompiles(), moviesBefore = smgMovieDecodes(), listsBefore = 0, listBytesBefore = 0;
     } perf;
     // The BP registers a draw reads and the TEV colour and konst words, as of the last state built.
     u32 bpAtBuild[0x100] = {}, colorAtBuild[8] = {}, konstAtBuild[8] = {};
@@ -156,6 +193,18 @@ struct Renderer {
         vertices = static_cast<GxDrawVertex*>(linearAlloc(VertexBytes + MaxIndices * sizeof(std::uint16_t)));
         indices = reinterpret_cast<std::uint16_t*>(reinterpret_cast<std::uint8_t*>(vertices) + VertexBytes);
         if (!target || !shader || R_FAILED(shaderProgramSetVsh(&program, &shader->DVLE[0])) || !vertices) stop("setting up citro3d");
+        clipUniform = shaderInstanceGetUniformLocation(program.vertexShader, "clip");
+        texrowUniform = shaderInstanceGetUniformLocation(program.vertexShader, "texrow");
+        transformUniform = shaderInstanceGetUniformLocation(program.vertexShader, "transform");
+        for (int u = 0; u < 3; ++u) {
+            const char name[] = {'p', 'r', 'o', 'j', 'e', 'c', 't', char('0' + u), 0};
+            projectUniform[u] = shaderInstanceGetUniformLocation(program.vertexShader, name);
+        }
+        materialUniform = shaderInstanceGetUniformLocation(program.vertexShader, "material");
+        rgbRegUniform = shaderInstanceGetUniformLocation(program.vertexShader, "rgbreg");
+        alphaRegUniform = shaderInstanceGetUniformLocation(program.vertexShader, "alphareg");
+        if (clipUniform < 0 || texrowUniform < 0 || transformUniform < 0 || projectUniform[2] < 0 || materialUniform < 0 || alphaRegUniform < 0)
+            stop("the GX shader's uniforms");
         ready = true;
     }
 
@@ -181,6 +230,15 @@ struct Renderer {
     void startBuffers() {
         used = flushed = indexUsed = indexFlushed = batchStart = 0;
         C3D_BindProgram(&program);
+        bindCpuBuffers();
+        applied = false;
+    }
+
+    // The CPU path's vertices: transformed already, the shader passing them on.
+    void bindCpuBuffers() {
+        C3D_BoolUnifSet(GPU_VERTEX_SHADER, transformUniform, false);
+        C3D_BoolUnifSet(GPU_VERTEX_SHADER, rgbRegUniform, false);
+        C3D_BoolUnifSet(GPU_VERTEX_SHADER, alphaRegUniform, false);
         C3D_AttrInfo* attributes = C3D_GetAttrInfo();
         AttrInfo_Init(attributes);
         AttrInfo_AddLoader(attributes, 0, GPU_FLOAT, 4);
@@ -189,7 +247,6 @@ struct Renderer {
         C3D_BufInfo* buffers = C3D_GetBufInfo();
         BufInfo_Init(buffers);
         BufInfo_Add(buffers, vertices, sizeof(GxDrawVertex), 5, 0x43210);
-        applied = false;
     }
 
     // The vertices and indices written since the GPU last took a command list, out of the CPU's cache (Azahar has none).
@@ -268,6 +325,17 @@ struct Renderer {
 
     void draw(const GxCommandProcessor& gpu, std::uint8_t kind, std::uint8_t format, std::uint16_t count, const std::uint8_t* data) {
         ++perf.primitives, perf.vertices += count;
+        ensureState(gpu);
+        if (!pipeline.prepare(gpu, state, frame, kind, format)) stop(pipeline.unsupported);
+        if (scissorEmpty || !count) return;
+        if (!inFrame) begin();
+        roomFor(count);
+        indexUsed += pipeline.run(data, count, vertices + used, static_cast<std::uint16_t>(used), indices + indexUsed);
+        used += count;
+    }
+
+    // The draw state for what comes next: kept while the BP registers a draw reads (C0 alone, when it rides) stay.
+    void ensureState(const GxCommandProcessor& gpu) {
         if (!stateValid || gpu.bpChanges != stateBp || !(frame == stateFrame)) {
             std::uint8_t color0[4];
             if (stateValid && frame == stateFrame && state.color0InVertex && onlyColor0Changed(gpu) && gxColor0Bytes(gpu, color0))
@@ -277,12 +345,6 @@ struct Renderer {
         } else {
             ++perf.sameState;
         }
-        if (!pipeline.prepare(gpu, state, frame, kind, format)) stop(pipeline.unsupported);
-        if (scissorEmpty || !count) return;
-        if (!inFrame) begin();
-        roomFor(count);
-        indexUsed += pipeline.run(data, count, vertices + used, static_cast<std::uint16_t>(used), indices + indexUsed);
-        used += count;
     }
 
     void buildState(const GxCommandProcessor& gpu) {
@@ -398,9 +460,195 @@ struct Renderer {
         return lo[0] <= 1 && lo[1] <= 1 && hi[0] >= frame.width - 1 && hi[1] >= frame.height - 1;
     }
 
+    static constexpr std::size_t MeshBudget = 12u << 20;
+
+    void dropMesh(std::unordered_map<std::uint64_t, CachedMesh>::iterator it) {
+        meshBytes -= it->second.vertexCount * sizeof(GxMeshVertex) + it->second.indexCount * sizeof(std::uint16_t);
+        linearFree(it->second.block);
+        meshes.erase(it);
+    }
+    void dropAllMeshes() {
+        if (inFrame) pause(), resume();  // the GPU may still read them
+        while (!meshes.empty()) dropMesh(meshes.begin());
+        meshPages.clear();
+        for (auto& bits : sMeshPageBits) bits.store(0, std::memory_order_relaxed);
+    }
+
+    // The CPU wrote memory the GPU will read (the game's cache flushes, noted in sChanged): meshes made from it go.
+    std::uintptr_t changedStart[1024], changedEnd[1024];
+    void applyChangedMemory() {
+        std::uintptr_t* start = changedStart;
+        std::uintptr_t* end = changedEnd;
+        LightLock_Lock(&sChanged.lock);
+        const unsigned count = sChanged.count;
+        const bool overflowed = sChanged.overflowed;
+        std::memcpy(start, sChanged.start, count * sizeof *start), std::memcpy(end, sChanged.end, count * sizeof *end);
+        sChanged.count = 0, sChanged.overflowed = false;
+        LightLock_Unlock(&sChanged.lock);
+        perf.flushesQueued += count;
+        if (meshes.empty()) return;
+        if (overflowed) return ++perf.meshOverflows, dropAllMeshes();
+        bool paused = false;
+        for (unsigned i = 0; i < count; ++i) {
+            bool touched = false;
+            for (std::uintptr_t page = start[i] >> 12; page <= (end[i] - 1) >> 12 && !touched; ++page) touched = meshPages.count(page);
+            if (!touched) continue;
+            for (auto it = meshes.begin(); it != meshes.end();) {
+                auto next = std::next(it);
+                const auto& r = it->second.range;
+                if ((r[0][0] < end[i] && start[i] < r[0][1]) || (r[1][0] < end[i] && start[i] < r[1][1])) {
+                    if (inFrame && !paused) pause(), resume(), paused = true;  // the GPU may still read it
+                    dropMesh(it), ++perf.meshInvalidated;
+                }
+                it = next;
+            }
+        }
+    }
+
+    // GX_CallDisplayList: a list of primitives under a state the GPU path covers is drawn from its mesh (made the first
+    // time); anything else is read by the command processor as before.
+    bool displayList(const GxCommandProcessor& gpu, std::uint32_t address, std::uint32_t size) {
+        const std::uint8_t* list = gpu.memoryFunction()(address);
+        if (!list || size < 3) return false;
+        if (list[0] < 0x80 || list[0] >= 0xA8) return ++perf.refusedOpcode[list[0]], ++perf.refused[GxVertexPipeline::MeshCommand], false;
+        applyChangedMemory();
+        ensureState(gpu);
+        if (!pipeline.prepare(gpu, state, frame, 0x90, 0)) return ++perf.refused[GxVertexPipeline::MeshUnsupported], false;
+        if (scissorEmpty) return false;
+        if (const unsigned why = pipeline.meshEligible()) return ++perf.refused[why], false;
+        // The key: the list, its first and last words (another list at a freed address differs), where the colour comes
+        // from and the texgens' sources. The CP registers its vertices were read under are checked apart, only those it
+        // uses: other formats' tables and the matrix arrays (12-15) change every frame without touching it.
+        u32 key[6];
+        unsigned n = 0;
+        key[n++] = address, key[n++] = size, key[n++] = pipeline.meshColorFromVertex(), key[n++] = pipeline.meshSources();
+        std::memcpy(&key[n], list, 4), std::memcpy(&key[n + 1], list + size - 4, 4), n += 2;
+        std::uint64_t hash = 0xCBF29CE484222325ull;
+        for (unsigned i = 0; i < n; ++i) hash = (hash ^ key[i]) * 0x100000001B3ull;
+        auto found = meshes.find(hash);
+        bool stale = found != meshes.end() && (found->second.key.size() != n || std::memcmp(found->second.key.data(), key, n * 4));
+        if (found != meshes.end() && !stale)
+            for (const auto& [reg, value] : found->second.depends) stale |= gpu.cp[reg] != value;
+        if (stale) dropMesh(found), found = meshes.end(), ++perf.meshMismatches;
+        if (found == meshes.end()) {
+            GxMesh mesh;
+            if (const unsigned why = pipeline.buildMesh(list, size, mesh)) return ++perf.refused[why], false;
+            const std::size_t vertexBytes = mesh.vertices.size() * sizeof(GxMeshVertex), bytes = vertexBytes + mesh.indices.size() * sizeof(std::uint16_t);
+            if (meshBytes + bytes > MeshBudget) dropAllMeshes(), ++perf.meshBudgetDrops;
+            void* block = linearAlloc(bytes);
+            if (!block && !meshes.empty()) dropAllMeshes(), block = linearAlloc(bytes);
+            if (!block) return false;
+            std::memcpy(block, mesh.vertices.data(), vertexBytes);
+            std::memcpy(static_cast<std::uint8_t*>(block) + vertexBytes, mesh.indices.data(), mesh.indices.size() * sizeof(std::uint16_t));
+            GSPGPU_FlushDataCache(block, bytes);
+            CachedMesh& cached = meshes[hash];
+            cached.key.assign(key, key + n);
+            cached.depends.clear();
+            for (std::uint8_t reg : {std::uint8_t(0x50), std::uint8_t(0x60)}) cached.depends.emplace_back(reg, gpu.cp[reg]);
+            std::uint16_t arrays = 0;
+            for (unsigned f = 0; f < 8; ++f) {
+                if (!(mesh.formats >> f & 1)) continue;
+                for (unsigned table : {0x70u, 0x80u, 0x90u}) cached.depends.emplace_back(std::uint8_t(table + f), gpu.cp[table + f]);
+                arrays = static_cast<std::uint16_t>(arrays | gpu.layout(std::uint8_t(f)).indexedArrays());
+            }
+            for (unsigned a = 0; a < 12; ++a)
+                if (arrays >> a & 1)
+                    for (unsigned base : {0xA0u, 0xB0u}) cached.depends.emplace_back(std::uint8_t(base + a), gpu.cp[base + a]);
+            cached.block = block, cached.vertexCount = u32(mesh.vertices.size()), cached.indexCount = u32(mesh.indices.size());
+            cached.slots = mesh.slots;
+            // Apart: a list and its arrays sit in different heaps, and one span over both would take in whatever lies between.
+            cached.range[0][0] = reinterpret_cast<std::uintptr_t>(list), cached.range[0][1] = cached.range[0][0] + size;
+            cached.range[1][0] = reinterpret_cast<std::uintptr_t>(mesh.arraysLo), cached.range[1][1] = reinterpret_cast<std::uintptr_t>(mesh.arraysHi);
+            if (cached.range[1][1] <= cached.range[1][0]) cached.range[1][0] = cached.range[1][1] = 0;  // all attributes direct
+            for (const auto& r : cached.range) {
+                if (r[1] <= r[0]) continue;
+                for (std::uintptr_t page = r[0] >> 12; page <= (r[1] - 1) >> 12; ++page) {
+                    meshPages.insert(page);
+                    sMeshPageBits[page >> 5].fetch_or(1u << (page & 31), std::memory_order_relaxed);
+                }
+            }
+            meshBytes += bytes, ++perf.meshesMade;
+            found = meshes.find(hash);
+        }
+        drawMesh(found->second);
+        return true;
+    }
+
+    void drawMesh(const CachedMesh& mesh) {
+        if (!inFrame) begin();
+        flushBatch();
+        roomFor(0);
+        applyState();
+        GxMeshUniforms u;
+        pipeline.meshUniforms(mesh.slots, u);
+        if (u.reject == 3) return;  // GX culls every triangle
+        for (unsigned slot = 0; slot < 10; ++slot)
+            if (u.slots >> slot & 1)
+                for (int r = 0; r < 4; ++r) {
+                    const float* row = u.clip[slot] + r * 4;
+                    C3D_FVUnifSet(GPU_VERTEX_SHADER, clipUniform + int(slot) * 4 + r, row[0], row[1], row[2], row[3]);
+                }
+        for (unsigned unit = 0; unit < u.units; ++unit) {
+            for (int r = 0; r < 3; ++r) {
+                const float* row = u.texgen[unit][r];
+                C3D_FVUnifSet(GPU_VERTEX_SHADER, texrowUniform + int(unit) * 3 + r, row[0], row[1], row[2], row[3]);
+            }
+            C3D_BoolUnifSet(GPU_VERTEX_SHADER, projectUniform[unit], u.projective[unit]);
+        }
+        C3D_BoolUnifSet(GPU_VERTEX_SHADER, transformUniform, true);
+        C3D_BoolUnifSet(GPU_VERTEX_SHADER, rgbRegUniform, !u.fixedColor && !u.rgbFromVertex);
+        C3D_BoolUnifSet(GPU_VERTEX_SHADER, alphaRegUniform, !u.fixedColor && !u.alphaFromVertex);
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, materialUniform, u.color[0] / 255.0f, u.color[1] / 255.0f, u.color[2] / 255.0f, u.color[3] / 255.0f);
+        // GxMeshVertex: position (v0), colour (v1), three texgen inputs (v2-v4), slot (v5). What a draw doesn't take from
+        // the vertices is a fixed attribute, and the bytes it skips are padding (0xC is four bytes, 0xE twelve).
+        C3D_AttrInfo* attributes = C3D_GetAttrInfo();
+        AttrInfo_Init(attributes);
+        u64 permutation = 0;
+        int components = 0;
+        const auto loader = [&](int reg, GPU_FORMATS format, int count) {
+            permutation |= u64(AttrInfo_AddLoader(attributes, reg, format, count)) << (4 * components++);
+        };
+        const auto pad = [&](unsigned code) { permutation |= u64(code) << (4 * components++); };
+        const auto fixed = [&](int reg, float x, float y, float z, float w) {
+            AttrInfo_AddFixed(attributes, reg);
+            C3D_FVec* value = C3D_FixedAttribGetWritePtr(reg);
+            value->x = x, value->y = y, value->z = z, value->w = w;
+        };
+        loader(0, GPU_FLOAT, 3);
+        if (u.fixedColor) pad(0xC), fixed(1, u.color[0], u.color[1], u.color[2], u.color[3]);
+        else loader(1, GPU_UNSIGNED_BYTE, 4);
+        for (unsigned unit = 0; unit < 3; ++unit) {
+            if (unit < u.units) loader(2 + int(unit), GPU_FLOAT, 3);
+            else pad(0xE), fixed(2 + int(unit), 0, 0, 0, 1);
+        }
+        if (mesh.slots) loader(5, GPU_FLOAT, 1);
+        else fixed(5, 0, 0, 0, 0);
+        C3D_BufInfo* buffers = C3D_GetBufInfo();
+        BufInfo_Init(buffers);
+        BufInfo_Add(buffers, mesh.block, sizeof(GxMeshVertex), components, permutation);
+        // GX culls in the EFB, its y down; the PICA sees the same triangles turned for the screen.
+        C3D_CullFace(u.reject == 1 ? GPU_CULL_FRONT_CCW : u.reject == 2 ? GPU_CULL_BACK_CCW : GPU_CULL_NONE);
+        C3D_DrawElements(GPU_TRIANGLES, int(mesh.indexCount), C3D_UNSIGNED_SHORT,
+                         static_cast<std::uint8_t*>(mesh.block) + mesh.vertexCount * sizeof(GxMeshVertex));
+        C3D_CullFace(GPU_CULL_NONE);
+        bindCpuBuffers();
+        fresh[0] = fresh[1] = false;
+        ++perf.meshDraws, perf.meshTriangles += mesh.indexCount / 3;
+    }
+
     // The pending primitives as one draw, under the state they share.
     void flushBatch() {
         if (indexUsed == batchStart) return;
+        applyState();
+        const bool wholeScreen = dumping && dumpBatch();
+        C3D_DrawElements(GPU_TRIANGLES, static_cast<int>(indexUsed - batchStart), C3D_UNSIGNED_SHORT, indices + batchStart);
+        ++perf.draws, perf.triangles += (indexUsed - batchStart) / 3;
+        batchStart = indexUsed;
+        fresh[0] = fresh[1] = false;
+        if (wholeScreen) dumpEfbAverage("after it");
+    }
+
+    void applyState() {
         if (!applied || appliedVersion != stateVersion) {
             pixel.apply();
             C3D_DepthTest(pixel.depthTest, pixel.depthTest ? pixel.depthFunc : GPU_ALWAYS, static_cast<GPU_WRITEMASK>(writeMask));
@@ -411,12 +659,6 @@ struct Renderer {
                 C3D_TexBind(unit, &texture(state.textures[state.program.units[unit].texture]));
             applied = true, appliedVersion = stateVersion;
         }
-        const bool wholeScreen = dumping && dumpBatch();
-        C3D_DrawElements(GPU_TRIANGLES, static_cast<int>(indexUsed - batchStart), C3D_UNSIGNED_SHORT, indices + batchStart);
-        ++perf.draws, perf.triangles += (indexUsed - batchStart) / 3;
-        batchStart = indexUsed;
-        fresh[0] = fresh[1] = false;
-        if (wholeScreen) dumpEfbAverage("after it");
     }
 
     // The EFB's average colour so far, read back (dumps only): which full-screen pass changes the picture, and how.
@@ -466,10 +708,32 @@ struct Renderer {
             top += item;
             perf.changed[most - perf.changed] = 0;
         }
-        std::fprintf(stderr, "gx perf: TEV programs compiled %.1f, movie frames decoded %.1f per frame; state changes by BP register (per frame):%s\n",
-                     (gxTevCompiles() - perf.compilesBefore) / n, (smgMovieDecodes() - perf.moviesBefore) / n, top.c_str());
+        std::fprintf(stderr, "gx perf: GPU path %.0f draws, %.0f triangles, %.1f meshes made per frame (%zu kept, %.1f MB); TEV programs compiled %.1f, "
+                     "movie frames decoded %.1f, display lists %.0f (%.0f bytes) per frame; %.1f MB linear free; state changes by BP register (per frame):%s\n",
+                     perf.meshDraws / n, perf.meshTriangles / n, perf.meshesMade / n, meshes.size(), meshBytes / 1048576.0, (gxTevCompiles() - perf.compilesBefore) / n,
+                     (smgMovieDecodes() - perf.moviesBefore) / n, (lastGpu->displayListCalls - perf.listsBefore) / n,
+                     (lastGpu->displayListBytes - perf.listBytesBefore) / n, linearSpaceFree() / 1048576.0, top.c_str());
+        // Why display lists stayed on the CPU path, and the first commands of those that weren't primitives.
+        std::string refusals;
+        for (unsigned why = 1; why < GxVertexPipeline::MeshRefusals; ++why) {
+            char item[24];
+            std::snprintf(item, sizeof item, " %u:%.0f", why, perf.refused[why] / n);
+            if (perf.refused[why]) refusals += item;
+        }
+        refusals += "; first commands";
+        for (int k = 0; k < 4; ++k) {
+            const u32* most = std::max_element(perf.refusedOpcode, perf.refusedOpcode + 0x100);
+            if (!*most) break;
+            char item[24];
+            std::snprintf(item, sizeof item, " %02X:%.0f", unsigned(most - perf.refusedOpcode), *most / n);
+            refusals += item;
+            perf.refusedOpcode[most - perf.refusedOpcode] = 0;
+        }
+        std::fprintf(stderr, "gx perf: display lists refused by reason (per frame):%s; meshes invalidated %.1f, overflows %.1f, over budget %.1f, "
+                     "key mismatches %.1f, flushes queued %.1f\n", refusals.c_str(), perf.meshInvalidated / n, perf.meshOverflows / n,
+                     perf.meshBudgetDrops / n, perf.meshMismatches / n, perf.flushesQueued / n);
         perf = Perf{};
-        perf.since = now;
+        perf.since = now, perf.listsBefore = lastGpu->displayListCalls, perf.listBytesBefore = lastGpu->displayListBytes;
     }
 
     // Textures made from memory a copy has just written are stale.
@@ -818,6 +1082,7 @@ struct Renderer {
 
     // PE_COPY_CMD: opcode 1 copies to the display, 0 to a texture; bit 11 clears the EFB after.
     void copy(const GxCommandProcessor& gpu, std::uint32_t command) {
+        lastGpu = &gpu;
         if (!(command >> 14 & 1)) return textureCopy(gpu, command);
         const std::uint32_t size = gpu.bp[0x4A];
         frame.width = static_cast<float>((size & 0x3FF) + 1), frame.height = static_cast<float>((size >> 10 & 0x3FF) + 1);
@@ -843,6 +1108,28 @@ void gxRenderPrimitive(const GxCommandProcessor& gpu, std::uint8_t kind, std::ui
 }
 
 void gxRenderCopiesStayOnGpu(bool stay) { sCopiesStayOnGpu = stay; }
+
+bool gxRenderDisplayList(const GxCommandProcessor& gpu, std::uint32_t address, std::uint32_t size) {
+    const PortMemory memory;
+    return renderer().displayList(gpu, address, size);
+}
+
+void gxRenderMemoryChanged(const void* start, std::uint32_t size) {
+    if (!size) return;
+    const std::uintptr_t first = reinterpret_cast<std::uintptr_t>(start) >> 12, last = (reinterpret_cast<std::uintptr_t>(start) + size - 1) >> 12;
+    bool meshPage = false;
+    for (std::uintptr_t page = first; page <= last && !meshPage; ++page)
+        meshPage = sMeshPageBits[page >> 5].load(std::memory_order_relaxed) >> (page & 31) & 1;
+    if (!meshPage) return;
+    LightLock_Lock(&sChanged.lock);
+    if (sChanged.count < 1024) {
+        sChanged.start[sChanged.count] = reinterpret_cast<std::uintptr_t>(start);
+        sChanged.end[sChanged.count++] = reinterpret_cast<std::uintptr_t>(start) + size;
+    } else {
+        sChanged.overflowed = true;
+    }
+    LightLock_Unlock(&sChanged.lock);
+}
 
 void gxRenderMovieFrame(const std::uint8_t* y, const std::uint8_t* u, const std::uint8_t* v, unsigned width, unsigned height, unsigned generation,
                         int x, int top, int w, int h) {
