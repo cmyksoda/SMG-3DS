@@ -330,12 +330,13 @@ struct Renderer {
         C3D_TexBind(int(unit), &texture);
         sent.texture[unit] = true, sent.bound[unit] = &texture, sent.boundWas[unit] = texture;
     }
-    void sendFixed(int reg, float x, float y, float z, float w) {
-        C3D_FVec& was = sent.fixedWas[reg];
-        if (sent.fixed[reg] && was.x == x && was.y == y && was.z == z && was.w == w) return;
-        C3D_FVec* value = C3D_FixedAttribGetWritePtr(reg);
+    // `attribute` is the attribute's index among the loaders and fixed ones, as AttrInfo_AddFixed returns it.
+    void sendFixed(int attribute, float x, float y, float z, float w) {
+        C3D_FVec& was = sent.fixedWas[attribute];
+        if (sent.fixed[attribute] && was.x == x && was.y == y && was.z == z && was.w == w) return;
+        C3D_FVec* value = C3D_FixedAttribGetWritePtr(attribute);
         value->x = x, value->y = y, value->z = z, value->w = w;
-        sent.fixed[reg] = true, was = *value;
+        sent.fixed[attribute] = true, was = *value;
     }
 
     // The CPU path's vertices: transformed already, the shader passing them on. Bound again only when a draw from them
@@ -963,10 +964,12 @@ struct Renderer {
             else AttrInfo_AddFixed(attributes, 5);
             sent.meshLayout = layout, sent.meshPermutation = permutation, sent.meshComponents = components;
         }
+        // A fixed value goes to its attribute's place among the seven (colour 1, texgen inputs 2-4, normal 5, slot 6), which
+        // citro3d numbers in the order they were added, not to the shader register it feeds.
         if (u.fixedColor) sendFixed(1, u.color[0], u.color[1], u.color[2], u.color[3]);
         for (unsigned unit = u.units; unit < 3; ++unit) sendFixed(2 + int(unit), 0, 0, 0, 1);
-        if (!u.lit) sendFixed(6, 0, 0, 0, 0);
-        if (!mesh.slots) sendFixed(5, 0, 0, 0, 0);
+        if (!u.lit) sendFixed(5, 0, 0, 0, 0);
+        if (!mesh.slots) sendFixed(6, 0, 0, 0, 0);
         C3D_BufInfo* buffers = C3D_GetBufInfo();
         BufInfo_Init(buffers);
         BufInfo_Add(buffers, mesh.block, sizeof(GxMeshVertex), sent.meshComponents, sent.meshPermutation);
