@@ -136,7 +136,7 @@ struct Renderer {
     PicaPixel pixel;
     int writeMask = 0, scissor[4] = {};
     bool stateValid = false, applied = false, scissorEmpty = false, scissorWhole = true;
-    u32 stateBp = 0, stateVersion = 0, appliedVersion = 0;
+    u32 stateBp = 0, stateBpBesideC0 = 0, stateVersion = 0, appliedVersion = 0;
     GxFrame stateFrame;
     // The target's colour and depth read back (both four bytes a pixel, the screen's way round), until drawn on again.
     u32* readback[2] = {};
@@ -552,8 +552,9 @@ struct Renderer {
     void ensureState(const GxCommandProcessor& gpu) {
         if (!stateValid || gpu.bpChanges != stateBp || !(frame == stateFrame)) {
             std::uint8_t color0[4];
-            if (stateValid && frame == stateFrame && state_->color0InVertex && onlyColor0Changed(gpu) && gxColor0Bytes(gpu, color0))
-                stateBp = gpu.bpChanges, ++perf.color0Rides;
+            if (stateValid && frame == stateFrame && state_->color0InVertex &&
+                (gpu.bpChangesBesideC0 == stateBpBesideC0 || onlyColor0Changed(gpu)) && gxColor0Bytes(gpu, color0))
+                stateBp = gpu.bpChanges, stateBpBesideC0 = gpu.bpChangesBesideC0, ++perf.color0Rides;
             else
                 buildState(gpu);
         } else {
@@ -633,7 +634,7 @@ struct Renderer {
         std::memcpy(bpAtBuild, gpu.bp, sizeof bpAtBuild);
         std::memcpy(colorAtBuild, gpu.tevColor, sizeof colorAtBuild);
         std::memcpy(konstAtBuild, gpu.tevKonst, sizeof konstAtBuild);
-        stateValid = true, stateBp = gpu.bpChanges, stateFrame = frame, ++stateVersion;
+        stateValid = true, stateBp = gpu.bpChanges, stateBpBesideC0 = gpu.bpChangesBesideC0, stateFrame = frame, ++stateVersion;
         if (state_->unsupported) stop(state_->unsupported);
         if (state_->material.blend.type == 2 && state_->material.blend.logic != 3) stop("a logic op other than copy");
         if (state_->depthTextureOp) depthFromTexture(*state_);
