@@ -88,17 +88,26 @@ struct GxLighting {
 
 // The GPU path: a display list of primitives decoded once, in model space, for the PICA's vertex shader to transform
 // every time it is called. Each vertex carries what the shader reads: its position, colour, each texgen's input vector
-// (the CPU path's `in`, its fourth component one) and its matrix slot's first uniform row (slot x 4).
+// (the CPU path's `in`, its fourth component one), its normal (for lighting) and its matrix slot's first uniform row:
+// slot x 4 unlit (each slot's four clip rows), its group's compact slot x 10 lit (clip, modelview and normal rows).
 struct GxMeshVertex {
     float position[3];
     std::uint8_t color[4];
     float source[CombinerProgram::MaxUnits][3];
+    float normal[3];
     float slot;
 };
 struct GxMesh {
     std::vector<GxMeshVertex> vertices;
     std::vector<std::uint16_t> indices;  // triangles; GX's culling is left to the PICA
     std::uint16_t slots = 0;             // per-vertex matrix slots named (bit per slot)
+    // Draws of its indices: lit, each names at most four slots (the shader's forty rows), its compact slots' real ones.
+    struct Group {
+        std::uint32_t firstIndex = 0, indexCount = 0;
+        std::uint8_t slotMap[4] = {}, slotCount = 0;
+    };
+    std::vector<Group> groups;
+    std::vector<std::uint32_t> origin;  // each vertex's place among the list's own vertices (a group's copies share one)
     const std::uint8_t* arraysLo = nullptr;  // the array elements its vertices read, [lo, hi)
     const std::uint8_t* arraysHi = nullptr;
     std::uint8_t formats = 0;  // the vertex formats its primitives use, a bit each
@@ -109,6 +118,15 @@ struct GxMeshUniforms {
     float clip[10][16];
     std::uint16_t slots = 0;
     float texgen[CombinerProgram::MaxUnits][3][4];
+    // Lit: channel 0's colour and alpha worked out on the GPU. Per compact slot the modelview and normal rows; per
+    // light entry (up to four) its colour (0-1, zero in a part it doesn't light); position prescaled, a0; direction,
+    // a1; a2, k0, k1, k2 (one and zeros unattenuated); -prescale, 1/prescale (a far light's position scaled to about
+    // one); spot (else specular), diffuse, the cosine's floor (0 clamped, -2 signed).
+    bool lit = false, rgbLit = false, alphaLit = false;
+    unsigned lights = 0;
+    float light[4][6][4];
+    float modelView[4][12], normal[4][9];
+    float ambient[4] = {};
     bool projective[CombinerProgram::MaxUnits] = {};
     unsigned units = 0;
     // Unlit colour: per vertex, or this colour for the draw; with vertex colours, each part from the vertex or from it.
@@ -133,14 +151,18 @@ public:
     // After prepare: whether display lists under this state can take the GPU path (unlit or riding colour, folded
     // texgens with a matrix for the whole primitive, no depth texture), and the mesh a list decodes to (false when it
     // holds anything but primitives, or a matrix index that doesn't name a whole slot of the ten).
-    // Why a mesh can't be used (0 when it can): the state (1 unsupported, 2 depth texture, 3 lit, 4 texgen, 5 colour and
-    // alpha from different places) or the list (6 a command other than a primitive, 7 a matrix index naming no whole
-    // slot, 8 more vertices than 16-bit indices reach, 9 nothing drawn).
-    enum MeshRefusal : unsigned { MeshOk, MeshUnsupported, MeshDepthTexture, MeshLit, MeshTexgen, MeshColorSources, MeshCommand,
+    // Why a mesh can't be used (0 when it can): the state (1 unsupported, 2 depth texture, 3 lit with ambient from the
+    // vertex, 4 lit with C0 riding in the vertex colour, 5 more than four light entries, 6 texgen) or the list (7 a
+    // command other than a primitive, 8 a matrix index naming no whole slot, 9 more vertices than 16-bit indices reach,
+    // 10 nothing drawn).
+    enum MeshRefusal : unsigned { MeshOk, MeshUnsupported, MeshDepthTexture, MeshLit, MeshLitColor0, MeshLights, MeshTexgen, MeshCommand,
                                   MeshMatrixIndex, MeshTooLarge, MeshEmpty, MeshRefusals };
     unsigned meshEligible() const;
     unsigned buildMesh(const std::uint8_t* list, std::uint32_t size, GxMesh& mesh) const;
-    void meshUniforms(std::uint16_t slots, GxMeshUniforms& out);
+    void meshUniforms(std::uint16_t slots, const GxMesh::Group& group, GxMeshUniforms& out);
+    // Another group of the same mesh: only its slots' rows.
+    void meshSlotUniforms(const GxMesh::Group& group, GxMeshUniforms& out);
+    bool meshLit() const { return lit_; }
     // The texgens' sources as a mesh's vertices hold them (row and input form per unit), for a mesh's key.
     std::uint32_t meshSources() const;
     // Whether this state's colour comes from each vertex (otherwise GxMeshUniforms' fixed colour): part of a mesh's key.
@@ -188,6 +210,10 @@ private:
     GxLighting lighting_;
     std::uint32_t lightingXf_ = ~0u;
 };
+
+// gx.v.pica's transform path in C++, for checking meshes against the CPU path: one vertex under a draw's uniforms, its
+// clip-space position, colour (0-1) and each unit's texture coordinates.
+void gxMeshModel(const GxMeshUniforms& u, const GxMeshVertex& v, float clip[4], float color[4], float tex[CombinerProgram::MaxUnits][2]);
 
 // GX's lighting for colour channel 0 at one vertex, straight from the processor's state (GxLighting, read and applied).
 void gxLitChannel(const GxCommandProcessor& gpu, const float view[3], const float normal[3], const std::uint8_t vertex[4], std::uint8_t out[4]);

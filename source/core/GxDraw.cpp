@@ -236,6 +236,45 @@ void GxLighting::apply(const float view[3], const float normal[3], const std::ui
     }
 }
 
+void gxMeshModel(const GxMeshUniforms& u, const GxMeshVertex& v, float clip[4], float color[4], float tex[CombinerProgram::MaxUnits][2]) {
+    const auto dot3 = [](const float* a, const float* b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; };
+    const auto dot4 = [](const float* row, const float* xyz) { return row[0] * xyz[0] + row[1] * xyz[1] + row[2] * xyz[2] + row[3]; };
+    const unsigned slot = static_cast<unsigned>(v.slot) / (u.lit ? 10 : 4);
+    for (int r = 0; r < 4; ++r) clip[r] = dot4(u.clip[slot] + r * 4, v.position);
+    for (unsigned t = 0; t < u.units; ++t) {
+        const float s = dot4(u.texgen[t][0], v.source[t]), w = dot4(u.texgen[t][1], v.source[t]);
+        const float q = u.projective[t] ? dot4(u.texgen[t][2], v.source[t]) : 1;
+        tex[t][0] = s / q, tex[t][1] = w / q;
+    }
+    for (int c = 0; c < 4; ++c) {
+        const bool fromRegister = !u.fixedColor && (c < 3 ? !u.rgbFromVertex : !u.alphaFromVertex);
+        color[c] = (u.fixedColor || fromRegister ? u.color[c] : v.color[c]) / 255.0f;
+    }
+    if (!u.lit) return;
+    const float* mv = u.modelView[slot];
+    const float* nm = u.normal[slot];
+    float view[3], n[3];
+    for (int r = 0; r < 3; ++r) view[r] = dot4(mv + r * 4, v.position), n[r] = dot3(nm + r * 3, v.normal);
+    const float nl = dot3(n, n) > 0 ? 1 / std::sqrt(dot3(n, n)) : 0;
+    for (float& c : n) c *= nl;
+    float sum[4] = {u.ambient[0], u.ambient[1], u.ambient[2], u.ambient[3]};
+    for (unsigned l = 0; l < u.lights; ++l) {
+        const float(&L)[6][4] = u.light[l];
+        float t[3];
+        for (int c = 0; c < 3; ++c) t[c] = view[c] * L[4][0] + L[1][c];
+        const float len2 = dot3(t, t), inv = len2 > 0 ? 1 / std::sqrt(len2) : 0;
+        for (float& c : t) c *= inv;
+        const float spotAngle = std::max(0.0f, dot3(t, L[2])), distance = len2 * inv * L[4][1];
+        const float specular = dot3(t, n) >= 0 ? std::max(0.0f, dot3(L[2], n)) : 0.0f;
+        const float a = specular + L[5][0] * (spotAngle - specular), d = specular + L[5][0] * (distance - specular);
+        float scale = std::max(0.0f, (a * L[3][0] + L[2][3]) * a + L[1][3]) / ((d * L[3][3] + L[3][2]) * d + L[3][1]);
+        scale *= 1 + L[5][1] * (std::max(dot3(t, n), L[5][2]) - 1);
+        for (int c = 0; c < 4; ++c) sum[c] += L[0][c] * scale;
+    }
+    for (int c = 0; c < 4; ++c)
+        if (c < 3 ? u.rgbLit : u.alphaLit) color[c] *= std::clamp(sum[c], 0.0f, 1.0f);
+}
+
 void gxLitChannel(const GxCommandProcessor& gpu, const float view[3], const float normal[3], const std::uint8_t vertex[4], std::uint8_t out[4]) {
     GxLighting lighting;
     lighting.read(gpu);
@@ -573,6 +612,36 @@ std::size_t GxVertexPipeline::run(const std::uint8_t* data, std::uint16_t count,
     return n;
 }
 
+namespace {
+// The shader's light entries: a light under one part's settings, feeding the colour, the alpha or both (both only when
+// the two parts treat it alike). More than four can't be drawn (returns five).
+struct LightEntry {
+    std::uint8_t light, part;
+    bool rgb, alpha;
+};
+unsigned lightEntries(const GxLighting& lighting, LightEntry out[4]) {
+    unsigned count = 0;
+    for (int i = 0; i < 2; ++i) {
+        const GxLighting::Part& part = lighting.parts[i];
+        if (!part.lit) continue;
+        for (int n = 0; n < 8; ++n) {
+            if (!(part.mask >> n & 1)) continue;
+            if (i == 1 && lighting.parts[0].lit && lighting.parts[0].mask >> n & 1) {
+                const GxLighting::Part& color = lighting.parts[0];
+                if (color.diffuse == part.diffuse && color.attenuated == part.attenuated && color.spot == part.spot) {
+                    for (unsigned e = 0; e < count; ++e)
+                        if (out[e].light == n) out[e].alpha = true;
+                    continue;
+                }
+            }
+            if (count == 4) return 5;
+            out[count++] = {static_cast<std::uint8_t>(n), static_cast<std::uint8_t>(i), i == 0, i == 1};
+        }
+    }
+    return count;
+}
+} // namespace
+
 bool GxVertexPipeline::meshColorFromVertex() const {
     return channel_ && !color0InVertex_ && (lighting_.parts[0].materialFromVertex || lighting_.parts[1].materialFromVertex);
 }
@@ -580,7 +649,16 @@ bool GxVertexPipeline::meshColorFromVertex() const {
 unsigned GxVertexPipeline::meshEligible() const {
     if (unsupported) return MeshUnsupported;
     if (fixedDepth_) return MeshDepthTexture;
-    if (lit_) return MeshLit;
+    if (lit_) {
+        // The shader runs up to four light entries, each a light under one part's settings (an actor lights its colour
+        // with lights 0 and 1, its alpha with light 2 and other settings).
+        const GxLighting::Part& color = lighting_.parts[0];
+        const GxLighting::Part& alpha = lighting_.parts[1];
+        if (color0InVertex_) return MeshLitColor0;
+        if ((color.lit && color.ambientFromVertex) || (alpha.lit && alpha.ambientFromVertex)) return MeshLit;
+        LightEntry entries[4];
+        if (lightEntries(lighting_, entries) > 4) return MeshLights;
+    }
     for (unsigned u = 0; u < units_; ++u)
         if (!texgens_[u].folded || texgens_[u].perVertexMatrix) return MeshTexgen;
     return MeshOk;
@@ -620,10 +698,12 @@ unsigned GxVertexPipeline::buildMesh(const std::uint8_t* list, std::uint32_t siz
                 else in[0] = v.texcoord[t.source - 5][0], in[1] = v.texcoord[t.source - 5][1], in[2] = 1;
                 if (!t.threeInputs) in[2] = 1;
             }
+            std::memcpy(m.normal, v.normal, sizeof m.normal);
             if (perVertexMatrix_) {
                 if (v.matrixIndex % 3 || v.matrixIndex >= 30) return MeshMatrixIndex;
-                m.slot = static_cast<float>(v.matrixIndex / 3 * 4);
-                mesh.slots = static_cast<std::uint16_t>(mesh.slots | 1u << (v.matrixIndex / 3));
+                const unsigned slot = v.matrixIndex / 3;
+                m.slot = static_cast<float>(lit_ ? slot : slot * 4);  // lit: renumbered by group below
+                mesh.slots = static_cast<std::uint16_t>(mesh.slots | 1u << slot);
             }
             mesh.vertices.push_back(m);
         }
@@ -646,7 +726,55 @@ unsigned GxVertexPipeline::buildMesh(const std::uint8_t* list, std::uint32_t siz
         }
         at += 3 + std::uint32_t(count) * layout.size;
     }
-    return mesh.indices.empty() ? MeshEmpty : MeshOk;
+    if (mesh.indices.empty()) return MeshEmpty;
+    if (!lit_ || !perVertexMatrix_) {
+        mesh.groups.push_back({0, static_cast<std::uint32_t>(mesh.indices.size()), {}, 0});
+        mesh.origin.resize(mesh.vertices.size());
+        for (std::uint32_t i = 0; i < mesh.origin.size(); ++i) mesh.origin[i] = i;
+        return MeshOk;
+    }
+    // Lit: triangles in order, a new group whenever one would name a fifth slot; each group's vertices its own copies,
+    // numbered by its compact slots.
+    std::vector<GxMeshVertex> vertices;
+    std::vector<std::uint16_t> indices;
+    std::vector<std::int32_t> copy(mesh.vertices.size(), -1);
+    std::vector<std::uint32_t> copied;
+    GxMesh::Group group;
+    for (std::size_t t = 0; t < mesh.indices.size(); t += 3) {
+        std::uint8_t slots[3], fresh = 0;
+        for (int k = 0; k < 3; ++k) {
+            slots[k] = static_cast<std::uint8_t>(mesh.vertices[mesh.indices[t + k]].slot);
+            bool known = std::find(group.slotMap, group.slotMap + group.slotCount, slots[k]) != group.slotMap + group.slotCount;
+            for (int j = 0; j < k; ++j) known |= slots[j] == slots[k];
+            fresh = static_cast<std::uint8_t>(fresh + !known);
+        }
+        if (group.slotCount + fresh > 4) {
+            group.indexCount = static_cast<std::uint32_t>(indices.size()) - group.firstIndex;
+            mesh.groups.push_back(group);
+            group = GxMesh::Group{};
+            group.firstIndex = static_cast<std::uint32_t>(indices.size());
+            for (std::uint32_t v : copied) copy[v] = -1;
+            copied.clear();
+        }
+        for (int k = 0; k < 3; ++k) {
+            const std::uint16_t source = mesh.indices[t + k];
+            if (copy[source] < 0) {
+                if (vertices.size() == 0x10000) return MeshTooLarge;
+                unsigned slot = 0;
+                while (slot < group.slotCount && group.slotMap[slot] != slots[k]) ++slot;
+                if (slot == group.slotCount) group.slotMap[group.slotCount++] = slots[k];
+                copy[source] = static_cast<std::int32_t>(vertices.size()), copied.push_back(source);
+                vertices.push_back(mesh.vertices[source]);
+                mesh.origin.push_back(source);
+                vertices.back().slot = static_cast<float>(slot * 10);
+            }
+            indices.push_back(static_cast<std::uint16_t>(copy[source]));
+        }
+    }
+    group.indexCount = static_cast<std::uint32_t>(indices.size()) - group.firstIndex;
+    mesh.groups.push_back(group);
+    mesh.vertices = std::move(vertices), mesh.indices = std::move(indices);
+    return MeshOk;
 }
 
 std::uint32_t GxVertexPipeline::meshSources() const {
@@ -655,9 +783,49 @@ std::uint32_t GxVertexPipeline::meshSources() const {
     return key;
 }
 
-void GxVertexPipeline::meshUniforms(std::uint16_t slots, GxMeshUniforms& out) {
+void GxVertexPipeline::meshSlotUniforms(const GxMesh::Group& group, GxMeshUniforms& out) {
+    // Compact slots: the matrix rows, the modelview rows and the normal rows (XF 0x400, three of three per slot).
     out.slots = 0;
-    if (perVertexMatrix_) {
+    const unsigned count = perVertexMatrix_ ? group.slotCount : 1;
+    for (unsigned k = 0; k < count; ++k) {
+        const std::uint32_t row = perVertexMatrix_ ? group.slotMap[k] * 3u : defaultMatrix_;
+        std::memcpy(out.clip[k], clipMatrix(row), sizeof out.clip[k]);
+        for (int r = 0; r < 3; ++r)
+            for (int c = 0; c < 4; ++c) out.modelView[k][r * 4 + c] = matrix(row + r, c);
+        const std::uint32_t normals = 0x400 + (row & 31) * 3;
+        for (int i = 0; i < 9; ++i) out.normal[k][i] = asFloat(gpu_->xf[normals + i]);
+        out.slots |= 1u << k;
+    }
+}
+
+void GxVertexPipeline::meshUniforms(std::uint16_t slots, const GxMesh::Group& group, GxMeshUniforms& out) {
+    out.slots = 0;
+    out.lit = lit_;
+    if (lit_) {
+        meshSlotUniforms(group, out);
+        out.rgbLit = lighting_.parts[0].lit, out.alphaLit = lighting_.parts[1].lit;
+        LightEntry entries[4];
+        out.lights = std::min(lightEntries(lighting_, entries), 4u);
+        for (unsigned e = 0; e < out.lights; ++e) {
+            const GxLighting::Part& part = lighting_.parts[entries[e].part];
+            const GxLighting::Light& l = lighting_.lights[entries[e].light];
+            float (&packed)[6][4] = out.light[e];
+            float cosine[3] = {l.cosine[0], l.cosine[1], l.cosine[2]}, distance[3] = {l.distance[0], l.distance[1], l.distance[2]};
+            if (!part.attenuated) cosine[0] = distance[0] = 1, cosine[1] = cosine[2] = distance[1] = distance[2] = 0;  // a scale of one
+            else if (!part.spot && part.diffuse) normalize(distance);  // as GxLighting's specular branch does
+            const float far = std::max({std::fabs(l.position[0]), std::fabs(l.position[1]), std::fabs(l.position[2])});
+            const float prescale = far > 1e6f ? 1 / far : 1;
+            for (int c = 0; c < 4; ++c) packed[0][c] = (c < 3 ? entries[e].rgb : entries[e].alpha) ? l.color[c] / 255.0f : 0;
+            for (int c = 0; c < 3; ++c) packed[1][c] = l.position[c] * prescale;
+            packed[1][3] = cosine[0];
+            packed[2][0] = l.direction[0], packed[2][1] = l.direction[1], packed[2][2] = l.direction[2], packed[2][3] = cosine[1];
+            packed[3][0] = cosine[2], packed[3][1] = distance[0], packed[3][2] = distance[1], packed[3][3] = distance[2];
+            packed[4][0] = -prescale, packed[4][1] = 1 / prescale, packed[4][2] = packed[4][3] = 0;
+            packed[5][0] = part.attenuated && part.spot, packed[5][1] = part.diffuse != 0, packed[5][2] = part.diffuse == 2 ? 0.0f : -2.0f;
+            packed[5][3] = 0;
+        }
+        for (int c = 0; c < 4; ++c) out.ambient[c] = lighting_.ambient[c] / 255.0f;
+    } else if (perVertexMatrix_) {
         for (unsigned slot = 0; slot < 10; ++slot)
             if (slots >> slot & 1) std::memcpy(out.clip[slot], clipMatrix(slot * 3), sizeof out.clip[slot]), out.slots |= 1u << slot;
     } else {

@@ -43,6 +43,8 @@ constexpr std::size_t MaxVertices = VertexBytes / sizeof(GxDrawVertex), MaxIndic
 static_assert(MaxVertices <= 0x10000, "vertex numbers are 16 bits");
 // Room a draw's commands need at most, in words: when less is left, the frame is ended and begun again (see roomFor).
 constexpr u32 DrawCommandWords = 0x800;
+// A mesh group's slot rows (up to forty uniforms, four words each) and its draw, beyond the first group's.
+constexpr u32 GroupCommandWords = 0x140;
 // The render target read back whole for a texture copy, still tiled the screen's way round but linear.
 constexpr u32 ReadbackFlags = GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | GX_TRANSFER_RAW_COPY(0) |
                               GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) | GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGBA8) |
@@ -143,12 +145,14 @@ struct Renderer {
     // each drawn whole with its matrix slots and texgen rows as uniforms.
     int clipUniform = -1, texrowUniform = -1, transformUniform = -1, projectUniform[3] = {-1, -1, -1};
     int materialUniform = -1, rgbRegUniform = -1, alphaRegUniform = -1;
+    int ambientUniform = -1, lightUniform = -1, lightLoopUniform = -1, litUniform = -1, rgbLitUniform = -1, alphaLitUniform = -1, anyLightUniform = -1;
     struct CachedMesh {
         std::vector<u32> key;
         std::vector<std::pair<std::uint8_t, u32>> depends;  // the CP registers it was decoded under, and their values
         void* block = nullptr;  // vertices, then indices
         u32 vertexCount = 0, indexCount = 0;
         std::uint16_t slots = 0;
+        std::vector<GxMesh::Group> groups;
         std::uintptr_t range[2][2] = {};  // the memory it was made from, [lo, hi): the display list, the array elements
     };
     std::unordered_map<std::uint64_t, CachedMesh> meshes;
@@ -206,6 +210,13 @@ struct Renderer {
         materialUniform = shaderInstanceGetUniformLocation(program.vertexShader, "material");
         rgbRegUniform = shaderInstanceGetUniformLocation(program.vertexShader, "rgbreg");
         alphaRegUniform = shaderInstanceGetUniformLocation(program.vertexShader, "alphareg");
+        const auto find = [&](const char* name) {
+            const int at = shaderInstanceGetUniformLocation(program.vertexShader, name);
+            if (at < 0) stop("the GX shader's uniforms");
+            return at;
+        };
+        ambientUniform = find("ambient"), lightUniform = find("light"), lightLoopUniform = find("lightloop"), litUniform = find("lit");
+        rgbLitUniform = find("rgblit"), alphaLitUniform = find("alphalit"), anyLightUniform = find("anylight");
         if (clipUniform < 0 || texrowUniform < 0 || transformUniform < 0 || projectUniform[2] < 0 || materialUniform < 0 || alphaRegUniform < 0)
             stop("the GX shader's uniforms");
         ready = true;
@@ -237,8 +248,14 @@ struct Renderer {
         applied = false;
     }
 
-    // The CPU path's vertices: transformed already, the shader passing them on.
+    // The CPU path's vertices: transformed already, the shader passing them on. Bound again only when a draw from them
+    // follows a mesh's (consecutive meshes are most of a scene's draws).
+    bool cpuBound = false;
+    void ensureCpuBuffers() {
+        if (!cpuBound) bindCpuBuffers();
+    }
     void bindCpuBuffers() {
+        cpuBound = true;
         C3D_BoolUnifSet(GPU_VERTEX_SHADER, transformUniform, false);
         C3D_BoolUnifSet(GPU_VERTEX_SHADER, rgbRegUniform, false);
         C3D_BoolUnifSet(GPU_VERTEX_SHADER, alphaRegUniform, false);
@@ -522,9 +539,10 @@ struct Renderer {
         // The key: the list, its first and last words (another list at a freed address differs), where the colour comes
         // from and the texgens' sources. The CP registers its vertices were read under are checked apart, only those it
         // uses: other formats' tables and the matrix arrays (12-15) change every frame without touching it.
-        u32 key[6];
+        u32 key[7];
         unsigned n = 0;
         key[n++] = address, key[n++] = size, key[n++] = pipeline.meshColorFromVertex(), key[n++] = pipeline.meshSources();
+        key[n++] = pipeline.meshLit();  // lit meshes number their slots another way
         std::memcpy(&key[n], list, 4), std::memcpy(&key[n + 1], list + size - 4, 4), n += 2;
         std::uint64_t hash = 0xCBF29CE484222325ull;
         for (unsigned i = 0; i < n; ++i) hash = (hash ^ key[i]) * 0x100000001B3ull;
@@ -559,6 +577,7 @@ struct Renderer {
                     for (unsigned base : {0xA0u, 0xB0u}) cached.depends.emplace_back(std::uint8_t(base + a), gpu.cp[base + a]);
             cached.block = block, cached.vertexCount = u32(mesh.vertices.size()), cached.indexCount = u32(mesh.indices.size());
             cached.slots = mesh.slots;
+            cached.groups = std::move(mesh.groups);
             // Apart: a list and its arrays sit in different heaps, and one span over both would take in whatever lies between.
             cached.range[0][0] = reinterpret_cast<std::uintptr_t>(list), cached.range[0][1] = cached.range[0][0] + size;
             cached.range[1][0] = reinterpret_cast<std::uintptr_t>(mesh.arraysLo), cached.range[1][1] = reinterpret_cast<std::uintptr_t>(mesh.arraysHi);
@@ -580,17 +599,25 @@ struct Renderer {
     void drawMesh(const CachedMesh& mesh) {
         if (!inFrame) begin();
         flushBatch();
-        roomFor(0);
+        roomFor(0, DrawCommandWords + u32(mesh.groups.size() - 1) * GroupCommandWords);
         applyState();
         GxMeshUniforms u;
-        pipeline.meshUniforms(mesh.slots, u);
+        pipeline.meshUniforms(mesh.slots, mesh.groups[0], u);
         if (u.reject == 3) return;  // GX culls every triangle
-        for (unsigned slot = 0; slot < 10; ++slot)
-            if (u.slots >> slot & 1)
-                for (int r = 0; r < 4; ++r) {
-                    const float* row = u.clip[slot] + r * 4;
-                    C3D_FVUnifSet(GPU_VERTEX_SHADER, clipUniform + int(slot) * 4 + r, row[0], row[1], row[2], row[3]);
+        slotUniforms(u);
+        C3D_BoolUnifSet(GPU_VERTEX_SHADER, litUniform, u.lit);
+        if (u.lit) {
+            for (unsigned l = 0; l < u.lights; ++l)
+                for (int r = 0; r < 6; ++r) {
+                    const float* row = u.light[l][r];
+                    C3D_FVUnifSet(GPU_VERTEX_SHADER, lightUniform + int(l) * 6 + r, row[0], row[1], row[2], row[3]);
                 }
+            C3D_FVUnifSet(GPU_VERTEX_SHADER, ambientUniform, u.ambient[0], u.ambient[1], u.ambient[2], u.ambient[3]);
+            C3D_IVUnifSet(GPU_VERTEX_SHADER, lightLoopUniform, u.lights ? int(u.lights) - 1 : 0, 0, 6, 0);
+            C3D_BoolUnifSet(GPU_VERTEX_SHADER, anyLightUniform, u.lights != 0);
+            C3D_BoolUnifSet(GPU_VERTEX_SHADER, rgbLitUniform, u.rgbLit);
+            C3D_BoolUnifSet(GPU_VERTEX_SHADER, alphaLitUniform, u.alphaLit);
+        }
         for (unsigned unit = 0; unit < u.units; ++unit) {
             for (int r = 0; r < 3; ++r) {
                 const float* row = u.texgen[unit][r];
@@ -602,8 +629,8 @@ struct Renderer {
         C3D_BoolUnifSet(GPU_VERTEX_SHADER, rgbRegUniform, !u.fixedColor && !u.rgbFromVertex);
         C3D_BoolUnifSet(GPU_VERTEX_SHADER, alphaRegUniform, !u.fixedColor && !u.alphaFromVertex);
         C3D_FVUnifSet(GPU_VERTEX_SHADER, materialUniform, u.color[0] / 255.0f, u.color[1] / 255.0f, u.color[2] / 255.0f, u.color[3] / 255.0f);
-        // GxMeshVertex: position (v0), colour (v1), three texgen inputs (v2-v4), slot (v5). What a draw doesn't take from
-        // the vertices is a fixed attribute, and the bytes it skips are padding (0xC is four bytes, 0xE twelve).
+        // GxMeshVertex: position (v0), colour (v1), three texgen inputs (v2-v4), normal (v6), slot (v5). What a draw doesn't
+        // take from the vertices is a fixed attribute, and the bytes it skips are padding (0xC is four bytes, 0xE twelve).
         C3D_AttrInfo* attributes = C3D_GetAttrInfo();
         AttrInfo_Init(attributes);
         u64 permutation = 0;
@@ -624,6 +651,8 @@ struct Renderer {
             if (unit < u.units) loader(2 + int(unit), GPU_FLOAT, 3);
             else pad(0xE), fixed(2 + int(unit), 0, 0, 0, 1);
         }
+        if (u.lit) loader(6, GPU_FLOAT, 3);
+        else pad(0xE), fixed(6, 0, 0, 0, 0);
         if (mesh.slots) loader(5, GPU_FLOAT, 1);
         else fixed(5, 0, 0, 0, 0);
         C3D_BufInfo* buffers = C3D_GetBufInfo();
@@ -631,12 +660,39 @@ struct Renderer {
         BufInfo_Add(buffers, mesh.block, sizeof(GxMeshVertex), components, permutation);
         // GX culls in the EFB, its y down; the PICA sees the same triangles turned for the screen.
         C3D_CullFace(u.reject == 1 ? GPU_CULL_FRONT_CCW : u.reject == 2 ? GPU_CULL_BACK_CCW : GPU_CULL_NONE);
-        C3D_DrawElements(GPU_TRIANGLES, int(mesh.indexCount), C3D_UNSIGNED_SHORT,
-                         static_cast<std::uint8_t*>(mesh.block) + mesh.vertexCount * sizeof(GxMeshVertex));
+        const auto* indices = reinterpret_cast<const std::uint16_t*>(static_cast<std::uint8_t*>(mesh.block) + mesh.vertexCount * sizeof(GxMeshVertex));
+        for (std::size_t g = 0; g < mesh.groups.size(); ++g) {
+            if (g) pipeline.meshSlotUniforms(mesh.groups[g], u), slotUniforms(u);
+            C3D_DrawElements(GPU_TRIANGLES, int(mesh.groups[g].indexCount), C3D_UNSIGNED_SHORT, indices + mesh.groups[g].firstIndex);
+        }
+        u32* buffer;
+        u32 size, offset;
+        GPUCMD_GetBuffer(&buffer, &size, &offset);
+        if (size - offset < 0x40) stop("a mesh's draws filling the GPU's command list");  // GPUCMD_Add would have dropped some
         C3D_CullFace(GPU_CULL_NONE);
-        bindCpuBuffers();
+        cpuBound = false;
         fresh[0] = fresh[1] = false;
         ++perf.meshDraws, perf.meshTriangles += mesh.indexCount / 3;
+    }
+
+    // Each slot's rows: four of the clip matrix unlit; lit, ten (clip, modelview, normal) for each compact slot.
+    void slotUniforms(const GxMeshUniforms& u) {
+        const int rows = u.lit ? 10 : 4;
+        for (unsigned slot = 0; slot < 10; ++slot) {
+            if (!(u.slots >> slot & 1)) continue;
+            const int at = clipUniform + int(slot) * rows;
+            for (int r = 0; r < 4; ++r) {
+                const float* row = u.clip[slot] + r * 4;
+                C3D_FVUnifSet(GPU_VERTEX_SHADER, at + r, row[0], row[1], row[2], row[3]);
+            }
+            if (!u.lit) continue;
+            for (int r = 0; r < 3; ++r) {
+                const float* row = u.modelView[slot] + r * 4;
+                C3D_FVUnifSet(GPU_VERTEX_SHADER, at + 4 + r, row[0], row[1], row[2], row[3]);
+                const float* normal = u.normal[slot] + r * 3;
+                C3D_FVUnifSet(GPU_VERTEX_SHADER, at + 7 + r, normal[0], normal[1], normal[2], 0);
+            }
+        }
     }
 
     // The pending primitives as one draw, under the state they share.
@@ -644,6 +700,7 @@ struct Renderer {
         if (indexUsed == batchStart) return;
         applyState();
         const bool wholeScreen = dumping && dumpBatch();
+        ensureCpuBuffers();
         C3D_DrawElements(GPU_TRIANGLES, static_cast<int>(indexUsed - batchStart), C3D_UNSIGNED_SHORT, indices + batchStart);
         ++perf.draws, perf.triangles += (indexUsed - batchStart) / 3;
         batchStart = indexUsed;
@@ -675,11 +732,12 @@ struct Renderer {
 
     // A Wii frame's commands can outgrow citro3d's buffer (or its vertices the port's): the frame is ended and begun
     // again on the same target with its display output held back, so no part-drawn frame is shown.
-    void roomFor(std::size_t vertexCount) {
+    // Room for what comes next: GPUCMD_Add drops a command that doesn't fit the list, silently.
+    void roomFor(std::size_t vertexCount, u32 words = DrawCommandWords) {
         u32* buffer;
         u32 size, offset;
         GPUCMD_GetBuffer(&buffer, &size, &offset);
-        if (size - offset >= DrawCommandWords && used + vertexCount <= MaxVertices && indexUsed + GxVertexPipeline::maxIndices(vertexCount) <= MaxIndices)
+        if (size - offset >= words && used + vertexCount <= MaxVertices && indexUsed + GxVertexPipeline::maxIndices(vertexCount) <= MaxIndices)
             return;
         if (vertexCount > MaxVertices) stop("a primitive with more vertices than the port's buffer");
         pause();
@@ -877,6 +935,7 @@ struct Renderer {
         C3D_CullFace(GPU_CULL_NONE);
         C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
         for (int unit = 0; unit < 3; ++unit) C3D_TexBind(unit, &scratch);
+        ensureCpuBuffers();
         C3D_DrawArrays(GPU_TRIANGLES, static_cast<int>(used), static_cast<int>(n));
         used += n;
         applied = false;
@@ -1042,6 +1101,7 @@ struct Renderer {
         C3D_CullFace(GPU_CULL_NONE);
         C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
         C3D_TexBind(0, &m.texture);
+        ensureCpuBuffers();
         C3D_DrawArrays(GPU_TRIANGLES, static_cast<int>(used), static_cast<int>(n));
         used += n;
         applied = false;

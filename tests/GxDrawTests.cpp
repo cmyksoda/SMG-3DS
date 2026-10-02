@@ -386,7 +386,7 @@ void meshFromDisplayList() {
     check(near(mesh.vertices[2].source[0][0], 1) && near(mesh.vertices[2].source[0][1], 1) && near(mesh.vertices[2].source[0][2], 1),
           "each texgen's input comes along, its third component one for a texture coordinate");
     smg::GxMeshUniforms uniforms;
-    pipeline.meshUniforms(mesh.slots, uniforms);
+    pipeline.meshUniforms(mesh.slots, mesh.groups[0], uniforms);
     const float* m = uniforms.clip[0];
     const float* p = mesh.vertices[0].position;
     float clip[4];
@@ -399,6 +399,145 @@ void meshFromDisplayList() {
     state0.bytes.insert(state0.bytes.end(), list.bytes.begin(), list.bytes.end());
     check(pipeline.buildMesh(state0.bytes.data(), static_cast<std::uint32_t>(state0.bytes.size()), mesh) == smg::GxVertexPipeline::MeshCommand,
           "a list with state commands stays the CPU's");
+}
+
+// What gx.v.pica works out for a lit mesh's vertex: the colour (0-1).
+void shaderLighting(const smg::GxMeshUniforms& u, const smg::GxMeshVertex& v, float out[4]) {
+    float clip[4], tex[smg::CombinerProgram::MaxUnits][2];
+    smg::gxMeshModel(u, v, clip, out, tex);
+}
+
+// A lit model drawn from a mesh: the shader's lighting from the mesh's uniforms has to match the CPU path's, for
+// diffuse light from a point and from the SDK's directional 1e18, a spot light, a specular one, and an actor's
+// colour lit by one light and its alpha by the other.
+void litMesh() {
+    struct Case {
+        const char* what;
+        std::uint32_t control, alphaControl;
+        float light[2][12];  // A0-A2, K0-K2, position, direction
+    };
+    const Case cases[] = {
+        {"diffuse light from a point and a far direction", 1 << 1 | 3 << 2 | 2 << 7, 1 << 1 | 3 << 2 | 2 << 7,
+         {{1, 0, 0, 1, 0, 0, 300, 100, 200, 0, 0, 0}, {1, 0, 0, 1, 0, 0, 0, 0.6e18f, 0.8e18f, 0, 0, 0}}},
+        {"a spot light", 1 << 1 | 1 << 2 | 2 << 7 | 1 << 9 | 1 << 10, 1 << 1 | 1 << 2 | 2 << 7 | 1 << 9 | 1 << 10,
+         {{0.5f, 0.5f, 0, 1, 0.002f, 0.00001f, 300, 250, 300, 0, 0, -1}, {}}},
+        {"a specular light", 1 << 1 | 1 << 2 | 1 << 9, 1 << 1 | 1 << 2 | 1 << 9,
+         {{0, 0, 1, 0.5f, 0, 0.5f, 0, -0.4e18f, -0.9e18f, 0, 0.4f, 0.9165f}, {}}},
+        {"an actor's colour and alpha lit by different lights", 1 << 1 | 1 << 2 | 2 << 7, 1 << 1 | 1 << 3 | 2 << 7,
+         {{1, 0, 0, 1, 0, 0, 300, 100, 200, 0, 0, 0}, {1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0}}},
+        {"colour and alpha lit with their own settings", 1 << 1 | 3 << 2 | 2 << 7 | 1 << 9 | 1 << 10, 1 << 1 | 3 << 2 | 1 << 7,
+         {{0.5f, 0.5f, 0, 1, 0.002f, 0.00001f, 300, 250, 300, 0, 0, -1}, {1, 0, 0, 1, 0, 0, 0, 0.6e18f, 0.8e18f, 0, 0, 0}}},
+    };
+    const float vertices[3][6] = {{100, 100, -0.5f, 0, 0, 1}, {500, 100, -0.5f, 0.3f, 0.4f, 0.866f}, {300, 400, -0.5f, -0.6f, 0, 0.8f}};
+    for (const Case& test : cases) {
+        auto owned = std::make_unique<smg::GxCommandProcessor>(host());
+        smg::GxCommandProcessor& gpu = *owned;
+        Stream s;
+        clearState(s);
+        s.cp(0x50, 1 << 9 | 1 << 11), s.cp(0x60, 0), s.cp(0x70, 1 | 4 << 1 | 4 << 10);  // position xyz and normal, f32
+        s.xff(0x400, {1, 0, 0, 0, 1, 0, 0, 0, 1});
+        s.xf(0x103F, {0}), s.xf(0x1009, {1});
+        s.bp(0x00000010), s.bp(0x28000000), s.bp(0xC008FFFA), s.bp(0xC108FFD0);  // one channel; RASC, RASA
+        s.xf(0x100C, {0xFFFFFFFF}), s.xf(0x100A, {0x10203040});
+        s.xf(0x100E, {test.control}), s.xf(0x1010, {test.alphaControl});
+        const std::uint32_t colors[2] = {0x80604020, 0x20406040};  // dim enough that no sum clamps
+        for (int n = 0; n < 2; ++n) {
+            s.xf(0x600 + 16 * n + 3, {colors[n]});
+            const float* l = test.light[n];
+            s.xff(0x600 + 16 * n + 4, {l[0], l[1], l[2], l[3], l[4], l[5], l[6], l[7], l[8], l[9], l[10], l[11]});
+        }
+        gpu.put(s.bytes.data(), static_cast<std::uint32_t>(s.bytes.size()));
+        Stream list;
+        list.u8(0x90), list.u16(3);
+        for (const auto& v : vertices)
+            for (float f : v) list.f32(f);
+        while (list.bytes.size() % 32) list.u8(0);
+        smg::GxDraw cpu;
+        smg::buildGxDraw(gpu, 0x90, 0, 3, list.bytes.data() + 3, {}, cpu);
+        smg::GxDrawState state;
+        smg::readGxDrawState(gpu, state);
+        smg::GxVertexPipeline pipeline;
+        smg::GxMesh mesh;
+        smg::GxMeshUniforms u;
+        const bool built = pipeline.prepare(gpu, state, {}, 0x90, 0) && pipeline.meshEligible() == smg::GxVertexPipeline::MeshOk &&
+                           pipeline.buildMesh(list.bytes.data(), static_cast<std::uint32_t>(list.bytes.size()), mesh) == smg::GxVertexPipeline::MeshOk;
+        bool same = built && cpu.triangles.size() == 3 && mesh.vertices.size() == 3;
+        if (same) pipeline.meshUniforms(mesh.slots, mesh.groups[0], u);
+        for (unsigned i = 0; same && i < 3; ++i) {
+            const smg::GxMeshVertex& v = mesh.vertices[i];
+            const float* m = u.clip[0];
+            const float x = m[0] * v.position[0] + m[1] * v.position[1] + m[2] * v.position[2] + m[3];
+            const smg::GxDrawVertex* match = nullptr;
+            for (const auto& d : cpu.triangles)
+                if (std::fabs(d.position[0] - x) < 1e-3f) match = &d;
+            float shaded[4];
+            shaderLighting(u, v, shaded);
+            same = match != nullptr;
+            for (int c = 0; same && c < 4; ++c) same = std::abs(int(std::lround(shaded[c] * 255)) - int(match->color[c])) <= 2;
+        }
+        check(same, test.what);
+    }
+}
+
+// A lit model with six bones: its mesh splits into groups of at most four slots, and each vertex drawn through its
+// group's uniforms lands, and is lit, where the CPU path puts it.
+void litMeshGroups() {
+    auto owned = std::make_unique<smg::GxCommandProcessor>(host());
+    smg::GxCommandProcessor& gpu = *owned;
+    Stream s;
+    clearState(s);
+    s.cp(0x50, 1 | 1 << 9 | 1 << 11), s.cp(0x60, 0), s.cp(0x70, 1 | 4 << 1 | 4 << 10);  // matrix index, position, normal
+    for (unsigned slot = 0; slot < 6; ++slot) {
+        const float x = 40.0f * slot, c = std::cos(0.3f * slot), n = std::sin(0.3f * slot);
+        s.xff(slot * 12, {c, -n, 0, x, n, c, 0, 10, 0, 0, 1, 0});
+        s.xff(0x400 + slot * 9, {c, -n, 0, n, c, 0, 0, 0, 1});
+    }
+    s.xf(0x103F, {0}), s.xf(0x1009, {1});
+    s.bp(0x00000010), s.bp(0x28000000), s.bp(0xC008FFFA), s.bp(0xC108FFD0);
+    s.xf(0x100C, {0xFFFFFFFF}), s.xf(0x100A, {0x10203040});
+    s.xf(0x100E, {1 << 1 | 1 << 2 | 2 << 7}), s.xf(0x1010, {0});
+    s.xf(0x600 + 3, {0x80604020});
+    s.xff(0x600 + 4, {1, 0, 0, 1, 0, 0, 300, 100, 200, 0, 0, 0});
+    gpu.put(s.bytes.data(), static_cast<std::uint32_t>(s.bytes.size()));
+    const unsigned slots[12] = {0, 1, 2, 2, 3, 0, 4, 5, 0, 5, 4, 1};
+    Stream list;
+    list.u8(0x90), list.u16(12);
+    for (unsigned i = 0; i < 12; ++i) {
+        list.u8(slots[i] * 3);
+        for (float f : {100.0f + 37 * i, 80.0f + 23 * (i % 5), -0.5f, 0.0f, 0.6f, 0.8f}) list.f32(f);
+    }
+    while (list.bytes.size() % 32) list.u8(0);
+    smg::GxDraw cpu;
+    smg::buildGxDraw(gpu, 0x90, 0, 12, list.bytes.data() + 3, {}, cpu);
+    smg::GxDrawState state;
+    smg::readGxDrawState(gpu, state);
+    smg::GxVertexPipeline pipeline;
+    smg::GxMesh mesh;
+    check(pipeline.prepare(gpu, state, {}, 0x90, 0) && pipeline.meshEligible() == smg::GxVertexPipeline::MeshOk &&
+              pipeline.buildMesh(list.bytes.data(), static_cast<std::uint32_t>(list.bytes.size()), mesh) == smg::GxVertexPipeline::MeshOk,
+          "a lit list with six bones becomes a mesh");
+    check(mesh.groups.size() == 2 && mesh.groups[0].slotCount == 4 && mesh.groups[1].slotCount == 4 && mesh.groups[0].indexCount == 6 &&
+              mesh.groups[1].firstIndex == 6 && mesh.groups[1].indexCount == 6,
+          "its triangles split into two groups of four slots");
+    bool same = cpu.triangles.size() == 12;
+    smg::GxMeshUniforms u;
+    for (std::size_t g = 0; same && g < mesh.groups.size(); ++g) {
+        if (g) pipeline.meshSlotUniforms(mesh.groups[g], u);
+        else pipeline.meshUniforms(mesh.slots, mesh.groups[0], u);
+        for (std::uint32_t i = mesh.groups[g].firstIndex; same && i < mesh.groups[g].firstIndex + mesh.groups[g].indexCount; ++i) {
+            const smg::GxMeshVertex& v = mesh.vertices[mesh.indices[i]];
+            const unsigned k = static_cast<unsigned>(v.slot) / 10;
+            same = mesh.groups[g].slotMap[k] == slots[i];
+            const float* m = u.clip[k];
+            for (int r = 0; same && r < 4; ++r)
+                same = std::fabs(m[r * 4] * v.position[0] + m[r * 4 + 1] * v.position[1] + m[r * 4 + 2] * v.position[2] + m[r * 4 + 3] -
+                                 cpu.triangles[i].position[r]) < 1e-3f;
+            float shaded[4];
+            shaderLighting(u, v, shaded);
+            for (int c = 0; same && c < 3; ++c) same = std::abs(int(std::lround(shaded[c] * 255)) - int(cpu.triangles[i].color[c])) <= 2;
+        }
+    }
+    check(same, "each vertex through its group's slot lands and is lit as on the CPU");
 }
 } // namespace
 
@@ -444,6 +583,8 @@ int runGxDrawTests() {
     dualTexgen();
     color0Rides();
     meshFromDisplayList();
+    litMesh();
+    litMeshGroups();
     std::printf("%u GX draw checks passed\n", checks);
     return 0;
 }
