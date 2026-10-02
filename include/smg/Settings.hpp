@@ -34,6 +34,9 @@ struct Settings {
     bool devSkipStory = false;
     // For development only (dev.gx_dump=1): the renderer lists one frame's draws in the log every minute.
     bool devGxDump = false;
+    // For development only (dev.gx_null=1): the renderer draws nothing, so a frame's time is the game's own (the command
+    // processor still runs, raising draw-done and tokens).
+    bool devGxNull = false;
     static constexpr int MinSpeed = 25, MaxSpeed = 300, SpeedStep = 25;
 };
 bool operator==(const Settings& a, const Settings& b);

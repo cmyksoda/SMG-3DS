@@ -32,6 +32,7 @@ extern "C" unsigned smgMovieDecodes();  // source/compat/Thp.cpp
 extern "C" unsigned smgFifoWrites;       // source/compat/GxFifo.cpp
 extern "C" void smgGXFifoFlush();
 extern "C" int smgDevGxDump();           // source/compat/Kpad.cpp
+extern "C" int smgDevGxNull();
 extern "C" void (*smgGpuMemoryChanged)(const void* start, u32 size);  // source/compat/Os.cpp
 
 namespace smg {
@@ -771,6 +772,8 @@ struct Renderer {
     }
 
     void textureCopy(const GxCommandProcessor& gpu, std::uint32_t command) {
+        static const bool null = smgDevGxNull();
+        if (null) return;
         GxTextureCopy copy;
         if (const char* why = readTextureCopy(gpu, command, copy)) stop(why);
         if (dumping)
@@ -1105,6 +1108,8 @@ Renderer& renderer() {
 } // namespace
 
 void gxRenderPrimitive(const GxCommandProcessor& gpu, std::uint8_t kind, std::uint8_t format, std::uint16_t count, const std::uint8_t* vertices) {
+    static const bool null = smgDevGxNull();
+    if (null) return;
     const PortMemory memory;
     renderer().draw(gpu, kind, format, count, vertices);
 }
@@ -1115,6 +1120,8 @@ void gxRenderCopiesStayOnGpu(bool stay) {
 }
 
 bool gxRenderDisplayList(const GxCommandProcessor& gpu, std::uint32_t address, std::uint32_t size) {
+    static const bool null = smgDevGxNull();
+    if (null) return true;
     const PortMemory memory;
     return renderer().displayList(gpu, address, size);
 }
