@@ -675,6 +675,15 @@ the whole target back and encoding it, then decoding it again for the next draw:
 captures with `JUTTexture::captureDolTexture` into a texture it only draws with. That copy cost 25 ms a frame; it now
 stays on the GPU as `JUTTexture::capture`'s do, and the plaza takes about 80 to 85 ms a frame.
 
+**Per-draw work.** What's left is mostly paid per draw, not per vertex (`dev.gx_timing=1` splits it). A mesh draw
+sends a uniform row only when it differs from citro3d's copy (every row is sent once at setup, so a skipped row is known
+to be on the GPU). A vertex layout follows its arrays' new bases without being read again (J3D's `GXSetArray` before
+every shape used to rebuild it). The draw state (`readGxDrawState`, about 12,000 instructions) is looked up by every
+register it reads (the BP registers a draw reads, the TEV colours and konsts, the channels' XF words), since J3D's
+materials come back every frame; materials whose TEV colours are animated still miss, as their program depends on them.
+The plaza's frame is now about 67 ms in Azahar (logic 6, animation 5, drawing 55 of which 7 to 9 wait for the GPU
+and vblank).
+
 **The haze.** The Star Festival looked washed out, as if the brightness were turned up. Frame dumps (`dev.gx_dump=1`,
 which lists a frame's draws with their state and the EFB's average after each) found it in the bloom's blur: six taps of
 one map, more than the PICA's three texture units, and each tap past the third read as one (white). A tap whose map a
