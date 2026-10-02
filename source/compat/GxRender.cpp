@@ -1354,6 +1354,7 @@ struct Renderer {
     // copied whole into a texture, which a quad then draws into the copy's texture through the combiner, with the copy's
     // vertical filter and its format's channels. The Wii's memory is not written, so only the GPU sees this copy.
     bool gpuCopy(const GxCommandProcessor& gpu, const GxTextureCopy& copy) {
+        if (copy.format == 11 || copy.format == 12) return false;  // two channels a texel: the CPU's encoder packs them
         int rows[3];
         std::uint8_t weights[3];
         unsigned taps = 0;

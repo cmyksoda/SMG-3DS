@@ -42,7 +42,6 @@ const char* readTextureCopy(const GxCommandProcessor& gpu, std::uint32_t command
     for (int i = 0; i < 7; ++i) out.filter[i] = static_cast<std::uint8_t>(taps[i]);
     out.texWidth = out.halfScale ? out.width / 2 : out.width, out.texHeight = out.halfScale ? out.height / 2 : out.height;
     if (!out.texWidth || !out.texHeight) return "an empty texture copy";
-    if (out.format == 11 || out.format == 12) return "an EFB copy to RG8 or GB8";
     if (out.format > 12) return "an EFB copy to an unknown format";
     if (out.intensity && out.format == 6) return "an EFB copy to YUVA8";
     const Tiling t = tiling(out.format);
@@ -125,6 +124,9 @@ void encodeTextureCopy(const GxTextureCopy& copy, EfbPixel pixel, const void* co
                     case 7: tile[n] = c[3]; break;
                     case 9: tile[n] = c[1]; break;
                     case 10: tile[n] = c[2]; break;
+                    // Two channels a texel, read back as IA8 (alpha byte first): green then red, blue then green.
+                    case 11: tile[2 * n] = c[1], tile[2 * n + 1] = c[0]; break;
+                    case 12: tile[2 * n] = c[2], tile[2 * n + 1] = c[1]; break;
                     }
                 }
             }

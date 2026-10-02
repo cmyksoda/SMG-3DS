@@ -156,6 +156,23 @@ void roundTrips() {
     }
 }
 
+Pixel solid(const void*, int, int) { return {10, 20, 30, 40}; }
+
+// RG8 and GB8 copies keep two channels a texel, the second named first (Dolphin's encoder writes them so).
+void twoChannels() {
+    auto owned = std::make_unique<smg::GxCommandProcessor>(smg::GxCommandProcessor::Host{});
+    smg::GxCommandProcessor& gpu = *owned;
+    Copy c;
+    c.rowBytes = 128;  // four 4x4 tiles of two-byte texels
+    smg::GxTextureCopy copy;
+    c.format = 11;
+    auto out = make(gpu, c, solid, copy);
+    check(out[0] == 20 && out[1] == 10 && out[30] == 20 && out[31] == 10, "an RG8 copy writes green, then red");
+    c.format = 12;
+    out = make(gpu, c, solid, copy);
+    check(out[0] == 30 && out[1] == 20 && smg::textureCopySize(copy) == 2 * 128, "a GB8 copy writes blue, then green, in 4x4 tiles");
+}
+
 void refusals() {
     auto owned = std::make_unique<smg::GxCommandProcessor>(smg::GxCommandProcessor::Host{});
     smg::GxCommandProcessor& gpu = *owned;
@@ -166,8 +183,8 @@ void refusals() {
     gpu.bp[0x43] = 3;  // PE_CONTROL's pixel type: Z
     check(smg::readTextureCopy(gpu, command, copy), "a depth copy is refused by name");
     gpu.bp[0x43] = 0;
-    c.format = 11;
-    check(smg::readTextureCopy(gpu, issue(gpu, c, 0x1000), copy), "so is an RG8 copy");
+    c.format = 13;
+    check(smg::readTextureCopy(gpu, issue(gpu, c, 0x1000), copy), "so is a copy to a format the pixel engine has no encoder for");
     c.format = 7, c.rowBytes = 32;
     check(smg::readTextureCopy(gpu, issue(gpu, c, 0x1000), copy), "and one whose rows of tiles overlap");
 }
@@ -179,6 +196,7 @@ int runGxCopyTests() {
     intensity();
     filters();
     roundTrips();
+    twoChannels();
     refusals();
     std::printf("%u GX copy checks passed\n", checks);
     return 0;
