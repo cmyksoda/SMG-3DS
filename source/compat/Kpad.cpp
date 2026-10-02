@@ -71,6 +71,7 @@ BOOL smgDevGxNull() { return input().settings().devGxNull; }
 BOOL smgDevGxTiming() { return input().settings().devGxTiming; }
 BOOL smgDevGxCheck() { return input().settings().devGxCheck; }
 BOOL smgDevGxInline() { return input().settings().devGxInline; }
+BOOL smgDevGxNoRaw() { return input().settings().devGxNoRaw; }
 
 // In stylus mode the pointer is on the screen only while the stylus touches it (adapted StarPointerGuidance asks).
 BOOL smgPointerIsStylus() { return input().settings().pointer == smg::PointerMode::Stylus; }

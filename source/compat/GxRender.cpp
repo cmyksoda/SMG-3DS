@@ -35,6 +35,7 @@ extern "C" int smgDevGxDump();           // source/compat/Kpad.cpp
 extern "C" int smgDevGxNull();
 extern "C" int smgDevGxTiming();
 extern "C" int smgDevGxCheck();
+extern "C" int smgDevGxNoRaw();
 extern "C" void (*smgGpuMemoryChanged)(const void* start, u32 size);  // source/compat/Os.cpp
 
 namespace smg {
@@ -48,12 +49,23 @@ constexpr u32 DrawCommandWords = 0x800;
 // A mesh group's slot rows (up to forty uniforms, four words each) and its draw, beyond the first group's.
 constexpr u32 GroupCommandWords = 0x140;
 
-// A vertex shader uniform row, marked for upload only when it differs from what the GPU already holds (citro3d keeps
-// the last values): most draws repeat their lights, texgens and material.
-inline void setRow(int id, float x, float y, float z, float w) {
-    const C3D_FVec& now = C3D_FVUnif[GPU_VERTEX_SHADER][id];
-    if (now.x != x || now.y != y || now.z != z || now.w != w) C3D_FVUnifSet(GPU_VERTEX_SHADER, id, x, y, z, w);
+// libctru's command list written in place, where roomFor has made room: a register's first value, its header (register,
+// byte mask, count less one, bit 31 for consecutive registers), its other values, and a zero to keep 8-byte alignment.
+// A header counts at most 256 values, so longer writes are split as GPUCMD_Add splits them.
+inline u32* putCommand(u32* at, u32 header, const u32* values, u32 count) {
+    while (count) {
+        const u32 part = std::min<u32>(count, 256);
+        at[0] = values[0];
+        at[1] = header | (part - 1) << 20;
+        for (u32 i = 1; i < part; ++i) at[1 + i] = values[i];
+        at += 1 + part;
+        if (!(part & 1)) *at++ = 0;
+        if (header & 0x80000000u) header += part;  // consecutive registers go on from the next one
+        values += part, count -= part;
+    }
+    return at;
 }
+inline u32* putCommand(u32* at, u32 header, u32 value) { return putCommand(at, header, &value, 1); }
 // The render target read back whole for a texture copy, still tiled the screen's way round but linear.
 constexpr u32 ReadbackFlags = GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | GX_TRANSFER_RAW_COPY(0) |
                               GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) | GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGBA8) |
@@ -165,6 +177,7 @@ struct Renderer {
         std::vector<std::pair<std::uint8_t, u32>> depends;  // the CP registers it was decoded under, and their values
         void* block = nullptr;  // vertices, then indices
         u32 vertexCount = 0, indexCount = 0;
+        u32 vertexPhysical = 0, indexPhysical = 0;
         std::uint16_t slots = 0;
         std::vector<GxMesh::Group> groups;
         std::uintptr_t range[2][2] = {};  // the memory it was made from, [lo, hi): the display list, the array elements
@@ -180,7 +193,7 @@ struct Renderer {
     struct Perf {
         u64 since = 0, syncTicks = 0;
         u32 frames = 0, primitives = 0, vertices = 0, triangles = 0, draws = 0, sameState = 0, color0Rides = 0;
-        u32 meshDraws = 0, meshTriangles = 0, meshesMade = 0;
+        u32 meshDraws = 0, meshTriangles = 0, meshesMade = 0, citroDraws = 0;
         u32 meshInvalidated = 0, meshOverflows = 0, meshBudgetDrops = 0, meshMismatches = 0, flushesQueued = 0;
         u64 timed[6] = {};  // dev.gx_timing: CPU-path primitives (immediate, in lists), display lists (mesh draws), texture copies, movie, frame ends
         u64 cpuCopyTicks = 0;  // of the texture copies, those read back and encoded on the CPU
@@ -243,7 +256,7 @@ struct Renderer {
         rgbLitUniform = find("rgblit"), alphaLitUniform = find("alphalit"), anyLightUniform = find("anylight");
         if (clipUniform < 0 || texrowUniform < 0 || transformUniform < 0 || projectUniform[2] < 0 || materialUniform < 0 || alphaRegUniform < 0)
             stop("the GX shader's uniforms");
-        // Every row goes to the GPU once, so setRow may skip one whose value citro3d already has.
+        // Every row goes to the GPU once, so row() may skip one whose value citro3d already has.
         for (const auto& [first, count] : {std::pair{clipUniform, 58}, {texrowUniform, 9}, {materialUniform, 1}, {ambientUniform, 1}, {lightUniform, 24}})
             for (int i = 0; i < count; ++i) C3D_FVUnifSet(GPU_VERTEX_SHADER, first + i, 0, 0, 0, 0);
         ready = true;
@@ -294,41 +307,120 @@ struct Renderer {
         u64 meshPermutation = 0;
         int meshComponents = 0;
     } sent;
-    void forgetSent() { sent = Sent{}; }
+    void forgetSent() { sent = Sent{}, pending = true; }
+    // Whether citro3d holds state of ours not yet sent (one of its setters since its last draw): then a draw goes through
+    // citro3d, which sends it; otherwise a mesh draw writes its few registers itself (writeMeshDraw). Every command list
+    // begins pending, so its first draw is citro3d's and citro3d submits the list.
+    bool pending = true;
+
+    // A mesh draw's vertex shader uniforms, set in citro3d's copies (which then always match the GPU) and sent by citro3d
+    // when it has state of ours pending anyway, else written here (sendUniforms).
+    u32 rowsChanged[3] = {};  // 96 rows
+    bool boolsChanged = false, intsChanged = false;
+    void row(int id, float x, float y, float z, float w) {
+        C3D_FVec& now = C3D_FVUnif[GPU_VERTEX_SHADER][id];
+        if (now.x == x && now.y == y && now.z == z && now.w == w) return;
+        now.x = x, now.y = y, now.z = z, now.w = w;
+        rowsChanged[id >> 5] |= 1u << (id & 31);
+    }
+    void boolean(int id, bool value) {
+        u16& bools = C3D_BoolUnifs[GPU_VERTEX_SHADER];
+        const u16 next = value ? u16(bools | BIT(id - 0x68)) : u16(bools & ~BIT(id - 0x68));
+        if (next != bools) bools = next, boolsChanged = true;
+    }
+    void integer(int id, int x, int y, int z, int w) {
+        C3D_IVec& now = C3D_IVUnif[GPU_VERTEX_SHADER][id - 0x60];
+        if (now != IVec_Pack(x, y, z, w)) now = IVec_Pack(x, y, z, w), intsChanged = true;
+    }
+    void sendUniforms() {
+        if (pending) {
+            for (int word = 0; word < 3; ++word)
+                for (u32 bits = rowsChanged[word]; bits; bits &= bits - 1) C3D_FVUnifDirty[GPU_VERTEX_SHADER][word * 32 + __builtin_ctz(bits)] = true;
+            if (boolsChanged) C3D_BoolUnifsDirty[GPU_VERTEX_SHADER] = true;
+            if (intsChanged) C3D_IVUnifDirty[GPU_VERTEX_SHADER][lightLoopUniform - 0x60] = true;
+        } else {
+            u32* at = gpuCmdBuf + gpuCmdBufOffset;
+            for (int word = 0; word < 3; ++word) {
+                while (rowsChanged[word]) {
+                    // A run of changed rows from the first left, as one upload.
+                    const int id = word * 32 + __builtin_ctz(rowsChanged[word]);
+                    int end = id;
+                    while (end < C3D_FVUNIF_COUNT && rowsChanged[end >> 5] >> (end & 31) & 1) rowsChanged[end >> 5] &= ~(1u << (end & 31)), ++end;
+                    at = putCommand(at, 0x000F0000 | GPUREG_VSH_FLOATUNIFORM_CONFIG, 0x80000000u | u32(id));
+                    at = putCommand(at, 0x000F0000 | GPUREG_VSH_FLOATUNIFORM_DATA, reinterpret_cast<const u32*>(&C3D_FVUnif[GPU_VERTEX_SHADER][id]),
+                                    u32(end - id) * 4);
+                }
+            }
+            if (boolsChanged) at = putCommand(at, 0x000F0000 | GPUREG_VSH_BOOLUNIFORM, 0x7FFF0000u | C3D_BoolUnifs[GPU_VERTEX_SHADER]);
+            if (intsChanged)
+                at = putCommand(at, 0x000F0000 | (GPUREG_VSH_INTUNIFORM_I0 + u32(lightLoopUniform - 0x60)), C3D_IVUnif[GPU_VERTEX_SHADER][lightLoopUniform - 0x60]);
+            gpuCmdBufOffset = u32(at - gpuCmdBuf);
+        }
+        rowsChanged[0] = rowsChanged[1] = rowsChanged[2] = 0, boolsChanged = intsChanged = false;
+    }
+
+    // A group's draw as C3D_DrawElements writes it for triangles of 16-bit indices, after buffer 0 aimed at the mesh.
+    void writeMeshDraw(const CachedMesh& mesh, const GxMesh::Group& group, bool aimBuffer) {
+        u32* at = gpuCmdBuf + gpuCmdBufOffset;
+        if (aimBuffer) {
+            constexpr u32 Base = 0x18000000;  // BufInfo_Init's, which citro3d's own binds use
+            const u32 buffer[3] = {mesh.vertexPhysical - Base, u32(sent.meshPermutation),
+                                   u32(sent.meshPermutation >> 32) | u32(sizeof(GxMeshVertex)) << 16 | u32(sent.meshComponents) << 28};
+            at = putCommand(at, 0x000F0000 | GPUREG_ATTRIBBUFFERS_LOC, Base >> 3);
+            at = putCommand(at, 0x800F0000 | GPUREG_ATTRIBBUFFER0_OFFSET, buffer, 3);
+        }
+        const u32 indices = mesh.indexPhysical + group.firstIndex * 2 - 0x18000000;
+        at = putCommand(at, 0x00020000 | GPUREG_PRIMITIVE_CONFIG, 0x300);
+        at = putCommand(at, 0x000F0000 | GPUREG_RESTART_PRIMITIVE, 1);
+        at = putCommand(at, 0x000F0000 | GPUREG_INDEXBUFFER_CONFIG, indices | 1u << 31);
+        at = putCommand(at, 0x000F0000 | GPUREG_NUMVERTICES, group.indexCount);
+        at = putCommand(at, 0x000F0000 | GPUREG_VERTEX_OFFSET, 0);
+        at = putCommand(at, 0x00020000 | GPUREG_GEOSTAGE_CONFIG, 0x100);
+        at = putCommand(at, 0x00020000 | GPUREG_GEOSTAGE_CONFIG2, 0x100);
+        at = putCommand(at, 0x00010000 | GPUREG_START_DRAW_FUNC0, 0);
+        at = putCommand(at, 0x000F0000 | GPUREG_DRAWELEMENTS, 1);
+        at = putCommand(at, 0x00010000 | GPUREG_START_DRAW_FUNC0, 1);
+        at = putCommand(at, 0x00020000 | GPUREG_GEOSTAGE_CONFIG, 0);
+        at = putCommand(at, 0x00020000 | GPUREG_GEOSTAGE_CONFIG2, 0);
+        at = putCommand(at, 0x000F0000 | GPUREG_VTX_FUNC, 1);
+        at = putCommand(at, 0x00080000 | GPUREG_PRIMITIVE_CONFIG, 0);
+        at = putCommand(at, 0x00080000 | GPUREG_PRIMITIVE_CONFIG, 0);
+        gpuCmdBufOffset = u32(at - gpuCmdBuf);
+    }
 
     void sendPixel() {
         const bool all = !sent.pixel;
         const PicaPixel& was = sent.was;
         for (unsigned i = 0; i < CombinerProgram::MaxStages; ++i)
-            if (all || std::memcmp(&was.env[i], &pixel.env[i], sizeof(C3D_TexEnv))) *C3D_GetTexEnv(int(i)) = pixel.env[i];
-        if (all || was.bufferColor != pixel.bufferColor) C3D_TexEnvBufColor(pixel.bufferColor);
+            if (all || std::memcmp(&was.env[i], &pixel.env[i], sizeof(C3D_TexEnv))) *C3D_GetTexEnv(int(i)) = pixel.env[i], pending = true;
+        if (all || was.bufferColor != pixel.bufferColor) C3D_TexEnvBufColor(pixel.bufferColor), pending = true;
         if (all || was.bufferUpdate[0] != pixel.bufferUpdate[0] || was.bufferUpdate[1] != pixel.bufferUpdate[1])
-            C3D_TexEnvBufUpdate(C3D_RGB, pixel.bufferUpdate[0]), C3D_TexEnvBufUpdate(C3D_Alpha, pixel.bufferUpdate[1]);
+            C3D_TexEnvBufUpdate(C3D_RGB, pixel.bufferUpdate[0]), C3D_TexEnvBufUpdate(C3D_Alpha, pixel.bufferUpdate[1]), pending = true;
         if (all || was.alphaTest != pixel.alphaTest || was.alphaFunc != pixel.alphaFunc || was.alphaReference != pixel.alphaReference)
-            C3D_AlphaTest(pixel.alphaTest, pixel.alphaFunc, pixel.alphaReference);
+            C3D_AlphaTest(pixel.alphaTest, pixel.alphaFunc, pixel.alphaReference), pending = true;
         if (all || was.equation != pixel.equation || was.alphaEquation != pixel.alphaEquation || was.source != pixel.source ||
             was.destination != pixel.destination || was.alphaSource != pixel.alphaSource || was.alphaDestination != pixel.alphaDestination)
-            C3D_AlphaBlend(pixel.equation, pixel.alphaEquation, pixel.source, pixel.destination, pixel.alphaSource, pixel.alphaDestination);
+            C3D_AlphaBlend(pixel.equation, pixel.alphaEquation, pixel.source, pixel.destination, pixel.alphaSource, pixel.alphaDestination), pending = true;
         if (all || was.depthTest != pixel.depthTest || was.depthFunc != pixel.depthFunc || sent.writeMask != writeMask)
-            C3D_DepthTest(pixel.depthTest, pixel.depthTest ? pixel.depthFunc : GPU_ALWAYS, static_cast<GPU_WRITEMASK>(writeMask));
+            C3D_DepthTest(pixel.depthTest, pixel.depthTest ? pixel.depthFunc : GPU_ALWAYS, static_cast<GPU_WRITEMASK>(writeMask)), pending = true;
         sent.was = pixel, sent.writeMask = writeMask, sent.pixel = true;
     }
     void sendCull(GPU_CULLMODE mode) {
         if (sent.cull && sent.cullMode == mode) return;
         C3D_CullFace(mode);
-        sent.cull = true, sent.cullMode = mode;
+        sent.cull = true, sent.cullMode = mode, pending = true;
     }
     void sendScissor() {
         if (sent.scissor && sent.scissorWhole == scissorWhole && (scissorWhole || !std::memcmp(sent.scissorBox, scissor, sizeof scissor))) return;
         if (scissorWhole) C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
         else C3D_SetScissor(GPU_SCISSOR_NORMAL, scissor[0], scissor[1], scissor[2], scissor[3]);
-        sent.scissor = true, sent.scissorWhole = scissorWhole, std::memcpy(sent.scissorBox, scissor, sizeof scissor);
+        sent.scissor = true, sent.scissorWhole = scissorWhole, std::memcpy(sent.scissorBox, scissor, sizeof scissor), pending = true;
     }
     // The same texture object with the same registers needs no binding again.
     void sendTexture(unsigned unit, C3D_Tex& texture) {
         if (sent.texture[unit] && sent.bound[unit] == &texture && !std::memcmp(&sent.boundWas[unit], &texture, sizeof texture)) return;
         C3D_TexBind(int(unit), &texture);
-        sent.texture[unit] = true, sent.bound[unit] = &texture, sent.boundWas[unit] = texture;
+        sent.texture[unit] = true, sent.bound[unit] = &texture, sent.boundWas[unit] = texture, pending = true;
     }
     // `attribute` is the attribute's index among the loaders and fixed ones, as AttrInfo_AddFixed returns it.
     void sendFixed(int attribute, float x, float y, float z, float w) {
@@ -336,7 +428,7 @@ struct Renderer {
         if (sent.fixed[attribute] && was.x == x && was.y == y && was.z == z && was.w == w) return;
         C3D_FVec* value = C3D_FixedAttribGetWritePtr(attribute);
         value->x = x, value->y = y, value->z = z, value->w = w;
-        sent.fixed[attribute] = true, was = *value;
+        sent.fixed[attribute] = true, was = *value, pending = true;
     }
 
     // The CPU path's vertices: transformed already, the shader passing them on. Bound again only when a draw from them
@@ -346,7 +438,7 @@ struct Renderer {
         if (!cpuBound) bindCpuBuffers();
     }
     void bindCpuBuffers() {
-        cpuBound = true;
+        cpuBound = true, pending = true;
         sent.meshLayout = -1;
         for (bool& known : sent.fixed) known = false;  // the vertex loaders' fixed values, not trusted past another layout
         C3D_BoolUnifSet(GPU_VERTEX_SHADER, transformUniform, false);
@@ -798,6 +890,7 @@ struct Renderer {
                 if (arrays >> a & 1)
                     for (unsigned base : {0xA0u, 0xB0u}) cached.depends.emplace_back(std::uint8_t(base + a), gpu.cp[base + a]);
             cached.block = block, cached.vertexCount = u32(mesh.vertices.size()), cached.indexCount = u32(mesh.indices.size());
+            cached.vertexPhysical = osConvertVirtToPhys(block), cached.indexPhysical = osConvertVirtToPhys(static_cast<std::uint8_t*>(block) + vertexBytes);
             cached.slots = mesh.slots;
             cached.groups = std::move(mesh.groups);
             // Apart: a list and its arrays sit in different heaps, and one span over both would take in whatever lies between.
@@ -913,31 +1006,30 @@ struct Renderer {
         if (dumping) dumpMesh(mesh, u);
         if (u.reject == 3) return;  // GX culls every triangle
         slotUniforms(u);
-        C3D_BoolUnifSet(GPU_VERTEX_SHADER, litUniform, u.lit);
+        boolean(litUniform, u.lit);
         if (u.lit) {
             for (unsigned l = 0; l < u.lights; ++l)
                 for (int r = 0; r < 6; ++r) {
-                    const float* row = u.light[l][r];
-                    setRow(lightUniform + int(l) * 6 + r, row[0], row[1], row[2], row[3]);
+                    const float* light = u.light[l][r];
+                    row(lightUniform + int(l) * 6 + r, light[0], light[1], light[2], light[3]);
                 }
-            setRow(ambientUniform, u.ambient[0], u.ambient[1], u.ambient[2], u.ambient[3]);
-            const u32 loop = IVec_Pack(u.lights ? int(u.lights) - 1 : 0, 0, 6, 0);
-            if (C3D_IVUnif[GPU_VERTEX_SHADER][lightLoopUniform - 0x60] != loop) C3D_IVUnifSet(GPU_VERTEX_SHADER, lightLoopUniform, u.lights ? int(u.lights) - 1 : 0, 0, 6, 0);
-            C3D_BoolUnifSet(GPU_VERTEX_SHADER, anyLightUniform, u.lights != 0);
-            C3D_BoolUnifSet(GPU_VERTEX_SHADER, rgbLitUniform, u.rgbLit);
-            C3D_BoolUnifSet(GPU_VERTEX_SHADER, alphaLitUniform, u.alphaLit);
+            row(ambientUniform, u.ambient[0], u.ambient[1], u.ambient[2], u.ambient[3]);
+            integer(lightLoopUniform, u.lights ? int(u.lights) - 1 : 0, 0, 6, 0);
+            boolean(anyLightUniform, u.lights != 0);
+            boolean(rgbLitUniform, u.rgbLit);
+            boolean(alphaLitUniform, u.alphaLit);
         }
         for (unsigned unit = 0; unit < u.units; ++unit) {
             for (int r = 0; r < 3; ++r) {
-                const float* row = u.texgen[unit][r];
-                setRow(texrowUniform + int(unit) * 3 + r, row[0], row[1], row[2], row[3]);
+                const float* texrow = u.texgen[unit][r];
+                row(texrowUniform + int(unit) * 3 + r, texrow[0], texrow[1], texrow[2], texrow[3]);
             }
-            C3D_BoolUnifSet(GPU_VERTEX_SHADER, projectUniform[unit], u.projective[unit]);
+            boolean(projectUniform[unit], u.projective[unit]);
         }
-        C3D_BoolUnifSet(GPU_VERTEX_SHADER, transformUniform, true);
-        C3D_BoolUnifSet(GPU_VERTEX_SHADER, rgbRegUniform, !u.fixedColor && !u.rgbFromVertex);
-        C3D_BoolUnifSet(GPU_VERTEX_SHADER, alphaRegUniform, !u.fixedColor && !u.alphaFromVertex);
-        setRow(materialUniform, u.color[0] / 255.0f, u.color[1] / 255.0f, u.color[2] / 255.0f, u.color[3] / 255.0f);
+        boolean(transformUniform, true);
+        boolean(rgbRegUniform, !u.fixedColor && !u.rgbFromVertex);
+        boolean(alphaRegUniform, !u.fixedColor && !u.alphaFromVertex);
+        row(materialUniform, u.color[0] / 255.0f, u.color[1] / 255.0f, u.color[2] / 255.0f, u.color[3] / 255.0f);
         stepEnd(9, uniforms);
         const u64 drawing = stepStart();
         // GxMeshVertex: position (v0), colour (v1), three texgen inputs (v2-v4), normal (v6), slot (v5). What a draw doesn't
@@ -964,7 +1056,7 @@ struct Renderer {
             else pad(0xE), AttrInfo_AddFixed(attributes, 6);
             if (mesh.slots) loader(5, GPU_FLOAT, 1);
             else AttrInfo_AddFixed(attributes, 5);
-            sent.meshLayout = layout, sent.meshPermutation = permutation, sent.meshComponents = components;
+            sent.meshLayout = layout, sent.meshPermutation = permutation, sent.meshComponents = components, pending = true;
         }
         // A fixed value goes to its attribute's place among the seven (colour 1, texgen inputs 2-4, normal 5, slot 6), which
         // citro3d numbers in the order they were added, not to the shader register it feeds.
@@ -972,20 +1064,29 @@ struct Renderer {
         for (unsigned unit = u.units; unit < 3; ++unit) sendFixed(2 + int(unit), 0, 0, 0, 1);
         if (!u.lit) sendFixed(5, 0, 0, 0, 0);
         if (!mesh.slots) sendFixed(6, u.lit ? 4 : 0, 0, 0, 0);  // the one slot's first row
-        C3D_BufInfo* buffers = C3D_GetBufInfo();
-        BufInfo_Init(buffers);
-        BufInfo_Add(buffers, mesh.block, sizeof(GxMeshVertex), sent.meshComponents, sent.meshPermutation);
         // GX culls in the EFB, its y down; the PICA sees the same triangles turned for the screen.
         sendCull(u.reject == 1 ? GPU_CULL_FRONT_CCW : u.reject == 2 ? GPU_CULL_BACK_CCW : GPU_CULL_NONE);
         const auto* indices = reinterpret_cast<const std::uint16_t*>(static_cast<std::uint8_t*>(mesh.block) + mesh.vertexCount * sizeof(GxMeshVertex));
         for (std::size_t g = 0; g < mesh.groups.size(); ++g) {
             if (g) pipeline.meshSlotUniforms(mesh.groups[g], u), slotUniforms(u);
-            C3D_DrawElements(GPU_TRIANGLES, int(mesh.groups[g].indexCount), C3D_UNSIGNED_SHORT, indices + mesh.groups[g].firstIndex);
+            static const bool noRaw = smgDevGxNoRaw();
+            if (noRaw) pending = true;
+            const bool viaCitro3d = pending;
+            sendUniforms();
+            if (viaCitro3d) {
+                C3D_BufInfo* buffers = C3D_GetBufInfo();
+                BufInfo_Init(buffers);
+                BufInfo_Add(buffers, mesh.block, sizeof(GxMeshVertex), sent.meshComponents, sent.meshPermutation);
+                C3D_DrawElements(GPU_TRIANGLES, int(mesh.groups[g].indexCount), C3D_UNSIGNED_SHORT, indices + mesh.groups[g].firstIndex);
+                pending = false, ++perf.citroDraws;
+            } else {
+                writeMeshDraw(mesh, mesh.groups[g], g == 0);
+            }
         }
         u32* buffer;
         u32 size, offset;
         GPUCMD_GetBuffer(&buffer, &size, &offset);
-        if (size - offset < 0x40) stop("a mesh's draws filling the GPU's command list");  // GPUCMD_Add would have dropped some
+        if (size - offset < 0x40) stop("a mesh's draws filling the GPU's command list");  // a raw write past its room
         cpuBound = false;
         fresh[0] = fresh[1] = false;
         ++perf.meshDraws, perf.meshTriangles += mesh.indexCount / 3;
@@ -999,21 +1100,21 @@ struct Renderer {
             for (unsigned slot = 0; slot < 10; ++slot) {
                 if (!(u.slots >> slot & 1)) continue;
                 for (int r = 0; r < 4; ++r) {
-                    const float* row = u.clip[slot] + r * 4;
-                    setRow(clipUniform + int(slot) * 4 + r, row[0], row[1], row[2], row[3]);
+                    const float* clip = u.clip[slot] + r * 4;
+                    row(clipUniform + int(slot) * 4 + r, clip[0], clip[1], clip[2], clip[3]);
                 }
             }
             return;
         }
-        for (int r = 0; r < 4; ++r) setRow(clipUniform + r, u.toClip[r * 4], u.toClip[r * 4 + 1], u.toClip[r * 4 + 2], u.toClip[r * 4 + 3]);
+        for (int r = 0; r < 4; ++r) row(clipUniform + r, u.toClip[r * 4], u.toClip[r * 4 + 1], u.toClip[r * 4 + 2], u.toClip[r * 4 + 3]);
         for (unsigned slot = 0; slot < GxMesh::MaxLitSlots; ++slot) {
             if (!(u.slots >> slot & 1)) continue;
             const int at = clipUniform + 4 + int(slot) * 6;
             for (int r = 0; r < 3; ++r) {
-                const float* row = u.modelView[slot] + r * 4;
-                setRow(at + r, row[0], row[1], row[2], row[3]);
+                const float* modelView = u.modelView[slot] + r * 4;
+                row(at + r, modelView[0], modelView[1], modelView[2], modelView[3]);
                 const float* normal = u.normal[slot] + r * 3;
-                setRow(at + 3 + r, normal[0], normal[1], normal[2], 0);
+                row(at + 3 + r, normal[0], normal[1], normal[2], 0);
             }
         }
     }
@@ -1027,6 +1128,7 @@ struct Renderer {
         ensureCpuBuffers();
         sendCull(GPU_CULL_NONE);  // culled in EFB space already
         C3D_DrawElements(GPU_TRIANGLES, static_cast<int>(indexUsed - batchStart), C3D_UNSIGNED_SHORT, indices + batchStart);
+        pending = false;
         ++perf.draws, perf.triangles += (indexUsed - batchStart) / 3;
         batchStart = indexUsed;
         fresh[0] = fresh[1] = false;
@@ -1098,9 +1200,9 @@ struct Renderer {
             top += item;
             perf.changed[most - perf.changed] = 0;
         }
-        std::fprintf(stderr, "gx perf: GPU path %.0f draws, %.0f triangles, %.1f meshes made per frame (%zu kept, %.1f MB); TEV programs compiled %.1f, "
+        std::fprintf(stderr, "gx perf: GPU path %.0f draws (%.0f groups through citro3d), %.0f triangles, %.1f meshes made per frame (%zu kept, %.1f MB); TEV programs compiled %.1f, "
                      "movie frames decoded %.1f, display lists %.0f (%.0f bytes) per frame; %.1f MB linear free; state changes by BP register (per frame):%s\n",
-                     perf.meshDraws / n, perf.meshTriangles / n, perf.meshesMade / n, meshes.size(), meshBytes / 1048576.0, (gxTevCompiles() - perf.compilesBefore) / n,
+                     perf.meshDraws / n, perf.citroDraws / n, perf.meshTriangles / n, perf.meshesMade / n, meshes.size(), meshBytes / 1048576.0, (gxTevCompiles() - perf.compilesBefore) / n,
                      (smgMovieDecodes() - perf.moviesBefore) / n, (lastGpu->displayListCalls - perf.listsBefore) / n,
                      (lastGpu->displayListBytes - perf.listBytesBefore) / n, linearSpaceFree() / 1048576.0, top.c_str());
         // Why display lists stayed on the CPU path, and the first commands of those that weren't primitives.

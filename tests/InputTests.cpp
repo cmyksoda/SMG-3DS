@@ -299,7 +299,7 @@ void settingsFiles() {
     settings.previewScenario = 2;
     check(smg::parseSettings(smg::formatSettings(settings)) == settings, "settings round trip");
     smg::Settings developer;
-    developer.devSkipStory = developer.devGxDump = developer.devGxNull = developer.devGxTiming = developer.devGxCheck = developer.devGxInline = true;
+    developer.devSkipStory = developer.devGxDump = developer.devGxNull = developer.devGxTiming = developer.devGxCheck = developer.devGxInline = developer.devGxNoRaw = true;
     check(!smg::Settings{}.devSkipStory && smg::formatSettings(smg::Settings{}).find("dev.") == std::string::npos &&
           smg::parseSettings(smg::formatSettings(developer)) == developer, "the story skip is off unless set, and written only when on");
     check(smg::parseSettings("preview=../../sys 1\n").previewGalaxy == "EggStarGalaxy" &&
