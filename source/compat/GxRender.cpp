@@ -769,6 +769,27 @@ struct Renderer {
                      u.lights, u.rgbLit, u.alphaLit, u.reject, m.blend.type, m.blend.source, m.blend.destination, state_->colorUpdate, state_->alphaUpdate,
                      state_->dstAlphaEnable, state_->dstAlpha, m.depth.enable, m.depth.function, m.depth.update, m.alphaTest.compare0,
                      m.alphaTest.op ? "|" : "&", m.alphaTest.compare1, stages.c_str());
+        if (!u.lit) return;
+        // A lit mesh's lighting as the shader's model works it out for a few of its first group's vertices, and its light
+        // entries: which part of the input makes a draw come out dark.
+        for (unsigned e = 0; e < u.lights; ++e) {
+            const float(&l)[6][4] = u.light[e];
+            std::fprintf(stderr, "gx dump:   light %u: colour %.2f %.2f %.2f %.2f, position %.3g %.3g %.3g, direction %.3f %.3f %.3f, spot %.0f diffuse %.0f\n",
+                         e, l[0][0], l[0][1], l[0][2], l[0][3], l[1][0] * l[4][1], l[1][1] * l[4][1], l[1][2] * l[4][1], l[2][0],
+                         l[2][1], l[2][2], l[5][0], l[5][1]);
+        }
+        const auto* vertices = static_cast<const GxMeshVertex*>(mesh.block);
+        for (u32 i = 0; i < std::min<u32>(mesh.vertexCount, 3); ++i) {
+            const GxMeshVertex& v = vertices[i];
+            float clip[4], color[4], tex[CombinerProgram::MaxUnits][2];
+            gxMeshModel(u, v, clip, color, tex);
+            const unsigned slot = (unsigned(v.slot) - 4) / 6;
+            const float* n = u.normal[slot < GxMesh::MaxLitSlots ? slot : 0];
+            std::fprintf(stderr, "gx dump:   vertex %lu (slot %u): normal %.2f %.2f %.2f, normal rows %.2f %.2f %.2f / %.2f %.2f %.2f / %.2f %.2f %.2f, "
+                         "ambient %.2f %.2f %.2f, lit colour %.0f %.0f %.0f %.0f\n", static_cast<unsigned long>(i), slot, v.normal[0], v.normal[1], v.normal[2],
+                         n[0], n[1], n[2], n[3], n[4], n[5], n[6], n[7], n[8], u.ambient[0], u.ambient[1], u.ambient[2], color[0] * 255, color[1] * 255,
+                         color[2] * 255, color[3] * 255);
+        }
     }
 
     static constexpr std::size_t MeshBudget = 12u << 20;
