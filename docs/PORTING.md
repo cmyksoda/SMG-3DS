@@ -721,7 +721,8 @@ end and every readback (Azahar models no caches, so only a real console pays for
 writes itself (meshes and textures when made, the frame's vertices before each command list ends), so it now passes
 `GX_CMDLIST_FLUSH`. The command processor parses about 200 KB a frame, most of it J3D's material lists of BP loads;
 a load now looks up in a 256-entry table whether a draw reads its register and whether it does anything besides being
-stored (most don't), and BP is the first opcode it checks.
+stored (most don't), and BP is the first opcode it checks. The state cache's key now holds only what the state reads for
+the TEV stages in use and the texture maps they sample (`gxDrawStateKey`, about 50 words instead of 127).
 
 **Fewer, leaner mesh draws.** A lit matrix slot took ten uniform rows (its whole clip transform, modelview and normal
 rows), so only four fit and Mario's skinned lists drew in 21 to 34 groups. Lit slots now take six rows (modelview,
@@ -753,7 +754,28 @@ interrupt) runs at once, as that thread can't take its own mail.
 `GameSystem::frameLoop` sets it to two and draws only when the framework says to, so the game runs at full speed and
 shows every second step, 30 frames a second (`dev.draw_every=1` draws every step, for comparing the renderer).
 The scene's view matrices and draw lists are computed in `calcAnim` (`executeCalcViewAndEntryList`) and its draw lists
-are persistent, so a step that isn't drawn leaves nothing behind; `endFrame` waits for the GPU only after a drawn step.
+are persistent, so a step that isn't drawn leaves nothing behind. The framework waited for the GPU's draw done at the
+end of a drawn step, leaving the render thread idle through the next one; now `endFrame` leaves it, and the adapted
+`frameLoop` waits in the next step, after its logic and before its `calcAnim`: J3D double-buffers its draw matrices by
+`calcAnim`, so that step is the first to rewrite what the drawn frame reads, and the Wii's own loop let the GPU draw
+through the logic step in the same way. The Star Festival plaza then runs at 30 frames a second with the game at full
+speed in Azahar (33.4 to 34.5 ms a frame, two logic steps each, at the 3DS's slow 268 MHz clock; the render thread busy
+26 to 28 ms of each, the game's thread about 25). A real New 3DS runs at 804 MHz; only one can say how much room that
+leaves.
+
+**Bitfields read as words, again.** `J3DModelX::drawIn` reads its 32 one-bit draw flags as a word and calls display
+list i for each bit i set (lists 0 to 15, built in its constructor: the shadow capture's alpha-only silhouette, the
+silhouette through walls, the reflection's settings). Metrowerks keeps field `_k` at bit 31 - k, GCC at bit k, so every
+flag Mario's drawing sets (`_10` to `_1E`) landed past bit 15 and none of those lists ever ran: Mario's shadow capture
+drew his simple model in colour into a corner of the screen (the black shape over the plaza) instead of only into
+alpha. The adapted `drawIn` tests bit 31 - i. `MR::validateExCollisionParts` set the Binder's flag byte by its mask,
+0x20, which is `_2` for Metrowerks and `_5` for GCC; it names the field now. A sweep for structs read back as integers
+(`*(u32*)&`, `*(u8*)&`, unions pairing bitfields with a word) found nothing else that reads them.
+
+**EFB copies to RG8 and GB8** keep two channels a texel, as the pixel engine writes them (green then red, blue then
+green: read back as IA8, alpha byte first); `GxCopyTests` checks both. A copy kept on the GPU goes to the CPU's encoder
+for these, as the PICA's copy pass has no two-channel packing. Still left: depth copies, real TEV compares (the bloom's
+threshold), and the second colour channel, which the PICA's combiner has no second vertex colour for.
 
 **Development settings.** Keys in `settings.ini` for development only, written back only when on: `dev.skip_story=1`
 skips the prologue's storybook and movies; `dev.gx_dump=1` dumps a frame's draws to the log once a minute;
