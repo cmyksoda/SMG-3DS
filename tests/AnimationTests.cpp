@@ -1,4 +1,5 @@
 #include <smg/Animation.hpp>
+#include <smg/CameraAnim.hpp>
 #include <smg/Mesh.hpp>
 #include <cmath>
 #include <cstdio>
@@ -199,12 +200,39 @@ void rejected() {
     bad[3] = '2';
     check(!brk.load({bad.data(), bad.size()}, error), "another J3D version is rejected");
 }
+// A keyed camera animation as the disc holds one (CKAN, big-endian), turned native and read as CameraAnim reads it.
+void cameraAnimation() {
+    std::vector<std::uint8_t> file(0x20 + 0x60 + 4 + 7 * 4);
+    const auto put = [&](std::size_t at, std::uint32_t v) { for (int i = 0; i < 4; ++i) file[at + i] = std::uint8_t(v >> (24 - 8 * i)); };
+    std::memcpy(file.data(), "ANDOCKAN", 8);
+    put(0x08, 1), put(0x0C, 0), put(0x10, 1), put(0x14, 4), put(0x18, 479), put(0x1C, 0x60);
+    put(0x20, 2), put(0x24, 0), put(0x28, 0);  // position x: two keys of (time, value, slope)
+    for (int c = 1; c < 8; ++c) put(0x20 + c * 12, 1), put(0x20 + c * 12 + 4, 6);
+    put(0x80, 7 * 4);
+    const float values[7] = {0, 100.5f, 0, 60, -20.25f, 0, 45};
+    for (int i = 0; i < 7; ++i) {
+        std::uint32_t bits;
+        std::memcpy(&bits, &values[i], 4);
+        put(0x84 + i * 4, bits);
+    }
+    auto bad = file;
+    check(!smg::nativeCameraAnimation(file.data(), file.size()), "a keyed camera animation turns");
+    const auto word = [&](std::size_t at) { std::uint32_t v; std::memcpy(&v, &file[at], 4); return v; };
+    const auto value = [&](int i) { float v; std::memcpy(&v, &file[0x84 + i * 4], 4); return v; };
+    check(word(0x18) == 479 && word(0x1C) == 0x60 && word(0x80) == 28, "camera header and value count native");
+    check(word(0x20) == 2 && word(0x20 + 7 * 12 + 4) == 6, "camera component counts and offsets native");
+    check(value(1) == 100.5f && value(4) == -20.25f && value(6) == 45, "camera values native");
+    check(!std::memcmp(file.data(), "ANDOCKAN", 8), "camera magic and kind stay as text");
+    bad[0x80 + 3] = 0x40;  // more values than the file holds
+    check(smg::nativeCameraAnimation(bad.data(), bad.size()) != nullptr, "camera values past the file are refused");
+}
 } // namespace
 
 int runAnimationTests() {
     pipeColors();
     jointAnimation();
     rejected();
+    cameraAnimation();
     std::printf("%u J3D animation checks passed\n", checks);
     return 0;
 }

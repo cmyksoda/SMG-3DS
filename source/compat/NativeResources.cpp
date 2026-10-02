@@ -2,6 +2,7 @@
 // See compat/smg/NativeResources.hpp.
 #include <JSystem/JKernel/JKRArchive.hpp>
 #include <smg/AudioData.hpp>
+#include <smg/CameraAnim.hpp>
 #include <smg/Bmg.hpp>
 #include <smg/FreeStore.hpp>
 #include <smg/J3D.hpp>
@@ -47,7 +48,7 @@ void smgNativeRarc(void* archive) {
         swap(files[i].mHash);
         swapWords(reinterpret_cast<u8*>(&files[i]) + 4, 3);  // flag and name offset, data offset or directory, size
     }
-    // BTI textures' headers, KCL collision, JParticle containers and sound animations turn here, where every reader's archive passes (texels stay the GPU's).
+    // BTI textures' headers, KCL collision, JParticle containers, sound and camera animations turn here, where every reader's archive passes (texels stay the GPU's).
     const char* names = reinterpret_cast<const char*>(info) + info->mStringTableOffset;
     u8* data = static_cast<u8*>(archive) + header->mHeaderSize + header->mFileDataOffset;
     for (u32 i = 0; i < info->mNrFiles; ++i) {
@@ -59,6 +60,7 @@ void smgNativeRarc(void* archive) {
         if (dot && !strcasecmp(dot, ".kcl")) turn = smg::nativeKcl;
         if (dot && !strcasecmp(dot, ".jpc")) turn = smg::nativeJpc;
         if (dot && !strcasecmp(dot, ".bas")) turn = smg::nativeSoundAnimation;
+        if (dot && !strcasecmp(dot, ".canm")) turn = smg::nativeCameraAnimation;
         if (!turn) continue;
         if (const char* why = turn(data + files[i].mDataOffset, files[i].mDataSize)) {
             std::fprintf(stderr, "An archive's %s: %s\n", name, why);
