@@ -66,9 +66,9 @@ void defaultLayout() {
         input.update(raw);
     }
     const struct { std::uint32_t key, wii; const char* description; } buttons[]{
-        {smg::ZL, smg::WiiZ, "ZL crouches with Nunchuk Z"},
-        {smg::ZR, smg::WiiB, "ZR shoots star bits with Wii B"},
-        {smg::L, smg::WiiC, "L resets the camera with Nunchuk C"},
+        {smg::L, smg::WiiZ, "L crouches with Nunchuk Z"},
+        {smg::R, smg::WiiB, "R shoots star bits with Wii B"},
+        {smg::ZL, smg::WiiC, "ZL resets the camera with Nunchuk C"},
         {smg::Start, smg::WiiPlus, "Start pauses with Wii Plus"},
         {smg::Select, smg::WiiMinus, "Select is Wii Minus"},
     };
@@ -78,8 +78,8 @@ void defaultLayout() {
         raw = {};
         input.update(raw);
     }
-    raw.held = smg::R;
-    check(smg::toWiiInput(input.update(raw)).held == 0 && input.frame().recenter.pressed, "R recenters without a Wii button");
+    raw.held = smg::ZR;
+    check(smg::toWiiInput(input.update(raw)).held == 0 && input.frame().recenter.pressed, "ZR recenters without a Wii button");
     raw = {};
     input.update(raw);
 
@@ -98,12 +98,12 @@ void defaultLayout() {
     check(smg::toWiiInput(input.update(raw)).held == 15, "all D-pad directions passed to original camera logic");
 
     smg::Settings custom;
-    custom.bindings[smg::Shoot] = smg::ZR | smg::R;
+    custom.bindings[smg::Shoot] = smg::ZR | smg::ZL;
     custom.bindings[smg::PointerReset] = smg::Select;
     smg::Input remapped(custom);
     raw = {};
-    raw.held = smg::R;
-    check(remapped.update(raw).shoot.pressed && !remapped.frame().recenter.held, "remapped R shoots instead of recentering");
+    raw.held = smg::ZR;
+    check(remapped.update(raw).shoot.pressed && !remapped.frame().recenter.held, "remapped ZR shoots instead of recentering");
     raw.held = smg::Select;
     check(remapped.update(raw).recenter.pressed, "remapped recenter");
 }
@@ -113,8 +113,8 @@ void motionPointer() {
     const auto& turned = run(input, motion(0, 10, 0), 60);
     check(near(turned.pointer.x, 199.5f - 10 * 400.0f / 36, 2) && near(turned.pointer.y, 119.5f), "turning left moves the pointer left");
     smg::RawInput recenter = motion(0, 0, 0);
-    recenter.held = smg::R;
-    check(near(input.update(recenter).pointer.x, 199.5f), "R recenters the motion pointer");
+    recenter.held = smg::ZR;
+    check(near(input.update(recenter).pointer.x, 199.5f), "ZR recenters the motion pointer");
     input.update(motion(0, 0, 0));
     check(run(input, motion(10, 0, 0), 30).pointer.y < 119.5f - 40, "tipping the top screen back aims up");
     check(run(input, motion(-400, 0, 0), 60).pointer.y == 239, "pointer is held at the screen edge");
@@ -156,8 +156,8 @@ void stickPointer() {
     const float y = input.update(raw).pointer.y;
     check(y < 119.5f && y > 118.5f, "small C-stick nudges move slowly and up is up");
     raw = {};
-    raw.held = smg::R;
-    check(near(input.update(raw).pointer.x, 199.5f), "R recenters the C-stick pointer");
+    raw.held = smg::ZR;
+    check(near(input.update(raw).pointer.x, 199.5f), "ZR recenters the C-stick pointer");
     smg::Input slow(withPointer(smg::PointerMode::CStick));
     raw = {};
     raw.cstickX = 140;
@@ -183,15 +183,15 @@ void stylusPointer() {
     check(frame.pointer.visible && !frame.camera.held, "aiming over camera button does not activate");
     frame = input.update(touch(280, 10));
     check(frame.pointer.visible && !frame.optionsOpen, "aiming over the options tab does not open it");
-    raw.held = smg::ZR;
+    raw.held = smg::R;
     raw.touching = true;
     raw.touchX = 160;
     raw.touchY = 120;
-    check(input.update(raw).shoot.pressed, "ZR shoots at the stylus pointer");
+    check(input.update(raw).shoot.pressed, "R shoots at the stylus pointer");
     input.update({});
     raw = {};
-    raw.held = smg::ZR;
-    check(input.update(raw).shoot.pressed && !input.frame().pointer.visible, "ZR is still Wii B with the stylus lifted");
+    raw.held = smg::R;
+    check(input.update(raw).shoot.pressed && !input.frame().pointer.visible, "R is still Wii B with the stylus lifted");
     input.update({});
     frame = input.update(touch(280, 210));
     check(frame.shootMode && !frame.pointer.visible && !frame.shoot.held, "toggle press consumes touch without firing");
@@ -265,13 +265,13 @@ void remapPage() {
     check(frame.capturing == smg::Shoot, "a row starts choosing buttons for its action");
     input.update({});
     smg::RawInput raw;
-    raw.held = smg::R;
+    raw.held = smg::Y;
     frame = input.update(raw);
-    check(!frame.recenter.pressed && !frame.shoot.pressed, "buttons pressed while choosing never reach the game");
-    check(input.settings().bindings[smg::Shoot] == smg::R, "the first press replaces the old binding");
-    raw.held = smg::R | smg::ZR;
+    check(!frame.spin.pressed && !frame.shoot.pressed, "buttons pressed while choosing never reach the game");
+    check(input.settings().bindings[smg::Shoot] == smg::Y, "the first press replaces the old binding");
+    raw.held = smg::Y | smg::ZR;
     input.update(raw);
-    check(input.settings().bindings[smg::Shoot] == (smg::R | smg::ZR), "later presses add aliases");
+    check(input.settings().bindings[smg::Shoot] == (smg::Y | smg::ZR), "later presses add aliases");
     raw.touching = true;
     raw.touchX = raw.touchY = 100;
     frame = input.update(raw);
@@ -280,7 +280,7 @@ void remapPage() {
     check(!input.update(raw).shoot.pressed, "buttons held through the finishing tap stay suppressed");
     input.update({});
     raw = {};
-    raw.held = smg::R;
+    raw.held = smg::Y;
     check(input.update(raw).shoot.pressed, "the new binding works once pressed again");
     input.update({});
     input.update(touch(280, 12));

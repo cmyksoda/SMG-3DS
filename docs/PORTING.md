@@ -38,8 +38,8 @@ completion does not make those interfaces portable to ARM11/PICA200.
   A frame longer than a quarter second moves the pointer by a quarter second's worth: the
   rates are one moment's, and dropping such frames left the pointer frozen at low frame rates.
   The game's `WPadPointer` waits out IR noise (5 valid samples before showing, 10 invalid ones before hiding);
-  the 3DS pointer is exact, so both are 0 and a lifted stylus hides it at once. ZR stays the Wii's B with
-  the stylus lifted: the title's "Press both A and B" and the menus' back need it.
+  the 3DS pointer is exact, so both are 0 and a lifted stylus hides it at once. Shoot (R) stays the Wii's B
+  with the stylus lifted: the title's "Press both A and B" and the menus' back need it.
 - Yaz0 decompression and RARC indexing work independently of host endianness and alignment.
   Archives are found whatever the case of their names, as the Wii's DVD file system finds them:
   the disc stores `FloaterOtakingGalaxy.arc` and `CubeBubbleEXAZone.arc` where the game asks for
@@ -725,7 +725,7 @@ run, delete the native scene, its `newEachObj`, and the holder lookups it answer
 
 ## Pointer details to preserve
 
-`StarPieceShooter::tryShoot` consumes both Wii B hold and trigger states, so ZR (and the
+`StarPieceShooter::tryShoot` consumes both Wii B hold and trigger states, so R (and the
 stylus touch-to-shoot toggle) produce B's trigger on the first pointed sample and hold
 while it continues; the original game keeps ownership of shot timing and charge. B is
 only reported while the pointer is valid, as with the Wii's IR. The toggle tap itself

@@ -76,10 +76,12 @@ Bindings defaultBindings() {
     Bindings bindings{};
     bindings[Jump] = A | B;
     bindings[Spin] = X | Y;
-    bindings[Crouch] = ZL;
-    bindings[Shoot] = ZR;
-    bindings[CameraReset] = L;
-    bindings[PointerReset] = R;
+    // The Switch release's layout with the shoulders swapped (Jaxi, 2026-10-01): the 3DS's ZL and ZR are a reach, so
+    // crouch and star bits take L and R, and the rarer camera and pointer resets the Z buttons.
+    bindings[Crouch] = L;
+    bindings[Shoot] = R;
+    bindings[CameraReset] = ZL;
+    bindings[PointerReset] = ZR;
     bindings[Pause] = Start;
     bindings[Minus] = Select;
     return bindings;

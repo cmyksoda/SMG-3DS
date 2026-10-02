@@ -47,18 +47,18 @@ int runPadTests() {
         raw = {};
         sample();
 
-        raw.held = smg::ZL;
+        raw.held = smg::L;
         sample();
         check(pad.buttons().testButtonZ() && pad.buttons().testTriggerZ(), "crouch uses original Z");
-        raw.held = smg::ZL | smg::L;
+        raw.held = smg::L | smg::ZL;
         sample();
         check(!pad.buttons().testReleaseZ() && pad.buttons().testTriggerC(), "camera reset joins a held crouch");
         raw = {};
         sample();
         check(pad.buttons().testReleaseZ() && !pad.buttons().testButtonC(), "original Z and C release");
-        raw.held = smg::ZR;
+        raw.held = smg::R;
         sample();
-        check(pad.buttons().testButtonB(), "ZR is the Wii's B with the stylus lifted, as the title's A + B needs");
+        check(pad.buttons().testButtonB(), "R is the Wii's B with the stylus lifted, as the title's A + B needs");
         raw = {};
         sample();
 
