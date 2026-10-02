@@ -369,6 +369,30 @@ bool color0CanRide(const GxCommandProcessor& gpu, const ModelMaterial& m, std::u
 }
 } // namespace
 
+std::size_t gxDrawStateKey(const GxCommandProcessor& gpu, std::uint32_t* out) {
+    std::uint32_t* at = out;
+    const std::uint32_t gen = gpu.bp[0x00];
+    *at++ = gen;
+    for (std::uint32_t a : {0x20u, 0x21u, 0x40u, 0x41u, 0x42u, 0xF3u, 0xF4u, 0xF5u}) *at++ = gpu.bp[a];
+    for (std::uint32_t a = 0xF6; a <= 0xFD; ++a) *at++ = gpu.bp[a];  // konst selects and swap tables
+    for (int i = 0; i < 8; ++i) *at++ = gpu.tevColor[i], *at++ = gpu.tevKonst[i];
+    for (std::uint32_t x : {0x1009u, 0x100Au, 0x100Cu, 0x100Eu, 0x1010u, 0x103Fu}) *at++ = gpu.xf[x];
+    const unsigned stages = GEN_MODE_GET_NTEV(gen) + 1;
+    std::uint8_t maps = 0;
+    for (unsigned i = 0; i < stages; ++i) {
+        *at++ = gpu.bp[0xC0 + 2 * i], *at++ = gpu.bp[0xC1 + 2 * i], *at++ = gpu.bp[0x10 + i];
+        const std::uint32_t order = gpu.bp[0x28 + i / 2];
+        if (i % 2 == 0) *at++ = order;
+        if (i & 1 ? RAS1_TREF_GET_TE1(order) : RAS1_TREF_GET_TE0(order)) maps |= 1u << (i & 1 ? RAS1_TREF_GET_TI1(order) : RAS1_TREF_GET_TI0(order));
+    }
+    for (int map = 0; map < 8; ++map) {
+        if (!(maps >> map & 1)) continue;
+        const std::uint32_t bank = map < 4 ? 0x80 + map : 0xA0 + map - 4;
+        *at++ = gpu.bp[bank], *at++ = gpu.bp[bank + 0x08], *at++ = gpu.bp[bank + 0x14];
+    }
+    return std::size_t(at - out);
+}
+
 void readGxDrawState(const GxCommandProcessor& gpu, GxDrawState& out) {
     out = GxDrawState{};
     readTev(gpu, out);

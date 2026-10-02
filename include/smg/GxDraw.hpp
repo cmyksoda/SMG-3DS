@@ -57,6 +57,10 @@ struct GxDrawState {
     const char* unsupported = nullptr;
 };
 void readGxDrawState(const GxCommandProcessor& gpu, GxDrawState& out);
+// The registers readGxDrawState reads for the stages and texture maps in use, in a fixed order, as a cache key: two
+// processors with the same key read the same state (a map no stage uses may differ in it). At most MaxDrawStateKey words.
+constexpr std::size_t MaxDrawStateKey = 128;
+std::size_t gxDrawStateKey(const GxCommandProcessor& gpu, std::uint32_t* out);
 // C0 as four bytes, false when a component is outside 0-255 (then it can't be a vertex colour).
 bool gxColor0Bytes(const GxCommandProcessor& gpu, std::uint8_t out[4]);
 // TEV programs compiled so far (readGxDrawState keeps each by what compileTev reads): how often its cache missed.

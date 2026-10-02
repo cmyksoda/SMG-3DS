@@ -561,12 +561,13 @@ struct Renderer {
         }
     }
 
-    // readGxDrawState through a cache keyed by every register it reads (the BP ones a draw reads, the TEV colours and
-    // konsts, the channels' XF words): J3D's materials come back every frame, so most builds are a lookup. The key is
-    // gathered into an array and hashed by 32-bit multiplies, and the draw uses the cached state where it lies.
-    static constexpr unsigned MaxStateWords = 160;
+    // readGxDrawState through a cache keyed by the registers it reads for the stages and maps in use (gxDrawStateKey):
+    // J3D's materials come back every frame, so most builds are a lookup. The key is hashed by 32-bit multiplies, and the
+    // draw uses the cached state where it lies.
+    static constexpr unsigned MaxStateWords = MaxDrawStateKey;
     struct CachedState {
         u32 words[MaxStateWords];
+        std::size_t count = 0;
         GxDrawState state;
         PicaPixel pixel;  // preparePixel's, of the state's material and program
         bool pixelReady = false;
@@ -576,21 +577,12 @@ struct Renderer {
     CachedState* stateEntry = nullptr;  // the entry the last read came from or went into
 
     void readState(const GxCommandProcessor& gpu) {
-        static const std::vector<std::uint8_t> registers = [] {
-            std::vector<std::uint8_t> read;
-            for (u32 a = 0; a < 0x100; ++a)
-                if (GxCommandProcessor::drawsRead(a)) read.push_back(std::uint8_t(a));
-            if (read.size() + 22 > MaxStateWords) stop("more registers in a draw state than its key holds");
-            return read;
-        }();
-        u32* word = stateWords;
-        for (std::uint8_t a : registers) *word++ = gpu.bp[a];
-        for (int i = 0; i < 8; ++i) *word++ = gpu.tevColor[i], *word++ = gpu.tevKonst[i];
-        for (u32 x : {0x1009u, 0x100Au, 0x100Cu, 0x100Eu, 0x1010u, 0x103Fu}) *word++ = gpu.xf[x];
+        const std::size_t count = gxDrawStateKey(gpu, stateWords);
+        const u32* word = stateWords + count;
         const std::size_t bytes = std::size_t(word - stateWords) * sizeof(u32);
         u32 hash = 0x811C9DC5u;
         for (const u32* w = stateWords; w != word; ++w) hash = (hash ^ *w) * 0x01000193u;
-        if (auto found = states.find(hash); found != states.end() && !std::memcmp(found->second.words, stateWords, bytes)) {
+        if (auto found = states.find(hash); found != states.end() && found->second.count == count && !std::memcmp(found->second.words, stateWords, bytes)) {
             ++perf.stateHits;
             stateEntry = &found->second, state_ = &found->second.state;
             return;
@@ -598,7 +590,7 @@ struct Renderer {
         ++perf.stateMisses;
         if (states.size() >= 512) states.clear();
         CachedState& entry = states[hash];  // a key that collides takes the entry over
-        std::memcpy(entry.words, stateWords, bytes);
+        std::memcpy(entry.words, stateWords, bytes), entry.count = count;
         readGxDrawState(gpu, entry.state);
         entry.pixelReady = false;
         stateEntry = &entry, state_ = &entry.state;

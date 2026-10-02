@@ -570,6 +570,39 @@ void layoutMaterial() {
     check(plain && !inverted, "black to white by the texture reads the texture as it is");
 }
 
+// The draw-state key holds what a state reads and nothing it doesn't: an unused stage or texture map changes nothing,
+// and the same key means the same state.
+void drawStateKey() {
+    auto owned = std::make_unique<smg::GxCommandProcessor>(host());
+    smg::GxCommandProcessor& gpu = *owned;
+    Stream s;
+    clearState(s);
+    s.bp(0x88000000 | 0x100);  // map 0's size and format
+    gpu.put(s.bytes.data(), static_cast<std::uint32_t>(s.bytes.size()));
+    std::uint32_t base[smg::MaxDrawStateKey], key[smg::MaxDrawStateKey];
+    const std::size_t baseCount = smg::gxDrawStateKey(gpu, base);
+    const auto same = [&] {
+        const std::size_t count = smg::gxDrawStateKey(gpu, key);
+        return count == baseCount && !std::memcmp(key, base, count * 4);
+    };
+    Stream unused;
+    unused.bp(0xCA08FFAA), unused.bp(0x2B0003C0), unused.bp(0x8B000123), unused.bp(0xAB000321);  // stage 5, orders 6-7, maps 3 and 7
+    gpu.put(unused.bytes.data(), static_cast<std::uint32_t>(unused.bytes.size()));
+    check(same() && baseCount < smg::MaxDrawStateKey, "an unused stage or texture map leaves the key as it was");
+    smg::GxDrawState a, b;
+    smg::readGxDrawState(gpu, a);
+    Stream used;
+    used.bp(0x94000200);  // map 0's image address: a map stage 0 reads
+    gpu.put(used.bytes.data(), static_cast<std::uint32_t>(used.bytes.size()));
+    check(!same(), "a used texture map changes the key");
+    smg::readGxDrawState(gpu, b);
+    check(a.textures[0].address != b.textures[0].address, "and the state read with it");
+    Stream stage;
+    stage.bp(0x94000100), stage.bp(0xC008FFF3);  // back to the first map; stage 0's colour inputs changed
+    gpu.put(stage.bytes.data(), static_cast<std::uint32_t>(stage.bytes.size()));
+    check(!same(), "a used stage changes the key");
+}
+
 int runGxDrawTests() {
     tevOpTables();
     clearQuad();
@@ -585,6 +618,7 @@ int runGxDrawTests() {
     meshFromDisplayList();
     litMesh();
     litMeshGroups();
+    drawStateKey();
     std::printf("%u GX draw checks passed\n", checks);
     return 0;
 }
