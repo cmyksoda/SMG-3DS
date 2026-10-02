@@ -425,10 +425,8 @@ bool GxVertexPipeline::foldStillHolds(TexGen& t, std::uint32_t ctrl, std::uint32
 
 // A position matrix (three rows from `index`) through toClip_: one 4x4 per vertex instead of a matrix, the projection
 // and the viewport.
-const float* GxVertexPipeline::clipMatrix(std::uint32_t index) {
-    thread_local float scratch[16];
-    float* out = index < 64 ? clip_[index] : scratch;
-    if (index < 64 && clipReady_ >> index & 1) return out;
+const float* GxVertexPipeline::makeClipMatrix(std::uint32_t index) {
+    float* out = index < 64 ? clip_[index] : clipScratch_;
     for (int r = 0; r < 4; ++r)
         for (int c = 0; c < 4; ++c) {
             double sum = c == 3 ? toClip_[r][3] : 0;  // the position matrix's fourth row is (0, 0, 0, 1)

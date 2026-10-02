@@ -89,7 +89,8 @@ private:
         // What the fold was made from (setup, then the matrices' words), and the XF change count it was checked at.
         std::uint32_t source_[32] = {}, sourceWords = 0, foldXf = ~0u;
     };
-    const float* clipMatrix(std::uint32_t index);
+    const float* clipMatrix(std::uint32_t index) { return index < 64 && clipReady_ >> index & 1 ? clip_[index] : makeClipMatrix(index); }
+    const float* makeClipMatrix(std::uint32_t index);
     bool foldStillHolds(TexGen& t, std::uint32_t ctrl, std::uint32_t post) const;
     void texgen(const TexGen& t, const GxVertex& v, float st[2]) const;
     float matrix(std::uint32_t row, int column) const;
@@ -107,7 +108,7 @@ private:
     std::uint32_t xfSeen_ = ~0u, viewSeen_[13] = {};  // XF 0x101A-0x1026: the viewport and projection
     GxFrame frameSeen_{0, 0, false};
     double toClip_[4][4] = {};
-    float clip_[64][16] = {};
+    float clip_[64][16] = {}, clipScratch_[16] = {};
     std::uint64_t clipReady_ = 0;
 };
 
