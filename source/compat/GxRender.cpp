@@ -47,6 +47,13 @@ static_assert(MaxVertices <= 0x10000, "vertex numbers are 16 bits");
 constexpr u32 DrawCommandWords = 0x800;
 // A mesh group's slot rows (up to forty uniforms, four words each) and its draw, beyond the first group's.
 constexpr u32 GroupCommandWords = 0x140;
+
+// A vertex shader uniform row, marked for upload only when it differs from what the GPU already holds (citro3d keeps
+// the last values): most draws repeat their lights, texgens and material.
+inline void setRow(int id, float x, float y, float z, float w) {
+    const C3D_FVec& now = C3D_FVUnif[GPU_VERTEX_SHADER][id];
+    if (now.x != x || now.y != y || now.z != z || now.w != w) C3D_FVUnifSet(GPU_VERTEX_SHADER, id, x, y, z, w);
+}
 // The render target read back whole for a texture copy, still tiled the screen's way round but linear.
 constexpr u32 ReadbackFlags = GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | GX_TRANSFER_RAW_COPY(0) |
                               GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) | GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGBA8) |
@@ -227,6 +234,9 @@ struct Renderer {
         rgbLitUniform = find("rgblit"), alphaLitUniform = find("alphalit"), anyLightUniform = find("anylight");
         if (clipUniform < 0 || texrowUniform < 0 || transformUniform < 0 || projectUniform[2] < 0 || materialUniform < 0 || alphaRegUniform < 0)
             stop("the GX shader's uniforms");
+        // Every row goes to the GPU once, so setRow may skip one whose value citro3d already has.
+        for (const auto& [first, count] : {std::pair{clipUniform, 40}, {texrowUniform, 9}, {materialUniform, 1}, {ambientUniform, 1}, {lightUniform, 24}})
+            for (int i = 0; i < count; ++i) C3D_FVUnifSet(GPU_VERTEX_SHADER, first + i, 0, 0, 0, 0);
         ready = true;
     }
 
@@ -729,9 +739,9 @@ struct Renderer {
             for (unsigned l = 0; l < u.lights; ++l)
                 for (int r = 0; r < 6; ++r) {
                     const float* row = u.light[l][r];
-                    C3D_FVUnifSet(GPU_VERTEX_SHADER, lightUniform + int(l) * 6 + r, row[0], row[1], row[2], row[3]);
+                    setRow(lightUniform + int(l) * 6 + r, row[0], row[1], row[2], row[3]);
                 }
-            C3D_FVUnifSet(GPU_VERTEX_SHADER, ambientUniform, u.ambient[0], u.ambient[1], u.ambient[2], u.ambient[3]);
+            setRow(ambientUniform, u.ambient[0], u.ambient[1], u.ambient[2], u.ambient[3]);
             C3D_IVUnifSet(GPU_VERTEX_SHADER, lightLoopUniform, u.lights ? int(u.lights) - 1 : 0, 0, 6, 0);
             C3D_BoolUnifSet(GPU_VERTEX_SHADER, anyLightUniform, u.lights != 0);
             C3D_BoolUnifSet(GPU_VERTEX_SHADER, rgbLitUniform, u.rgbLit);
@@ -740,14 +750,14 @@ struct Renderer {
         for (unsigned unit = 0; unit < u.units; ++unit) {
             for (int r = 0; r < 3; ++r) {
                 const float* row = u.texgen[unit][r];
-                C3D_FVUnifSet(GPU_VERTEX_SHADER, texrowUniform + int(unit) * 3 + r, row[0], row[1], row[2], row[3]);
+                setRow(texrowUniform + int(unit) * 3 + r, row[0], row[1], row[2], row[3]);
             }
             C3D_BoolUnifSet(GPU_VERTEX_SHADER, projectUniform[unit], u.projective[unit]);
         }
         C3D_BoolUnifSet(GPU_VERTEX_SHADER, transformUniform, true);
         C3D_BoolUnifSet(GPU_VERTEX_SHADER, rgbRegUniform, !u.fixedColor && !u.rgbFromVertex);
         C3D_BoolUnifSet(GPU_VERTEX_SHADER, alphaRegUniform, !u.fixedColor && !u.alphaFromVertex);
-        C3D_FVUnifSet(GPU_VERTEX_SHADER, materialUniform, u.color[0] / 255.0f, u.color[1] / 255.0f, u.color[2] / 255.0f, u.color[3] / 255.0f);
+        setRow(materialUniform, u.color[0] / 255.0f, u.color[1] / 255.0f, u.color[2] / 255.0f, u.color[3] / 255.0f);
         // GxMeshVertex: position (v0), colour (v1), three texgen inputs (v2-v4), normal (v6), slot (v5). What a draw doesn't
         // take from the vertices is a fixed attribute, and the bytes it skips are padding (0xC is four bytes, 0xE twelve).
         C3D_AttrInfo* attributes = C3D_GetAttrInfo();
@@ -802,14 +812,14 @@ struct Renderer {
             const int at = clipUniform + int(slot) * rows;
             for (int r = 0; r < 4; ++r) {
                 const float* row = u.clip[slot] + r * 4;
-                C3D_FVUnifSet(GPU_VERTEX_SHADER, at + r, row[0], row[1], row[2], row[3]);
+                setRow(at + r, row[0], row[1], row[2], row[3]);
             }
             if (!u.lit) continue;
             for (int r = 0; r < 3; ++r) {
                 const float* row = u.modelView[slot] + r * 4;
-                C3D_FVUnifSet(GPU_VERTEX_SHADER, at + 4 + r, row[0], row[1], row[2], row[3]);
+                setRow(at + 4 + r, row[0], row[1], row[2], row[3]);
                 const float* normal = u.normal[slot] + r * 3;
-                C3D_FVUnifSet(GPU_VERTEX_SHADER, at + 7 + r, normal[0], normal[1], normal[2], 0);
+                setRow(at + 7 + r, normal[0], normal[1], normal[2], 0);
             }
         }
     }
