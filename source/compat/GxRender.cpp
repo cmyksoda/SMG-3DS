@@ -397,9 +397,12 @@ struct Renderer {
     struct CachedState {
         std::vector<u32> words;
         GxDrawState state;
+        PicaPixel pixel;  // preparePixel's, of the state's material and program
+        bool pixelReady = false;
     };
     std::unordered_map<std::uint64_t, CachedState> states;
     std::vector<u32> stateWords;
+    CachedState* stateEntry = nullptr;  // the entry the last read came from or went into
 
     void readState(const GxCommandProcessor& gpu) {
         static const std::vector<std::uint8_t> registers = [] {
@@ -414,11 +417,15 @@ struct Renderer {
         for (u32 x : {0x1009u, 0x100Au, 0x100Cu, 0x100Eu, 0x1010u, 0x103Fu}) stateWords.push_back(gpu.xf[x]);
         std::uint64_t hash = 0xCBF29CE484222325ull;
         for (u32 w : stateWords) hash = (hash ^ w) * 0x100000001B3ull;
-        if (auto found = states.find(hash); found != states.end() && found->second.words == stateWords) return void(state = found->second.state);
+        if (auto found = states.find(hash); found != states.end() && found->second.words == stateWords) {
+            stateEntry = &found->second;
+            return void(state = found->second.state);
+        }
         readGxDrawState(gpu, state);
         if (states.size() >= 512) states.clear();
         CachedState& entry = states[hash];
-        entry.words = stateWords, entry.state = state;
+        entry.words = stateWords, entry.state = state, entry.pixelReady = false;
+        stateEntry = &entry;
     }
 
     // dev.gx_timing: the clock around one of the per-call steps.
@@ -471,7 +478,12 @@ struct Renderer {
         gpuXf[0] = gpu.xf[0x1009], gpuXf[1] = gpu.xf[0x100E], gpuXf[2] = gpu.xf[0x1010], gpuXf[3] = gpu.xf[0x100C], gpuXf[4] = gpu.xf[0x100A];
         {
             const Step prepare(perf, 5);
-            pixel = preparePixel(state.material, state.program);
+            if (stateEntry->pixelReady) {
+                pixel = stateEntry->pixel;
+            } else {
+                pixel = preparePixel(state.material, state.program);
+                stateEntry->pixel = pixel, stateEntry->pixelReady = true;
+            }
         }
         if (state.dstAlphaEnable && state.alphaUpdate) keepDstAlpha();
         writeMask = (state.colorUpdate ? GPU_WRITE_COLOR & ~GPU_WRITE_ALPHA : 0) | (state.alphaUpdate ? GPU_WRITE_ALPHA : 0) |
