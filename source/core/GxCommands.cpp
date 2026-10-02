@@ -266,7 +266,9 @@ void GxCommandProcessor::loadXf(std::uint32_t address, std::uint32_t count, cons
     bool changed = false;
     for (std::uint32_t i = 0; i < count && address + i < sizeof xf / sizeof *xf; ++i) {
         const std::uint32_t value = word(from + i * 4, native);
-        changed |= xf[address + i] != value;
+        if (xf[address + i] == value) continue;
+        changed = true;
+        if (address + i < 0x1000) ++xfRowChanges[(address + i) >> 2];
         xf[address + i] = value;
     }
     xfChanges += changed;

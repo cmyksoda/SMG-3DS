@@ -328,6 +328,18 @@ void dualTexgen() {
     pipeline.prepare(gpu, state, {}, drawn[0].kind, drawn[0].format);
     pipeline.run(drawn[0].data.data(), 4, v, 0, indices);
     check(near(v[2].texcoord[0][0], 1.1f) && near(v[2].texcoord[0][1], 1.2f), "a texture matrix loaded between primitives takes effect");
+    Stream position;
+    position.xff(0, {2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0});
+    gpu.put(position.bytes.data(), static_cast<std::uint32_t>(position.bytes.size()));
+    pipeline.prepare(gpu, state, {}, drawn[0].kind, drawn[0].format);
+    pipeline.run(drawn[0].data.data(), 4, v, 0, indices);
+    check(near(v[2].texcoord[0][0], 1.1f) && near(v[2].texcoord[0][1], 1.2f), "a position matrix loaded between them leaves the fold as it was");
+    Stream post;
+    post.xff(0x500, {1, 0, 0, 0.5f, 0, 1, 0, 0.5f, 0, 0, 1, 0});
+    gpu.put(post.bytes.data(), static_cast<std::uint32_t>(post.bytes.size()));
+    pipeline.prepare(gpu, state, {}, drawn[0].kind, drawn[0].format);
+    pipeline.run(drawn[0].data.data(), 4, v, 0, indices);
+    check(near(v[2].texcoord[0][0], 1.5f) && near(v[2].texcoord[0][1], 1.5f), "and a post matrix loaded between them takes effect");
 }
 
 // A program that reads C0 but not the rasterized colour takes C0 from the vertex colour, so primitives whose C0 alone

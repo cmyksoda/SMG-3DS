@@ -521,6 +521,13 @@ bool GxVertexPipeline::prepare(const GxCommandProcessor& gpu, const GxDrawState&
 // A primitive's texgen usually reuses the last one's matrices: their words are compared rather than folded again.
 bool GxVertexPipeline::foldStillHolds(TexGen& t, std::uint32_t ctrl, std::uint32_t post) const {
     if (t.foldXf == gpu_->xfChanges && t.sourceWords && t.source_[0] == t.coord && t.source_[1] == ctrl) return true;
+    // A load that left the fold's own setup and rows as they were (most often a particle's position matrix).
+    const std::uint32_t* rows = gpu_->xfRowChanges;
+    bool same = t.sourceWords == 5u + 4u * t.rows + (t.dual ? 12u : 0u) && t.source_[0] == t.coord && t.source_[1] == ctrl &&
+                t.source_[2] == t.dual && t.source_[3] == post && t.source_[4] == t.matrix;
+    for (int r = 0; r < t.rows && same; ++r) same = rows[(t.matrix + r) & 0x3FF] == t.rowChanges[r];
+    for (int r = 0; r < 3 && same && t.dual; ++r) same = rows[(t.post + r) & 0x3FF] == t.rowChanges[3 + r];
+    if (same) return t.foldXf = gpu_->xfChanges, true;
     std::uint32_t words[32];
     std::uint32_t n = 0;
     words[n++] = t.coord, words[n++] = ctrl, words[n++] = t.dual, words[n++] = post, words[n++] = t.matrix;
@@ -529,9 +536,11 @@ bool GxVertexPipeline::foldStillHolds(TexGen& t, std::uint32_t ctrl, std::uint32
     if (t.dual)
         for (int r = 0; r < 3; ++r)
             for (int c = 0; c < 4; ++c) words[n++] = gpu_->xf[((t.post + r) * 4 + c) & 0xFFF];
-    const bool same = n == t.sourceWords && !std::memcmp(words, t.source_, n * 4);
+    same = n == t.sourceWords && !std::memcmp(words, t.source_, n * 4);
     std::memcpy(t.source_, words, n * 4);
     t.sourceWords = n, t.foldXf = gpu_->xfChanges;
+    for (int r = 0; r < t.rows; ++r) t.rowChanges[r] = rows[(t.matrix + r) & 0x3FF];
+    for (int r = 0; r < 3 && t.dual; ++r) t.rowChanges[3 + r] = rows[(t.post + r) & 0x3FF];
     return same;
 }
 

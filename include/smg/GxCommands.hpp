@@ -99,6 +99,8 @@ public:
     // Loads that changed something, by kind: equal counts mean that part of the state is as it was. bpChanges counts only
     // the BP registers a draw reads (TEV, textures, pixel tests, scissor, culling), so a run of primitives can share one draw.
     std::uint32_t bpChanges = 0, xfChanges = 0, cpChanges = 0;
+    // Changes to each four-word row of XF memory (the matrices, below 0x1000): what read a row still holds while its count stays.
+    std::uint32_t xfRowChanges[0x400] = {};
     // The same for every register a draw reads but C0, whose colour can ride in the vertices instead.
     std::uint32_t bpChangesBesideC0 = 0;
     // Display lists called, and their bytes (for the renderer's perf line).

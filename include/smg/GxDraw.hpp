@@ -188,6 +188,7 @@ private:
         float fold[3][4] = {};
         // What the fold was made from (setup, then the matrices' words), and the XF change count it was checked at.
         std::uint32_t source_[32] = {}, sourceWords = 0, foldXf = ~0u;
+        std::uint32_t rowChanges[6] = {};  // its matrix rows', then its post matrix rows' change counts (xfRowChanges)
     };
     const float* clipMatrix(std::uint32_t index) { return index < 64 && clipReady_ >> index & 1 ? clip_[index] : makeClipMatrix(index); }
     const float* makeClipMatrix(std::uint32_t index);
