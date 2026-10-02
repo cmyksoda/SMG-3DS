@@ -147,68 +147,97 @@ float safeDivide(float n, float d) { return d == 0 ? (n > 0 ? 3.4e38f : 0) : n /
 
 constexpr std::uint32_t XfLights = 0x600;
 
-// The masked lights' sum for one control word into `sum` (0-255 per component): each light's colour, attenuated
-// (specular or spot, by the control word) and turned by the normal (none, signed or clamped).
-void addLights(const GxCommandProcessor& gpu, std::uint32_t ctrl, const float view[3], const float normal[3], float sum[4]) {
-    const unsigned mask = XF_COLOR0CNTRL_F_GET_LIGHT0(ctrl) | XF_COLOR0CNTRL_F_GET_LIGHT1(ctrl) << 1 | XF_COLOR0CNTRL_F_GET_LIGHT2(ctrl) << 2 |
-                          XF_COLOR0CNTRL_F_GET_LIGHT3(ctrl) << 3 | XF_COLOR0CNTRL_F_GET_LIGHT4(ctrl) << 4 | XF_COLOR0CNTRL_F_GET_LIGHT5(ctrl) << 5 |
-                          XF_COLOR0CNTRL_F_GET_LIGHT6(ctrl) << 6 | XF_COLOR0CNTRL_F_GET_LIGHT7(ctrl) << 7;
-    const unsigned diffuse = XF_COLOR0CNTRL_F_GET_DIFFUSEATTEN(ctrl);  // GXDiffuseFn: none, sign, clamp
-    const bool attenuated = XF_COLOR0CNTRL_F_GET_ATTENENABLE(ctrl), spot = XF_COLOR0CNTRL_F_GET_ATTENSELECT(ctrl);
-    for (int n = 0; n < 8; ++n) {
-        if (!(mask >> n & 1)) continue;
-        const std::uint32_t* l = gpu.xf + XfLights + 16 * n;  // three reserved words, colour, A0-A2, K0-K2, position, direction
-        const float cosine[3] = {asFloat(l[4]), asFloat(l[5]), asFloat(l[6])};
-        float distance[3] = {asFloat(l[7]), asFloat(l[8]), asFloat(l[9])};
-        const float direction[3] = {asFloat(l[13]), asFloat(l[14]), asFloat(l[15])};
-        float toLight[3] = {asFloat(l[10]) - view[0], asFloat(l[11]) - view[1], asFloat(l[12]) - view[2]};
-        float scale = 1;
-        if (attenuated && spot) {
-            const float d2 = dot(toLight, toLight), d = std::sqrt(d2);
-            if (d > 0) for (float& k : toLight) k /= d;
-            const float angle = std::max(0.0f, dot(toLight, direction));
-            scale = safeDivide(std::max(0.0f, cosine[0] + cosine[1] * angle + cosine[2] * angle * angle),
-                               distance[0] + distance[1] * d + distance[2] * d2);
-        } else if (attenuated) {
-            // Specular: the light's direction holds the half-angle, and distance attenuation runs on the same angle.
-            normalize(toLight);
-            const float angle = dot(toLight, normal) >= 0 ? std::max(0.0f, dot(direction, normal)) : 0.0f;
-            if (diffuse) normalize(distance);
-            scale = safeDivide(std::max(0.0f, cosine[0] + cosine[1] * angle + cosine[2] * angle * angle),
-                               distance[0] + distance[1] * angle + distance[2] * angle * angle);
-        } else if (!normalize(toLight)) {
-            std::memcpy(toLight, normal, sizeof toLight);
-        }
-        float turn = 1;
-        if (diffuse) turn = diffuse == 2 ? std::max(0.0f, dot(toLight, normal)) : dot(toLight, normal);
-        const std::uint32_t color = l[3];
-        for (int c = 0; c < 4; ++c) sum[c] += static_cast<float>(color >> (24 - 8 * c) & 0xFF) * scale * turn;
+// One light's contribution, scaled by its attenuation (specular or spot, by the control word) and turned by the normal
+// (none, signed or clamped), into the components [first, last) of `sum` (0-255 each).
+void addLight(const GxLighting::Light& l, const GxLighting::Part& part, const float view[3], const float normal[3], float sum[4], int first, int last,
+              float* sumAlpha) {
+    float distance[3] = {l.distance[0], l.distance[1], l.distance[2]};
+    float toLight[3] = {l.position[0] - view[0], l.position[1] - view[1], l.position[2] - view[2]};
+    float scale = 1;
+    if (part.attenuated && part.spot) {
+        const float d2 = dot(toLight, toLight), d = std::sqrt(d2);
+        if (d > 0) for (float& k : toLight) k /= d;
+        const float angle = std::max(0.0f, dot(toLight, l.direction));
+        scale = safeDivide(std::max(0.0f, l.cosine[0] + l.cosine[1] * angle + l.cosine[2] * angle * angle),
+                           distance[0] + distance[1] * d + distance[2] * d2);
+    } else if (part.attenuated) {
+        // Specular: the light's direction holds the half-angle, and distance attenuation runs on the same angle.
+        normalize(toLight);
+        const float angle = dot(toLight, normal) >= 0 ? std::max(0.0f, dot(l.direction, normal)) : 0.0f;
+        if (part.diffuse) normalize(distance);
+        scale = safeDivide(std::max(0.0f, l.cosine[0] + l.cosine[1] * angle + l.cosine[2] * angle * angle),
+                           distance[0] + distance[1] * angle + distance[2] * angle * angle);
+    } else if (!normalize(toLight)) {
+        std::memcpy(toLight, normal, sizeof toLight);
     }
+    float turn = 1;
+    if (part.diffuse) turn = part.diffuse == 2 ? std::max(0.0f, dot(toLight, normal)) : dot(toLight, normal);
+    for (int c = first; c < last; ++c) sum[c] += l.color[c] * scale * turn;
+    if (sumAlpha) *sumAlpha += l.color[3] * scale * turn;
 }
 } // namespace
 
-void gxLitChannel(const GxCommandProcessor& gpu, const float view[3], const float normal[3], const std::uint8_t vertex[4], std::uint8_t out[4]) {
-    const std::uint32_t ctrl[2] = {gpu.xf[XfColor0Ctrl], gpu.xf[XfAlpha0Ctrl]}, material = gpu.xf[XfMaterial0], ambient = gpu.xf[XfAmbient0];
-    for (int part = 0; part < 2; ++part) {
-        // Part 0 is the colour (RGB), part 1 the alpha; each has its own control word.
-        const int first = part ? 3 : 0, last = part ? 4 : 3;
-        std::uint8_t mat[4], amb[4];
-        for (int c = 0; c < 4; ++c) {
-            mat[c] = XF_COLOR0CNTRL_F_GET_MATERIAL_SRC(ctrl[part]) ? vertex[c] : static_cast<std::uint8_t>(material >> (24 - 8 * c));
-            amb[c] = XF_COLOR0CNTRL_F_GET_AMBIENT_SRC(ctrl[part]) ? vertex[c] : static_cast<std::uint8_t>(ambient >> (24 - 8 * c));
-        }
-        if (!XF_COLOR0CNTRL_F_GET_LIGHTFUNC(ctrl[part])) {
-            for (int c = first; c < last; ++c) out[c] = mat[c];
-            continue;
-        }
-        float sum[4];
-        for (int c = 0; c < 4; ++c) sum[c] = amb[c];
-        addLights(gpu, ctrl[part], view, normal, sum);
-        for (int c = first; c < last; ++c) {
-            const int light = std::clamp(static_cast<int>(sum[c]), 0, 255);
-            out[c] = static_cast<std::uint8_t>(mat[c] * (light + (light >> 7)) >> 8);
+void GxLighting::read(const GxCommandProcessor& gpu) {
+    const std::uint32_t ctrl[2] = {gpu.xf[XfColor0Ctrl], gpu.xf[XfAlpha0Ctrl]}, materialWord = gpu.xf[XfMaterial0], ambientWord = gpu.xf[XfAmbient0];
+    for (int c = 0; c < 4; ++c)
+        material[c] = static_cast<std::uint8_t>(materialWord >> (24 - 8 * c)), ambient[c] = static_cast<std::uint8_t>(ambientWord >> (24 - 8 * c));
+    std::uint8_t used = 0;
+    for (int i = 0; i < 2; ++i) {
+        Part& part = parts[i];
+        const std::uint32_t w = ctrl[i];
+        part.lit = XF_COLOR0CNTRL_F_GET_LIGHTFUNC(w);
+        part.materialFromVertex = XF_COLOR0CNTRL_F_GET_MATERIAL_SRC(w), part.ambientFromVertex = XF_COLOR0CNTRL_F_GET_AMBIENT_SRC(w);
+        part.mask = static_cast<std::uint8_t>(XF_COLOR0CNTRL_F_GET_LIGHT0(w) | XF_COLOR0CNTRL_F_GET_LIGHT1(w) << 1 | XF_COLOR0CNTRL_F_GET_LIGHT2(w) << 2 |
+                                              XF_COLOR0CNTRL_F_GET_LIGHT3(w) << 3 | XF_COLOR0CNTRL_F_GET_LIGHT4(w) << 4 | XF_COLOR0CNTRL_F_GET_LIGHT5(w) << 5 |
+                                              XF_COLOR0CNTRL_F_GET_LIGHT6(w) << 6 | XF_COLOR0CNTRL_F_GET_LIGHT7(w) << 7);
+        part.diffuse = static_cast<std::uint8_t>(XF_COLOR0CNTRL_F_GET_DIFFUSEATTEN(w));  // GXDiffuseFn: none, sign, clamp
+        part.attenuated = XF_COLOR0CNTRL_F_GET_ATTENENABLE(w), part.spot = XF_COLOR0CNTRL_F_GET_ATTENSELECT(w);
+        if (part.lit) used |= part.mask;
+    }
+    shared = parts[0].lit && parts[1].lit && parts[0].mask == parts[1].mask && parts[0].diffuse == parts[1].diffuse &&
+             parts[0].attenuated == parts[1].attenuated && parts[0].spot == parts[1].spot;
+    for (int n = 0; n < 8; ++n) {
+        if (!(used >> n & 1)) continue;
+        const std::uint32_t* w = gpu.xf + XfLights + 16 * n;  // three reserved words, colour, A0-A2, K0-K2, position, direction
+        Light& l = lights[n];
+        for (int c = 0; c < 4; ++c) l.color[c] = static_cast<float>(w[3] >> (24 - 8 * c) & 0xFF);
+        for (int k = 0; k < 3; ++k)
+            l.cosine[k] = asFloat(w[4 + k]), l.distance[k] = asFloat(w[7 + k]), l.position[k] = asFloat(w[10 + k]), l.direction[k] = asFloat(w[13 + k]);
+    }
+}
+
+void GxLighting::apply(const float view[3], const float normal[3], const std::uint8_t vertex[4], std::uint8_t out[4]) const {
+    float sums[2][4];
+    for (int i = 0; i < 2; ++i)
+        for (int c = 0; c < 4; ++c) sums[i][c] = parts[i].ambientFromVertex ? vertex[c] : ambient[c];
+    if (shared) {
+        for (int n = 0; n < 8; ++n)
+            if (parts[0].mask >> n & 1) addLight(lights[n], parts[0], view, normal, sums[0], 0, 3, &sums[1][3]);
+    } else {
+        for (int i = 0; i < 2; ++i)
+            if (parts[i].lit)
+                for (int n = 0; n < 8; ++n)
+                    if (parts[i].mask >> n & 1) addLight(lights[n], parts[i], view, normal, sums[i], i ? 3 : 0, i ? 4 : 3, nullptr);
+    }
+    for (int i = 0; i < 2; ++i) {
+        // Part 0 is the colour (RGB), part 1 the alpha.
+        const Part& part = parts[i];
+        for (int c = i ? 3 : 0; c < (i ? 4 : 3); ++c) {
+            const std::uint8_t mat = part.materialFromVertex ? vertex[c] : material[c];
+            if (!part.lit) {
+                out[c] = mat;
+                continue;
+            }
+            const int light = std::clamp(static_cast<int>(sums[i][c]), 0, 255);
+            out[c] = static_cast<std::uint8_t>(mat * (light + (light >> 7)) >> 8);
         }
     }
+}
+
+void gxLitChannel(const GxCommandProcessor& gpu, const float view[3], const float normal[3], const std::uint8_t vertex[4], std::uint8_t out[4]) {
+    GxLighting lighting;
+    lighting.read(gpu);
+    lighting.apply(view, normal, vertex, out);
 }
 
 namespace {
@@ -372,6 +401,7 @@ bool GxVertexPipeline::prepare(const GxCommandProcessor& gpu, const GxDrawState&
         // A texcoord source, or the AB11 form, gives a third input of one; with q fixed at one there's nothing to divide.
         t.planar = t.folded && (t.source >= 5 || !t.threeInputs) && t.fold[2][0] == 0 && t.fold[2][1] == 0 && t.fold[2][2] == 0 && t.fold[2][3] == 1;
     }
+    if (channel_ && lightingXf_ != gpu.xfChanges) lighting_.read(gpu), lightingXf_ = gpu.xfChanges;
     if (gpu.xfChanges == xfSeen_ && frame == frameSeen_) return true;
     xfSeen_ = gpu.xfChanges, clipReady_ = 0;
     // Most XF loads are matrices; the projection and viewport change far less often.
@@ -502,7 +532,7 @@ std::size_t GxVertexPipeline::run(const std::uint8_t* data, std::uint16_t count,
                                 asFloat(gpu.xf[base + r * 3 + 2]) * v.normal[2];
                 normalize(normal);
             }
-            gxLitChannel(gpu, view, normal, v.color[0], d.color);
+            lighting_.apply(view, normal, v.color[0], d.color);
         }
         for (unsigned u = 0; u < units_; ++u) texgen(texgens_[u], v, d.texcoord[u]);
     }

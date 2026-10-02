@@ -64,6 +64,25 @@ struct GxDraw : GxDrawState {
     std::vector<GxDrawVertex> triangles;
 };
 
+// GX's lighting for colour channel 0 as XF's control words, material and ambient registers and lights hold it, decoded
+// once so each vertex only does the arithmetic (Dolphin's software renderer is the reference for it). apply() takes a
+// vertex's view-space position, unit normal and colour 0.
+struct GxLighting {
+    struct Part {
+        bool lit = false, materialFromVertex = false, ambientFromVertex = false, attenuated = false, spot = false;
+        std::uint8_t diffuse = 0, mask = 0;
+    };
+    struct Light {
+        float color[4], cosine[3], distance[3], position[3], direction[3];
+    };
+    Part parts[2];  // colour, alpha
+    bool shared = false;  // both lit by the same lights the same way: each light's attenuation worked out once
+    std::uint8_t material[4] = {}, ambient[4] = {};
+    Light lights[8] = {};
+    void read(const GxCommandProcessor& gpu);
+    void apply(const float view[3], const float normal[3], const std::uint8_t vertex[4], std::uint8_t out[4]) const;
+};
+
 // Turns primitives into vertices for the PICA, transformed through XF on the CPU, and the triangles that survive GX's
 // culling as indices. What it learns from the processor (vertex layouts, each matrix slot's whole transform) it keeps
 // until the matching change count moves.
@@ -110,11 +129,11 @@ private:
     double toClip_[4][4] = {};
     float clip_[64][16] = {}, clipScratch_[16] = {};
     std::uint64_t clipReady_ = 0;
+    GxLighting lighting_;
+    std::uint32_t lightingXf_ = ~0u;
 };
 
-// GX's lighting for colour channel 0 at a vertex: `view` its position and `normal` its unit normal in view space, `vertex`
-// its colour 0. The material and ambient come from registers or the vertex, the lights from XF, as the channel's control
-// words say; Dolphin's software renderer is the reference for the arithmetic.
+// GX's lighting for colour channel 0 at one vertex, straight from the processor's state (GxLighting, read and applied).
 void gxLitChannel(const GxCommandProcessor& gpu, const float view[3], const float normal[3], const std::uint8_t vertex[4], std::uint8_t out[4]);
 
 // The state and one primitive's triangles at once (a fresh pipeline each call).
