@@ -94,6 +94,8 @@ public:
     // from `first`: how many indices that wrote, at most maxIndices(count).
     std::size_t run(const std::uint8_t* data, std::uint16_t count, GxDrawVertex* vertices, std::uint16_t first, std::uint16_t* indices);
     static constexpr std::size_t maxIndices(std::size_t count) { return 3 * count; }
+    // The state passed to prepare was read again: the next prepare reads everything.
+    void stateChanged() { prepared_ = false; }
     const char* unsupported = nullptr;
 
 private:
@@ -114,6 +116,11 @@ private:
     void texgen(const TexGen& t, const GxVertex& v, float st[2]) const;
     float matrix(std::uint32_t row, int column) const;
 
+    // What the last prepare saw: a primitive with nothing changed since skips it (most of a model's do).
+    bool prepared_ = false;
+    std::uint8_t preparedKind_ = 0, preparedFormat_ = 0;
+    std::uint32_t preparedBp_ = 0, preparedXf_ = 0, preparedCp_ = 0;
+    GxFrame preparedFrame_;
     const GxCommandProcessor* gpu_ = nullptr;
     const GxDrawState* state_ = nullptr;
     const GxVertexLayout* layout_ = nullptr;

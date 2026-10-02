@@ -347,6 +347,10 @@ void readGxDrawState(const GxCommandProcessor& gpu, GxDrawState& out) {
 float GxVertexPipeline::matrix(std::uint32_t row, int column) const { return asFloat(gpu_->xf[(row * 4 + column) & 0xFFF]); }
 
 bool GxVertexPipeline::prepare(const GxCommandProcessor& gpu, const GxDrawState& state, const GxFrame& frame, std::uint8_t kind, std::uint8_t format) {
+    if (prepared_ && &gpu == gpu_ && &state == state_ && kind == preparedKind_ && format == preparedFormat_ && gpu.bpChanges == preparedBp_ &&
+        gpu.xfChanges == preparedXf_ && gpu.cpChanges == preparedCp_ && frame == preparedFrame_)
+        return true;
+    prepared_ = false;
     gpu_ = &gpu, state_ = &state, kind_ = kind;
     unsupported = state.unsupported;
     if (kind >= 0xA8) unsupported = "lines and points";
@@ -402,6 +406,8 @@ bool GxVertexPipeline::prepare(const GxCommandProcessor& gpu, const GxDrawState&
         t.planar = t.folded && (t.source >= 5 || !t.threeInputs) && t.fold[2][0] == 0 && t.fold[2][1] == 0 && t.fold[2][2] == 0 && t.fold[2][3] == 1;
     }
     if (channel_ && lightingXf_ != gpu.xfChanges) lighting_.read(gpu), lightingXf_ = gpu.xfChanges;
+    prepared_ = true, preparedKind_ = kind, preparedFormat_ = format, preparedFrame_ = frame;
+    preparedBp_ = gpu.bpChanges, preparedXf_ = gpu.xfChanges, preparedCp_ = gpu.cpChanges;
     if (gpu.xfChanges == xfSeen_ && frame == frameSeen_) return true;
     xfSeen_ = gpu.xfChanges, clipReady_ = 0;
     // Most XF loads are matrices; the projection and viewport change far less often.

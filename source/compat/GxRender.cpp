@@ -277,6 +277,7 @@ struct Renderer {
     void buildState(const GxCommandProcessor& gpu) {
         flushBatch();
         readGxDrawState(gpu, state);
+        pipeline.stateChanged();
         for (u32 a = 0; a < 0x100; ++a)
             if (gpu.bp[a] != bpAtBuild[a] && GxCommandProcessor::drawsRead(a)) ++perf.changed[a];
         std::memcpy(bpAtBuild, gpu.bp, sizeof bpAtBuild);
