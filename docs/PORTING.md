@@ -598,6 +598,11 @@ CPU's encoding of the same pixels (the log says by how much, and that a mirrored
 more). Not reproduced: the EFB pixel formats' reduced precision, and filters with more than three taps (those copies
 stay the CPU's). Inside a frame citro3d's "sync" transfers only queue, so `readEfb` (CPU copies, `GXPeekZ`/`ARGB`)
 ends the frame without showing it, reads, and begins again: on hardware the old readback ran before the GPU had drawn.
+The Star Festival's first frames then showed the per-primitive costs: `compileTev` ran for every primitive (46% of the
+3DS's CPU after Play This File), so `buildGxDraw` keeps each program by the fields it reads (stage count and stages,
+TEV and konst colours, swap tables, each stage's texture), and the ETC1 encoder for CMPR textures fits one split (the one
+whose halves' averages fit the block better) in one mode (differential when the halves allow) instead of searching all
+four.
 
 **More byte-order traps.** Data the GPU reads must hold the Wii's bytes even when the source wrote it as wider
 integers: `MainLoopFramework`'s `clearZTexData` (Z24X8 texels as `u32`s) cleared every frame to near on ARM, and every
@@ -634,6 +639,32 @@ holes too (the toolchain leaves it weak and undefined), so each executable now l
 turns native at mount like the BTI, KCL and JPC files: a count, a control word the game leaves null, then 0x20-byte
 sounds. The records sit at offset 8 only where pointers are 32-bit, so the 64-bit host audit reads them there by
 hand. All 394 disc files audit clean.
+
+**The resident heap is packed exactly.** `GameSystemStationedArchiveLoader` loads the archives every scene shares
+(fonts, effects, messages, the Toads', Lumas' and observatory's models) into the stationed GDDR heap, then
+`MR::adjustHeapSize` shrinks that heap to what they use: 20,228,736 of its 20,971,520 bytes, nothing to spare. The Wii
+never allocated there again, but a BCSV table the port repacks gets its copy "beside" its original, so the first Toad
+of the Star Festival asked that full heap for 2,023 bytes. A copy now goes beside its original only when that heap has
+room, otherwise into the free store (resident data is never freed, so neither is its copy). A heap that runs dry now
+panics with a census of its used blocks by size, naming each mounted archive by its root folder.
+
+**Movies.** The opening, the endings and the final battle are THP movies (`MovieData`, 640x368 at 59.94 fps, stereo
+32 kHz): frames of baseline JPEG, 4:2:0, whose scan isn't byte-stuffed (an 0xFF in it is data). The SDK's decoder is
+PowerPC assembly over the locked cache, so the port has its own, `smg::decodeThpVideo` (`source/core/Thp.cpp`:
+libjpeg's accurate integer IDCT, planes out). `tools/ThpAudit.cpp` decodes all 61,137 frames of the nine movies, and
+`tools/thp-audit.py` sets sampled frames against libjpeg's own decoding: their luma is identical. `THPVideoDecode`,
+`THPInit` and the locked cache's `LCEnable`/`LCDisable` (the port's decoder needs no scratchpad) are in
+`source/compat/Thp.cpp`; the planes go into the buffers the game hands over, which only the port's
+`THPGXYuv2RgbDraw` reads. The Wii turned YUV to RGB in four TEV stages whose signed sums the PICA's combiner clamps
+away, so the renderer turns each decoded frame into one RGB565 texture (full-range BT.601, which the Wii's TEV
+constants work out to exactly) and draws it where the game's quad goes. The game's `THPDraw.c` and the SDK's
+`THPAudio.c` build as they are otherwise; the player's headers and each frame's size words, and each audio record's
+header, turn native as they arrive.
+
+**Camera animations.** An "ANDO" file of kind CANM or CKAN (`CameraAnim::loadBin`) is a 0x20-byte header, eight
+components' count, offset and (keyed) type words, then a byte count and the values, all big-endian. They turn native at
+mount (`.canm`, `smg::nativeCameraAnimation`); before that, the Star Festival's opening camera crashed reading them.
+All 190 on the disc (101 in stage archives, 89 in object archives) pass the converter's bounds.
 
 ## The native scene boundary
 
