@@ -2112,6 +2112,24 @@ adapt("src/RVL_SDK/gx/GXInit.c", "RVL_SDK/gx/GXInit.c", [
      "    __piReg = smgGXRegisters(0);\n    __cpReg = smgGXRegisters(1);\n    __peReg = smgGXRegisters(2);\n    __memReg = smgGXRegisters(3);", 1),
 ])
 adapt("src/RVL_SDK/gx/GXDisplayList.c", "RVL_SDK/gx/GXDisplayList.c", [('#include "revolution/gx.h"\n', '#include "revolution/gx.h"\n#include <smg/GxPrivate.h>\n', 1)])
+# The flush primitive is a strip of one repeated vertex, for the Wii GPU's vertex cache after matrix loads: it covers no
+# pixels and the port's GPU path has no such cache, so none is sent (JPA would send one before every particle).
+adapt("src/RVL_SDK/gx/GXGeometry.c", "RVL_SDK/gx/GXGeometry.c", [
+    ("""void __GXSendFlushPrim(void) {
+    u32 i, numD;
+    numD = (u32)(gx->vNum * gx->vLim);
+    GX_WRITE_U8((GX_VTXFMT0 | GX_TRIANGLESTRIP));
+    GX_WRITE_U16(gx->vNum);
+
+    for (i = 0; i < numD; i += 4) {
+        GX_WRITE_U32(0);
+    }
+
+    gx->bpSentNot = GX_TRUE;
+}""", """void __GXSendFlushPrim(void) {
+    gx->bpSentNot = GX_TRUE;
+}""", 1),
+])
 # GXPeekARGB and GXPeekZ read the EFB through the Wii's memory window onto it; reading the port's render target back
 # is still to come, so each stops by name.
 # GXFlush pushes the write-gather pipe out to the GPU: the port hands the thread's write buffer to its command processor.
