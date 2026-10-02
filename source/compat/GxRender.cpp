@@ -244,9 +244,10 @@ struct Renderer {
 
     void begin() {
         if (!ready) init();
-        // Waiting here for the GPU's last frame and the vblank is idle time inside the draw phase: timed apart.
+        // Only the GPU's last frame is waited for: the game paces itself by the retrace (waitForRetrace), so a vblank
+        // wait here (C3D_FRAME_SYNCDRAW) cost a frame that ran long half a refresh on average. Timed apart.
         const u64 start = svcGetSystemTick();
-        C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
+        C3D_FrameBegin(0);
         perf.syncTicks += svcGetSystemTick() - start;
         C3D_FrameDrawOn(target);
         if (clearPending) C3D_RenderTargetClear(target, C3D_CLEAR_ALL, clearColor, clearDepth);
@@ -961,7 +962,7 @@ struct Renderer {
         const double n = perf.frames;
         const double phase = perf.phaseFrames ? 1000.0 / SYSCLOCK_ARM11 / perf.phaseFrames : 0;
         // t= is the emulated clock (drives time their actions by it when Azahar runs faster than real time).
-        std::fprintf(stderr, "gx perf: t=%.0f, %lu frames, %.1f ms/frame: draw %.1f (%.1f of it waiting for the GPU and vblank), logic %.1f, "
+        std::fprintf(stderr, "gx perf: t=%.0f, %lu frames, %.1f ms/frame: draw %.1f (%.1f of it waiting for the GPU), logic %.1f, "
                      "animation %.1f, retrace wait %.1f; per frame %.0f primitives (%.0f same state, %.0f with only C0 new), %.0f vertices, "
                      "%.0f triangles, %.0f draws\n",
                      double(now) / SYSCLOCK_ARM11, static_cast<unsigned long>(perf.frames), ms / n, perf.phaseTicks[0] * phase, perf.syncTicks * 1000.0 / SYSCLOCK_ARM11 / n,
