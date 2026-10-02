@@ -33,6 +33,8 @@ extern "C" unsigned smgFifoWrites;       // source/compat/GxFifo.cpp
 extern "C" void smgGXFifoFlush();
 extern "C" int smgDevGxDump();           // source/compat/Kpad.cpp
 extern "C" int smgDevGxNull();
+extern "C" int smgDevGxTiming();
+extern "C" int smgDevGxCheck();
 extern "C" void (*smgGpuMemoryChanged)(const void* start, u32 size);  // source/compat/Os.cpp
 
 namespace smg {
@@ -169,7 +171,13 @@ struct Renderer {
         u32 frames = 0, primitives = 0, vertices = 0, triangles = 0, draws = 0, sameState = 0, color0Rides = 0;
         u32 meshDraws = 0, meshTriangles = 0, meshesMade = 0;
         u32 meshInvalidated = 0, meshOverflows = 0, meshBudgetDrops = 0, meshMismatches = 0, flushesQueued = 0;
+        u64 timed[6] = {};  // dev.gx_timing: CPU-path primitives (immediate, in lists), display lists (mesh draws), texture copies, movie, frame ends
+        u64 cpuCopyTicks = 0;  // of the texture copies, those read back and encoded on the CPU
+        u32 cpuCopies = 0, gpuCopies = 0;
+        u32 meshesChecked = 0, meshesDiffering = 0;  // dev.gx_check
+        u32 listVertices = 0;
         u32 refused[GxVertexPipeline::MeshRefusals] = {}, refusedOpcode[0x100] = {};
+        u32 refusedVertices[GxVertexPipeline::MeshRefusals] = {};  // drawn on the CPU path inside lists refused for each reason
         u32 changed[0x100] = {};  // per BP register: state rebuilds it took part in
         u32 compilesBefore = gxTevCompiles(), moviesBefore = smgMovieDecodes(), listsBefore = 0, listBytesBefore = 0, writesBefore = smgFifoWrites;
     } perf;
@@ -480,6 +488,24 @@ struct Renderer {
         return lo[0] <= 1 && lo[1] <= 1 && hi[0] >= frame.width - 1 && hi[1] >= frame.height - 1;
     }
 
+    // A mesh draw for the dump: its size and the state that draws it.
+    void dumpMesh(const CachedMesh& mesh, const GxMeshUniforms& u) {
+        const ModelMaterial& m = state.material;
+        std::string stages;
+        for (int s = 0; s < m.tevStageCount; ++s) {
+            const TevStage& t = m.stages[s];
+            char text[96];
+            std::snprintf(text, sizeof text, " [%x%x%x%x op%u %x%x%x%x op%u map%d ch%u]", t.colorIn[0], t.colorIn[1], t.colorIn[2], t.colorIn[3], t.colorOp,
+                          t.alphaIn[0], t.alphaIn[1], t.alphaIn[2], t.alphaIn[3], t.alphaOp, t.texMap == 0xFF ? -1 : t.texMap, t.channel);
+            stages += text;
+        }
+        std::fprintf(stderr, "gx dump: draw %u (mesh): %u tris in %zu groups, lit %d (%u entries, rgb %d alpha %d), cull %u; blend %u %u/%u, colour %d "
+                     "alpha %d, dst alpha %d:%u, z %d/%u/%d, alpha test %u%s%u; tev%s\n", dumpIndex++, mesh.indexCount / 3, mesh.groups.size(), u.lit,
+                     u.lights, u.rgbLit, u.alphaLit, u.reject, m.blend.type, m.blend.source, m.blend.destination, state.colorUpdate, state.alphaUpdate,
+                     state.dstAlphaEnable, state.dstAlpha, m.depth.enable, m.depth.function, m.depth.update, m.alphaTest.compare0,
+                     m.alphaTest.op ? "|" : "&", m.alphaTest.compare1, stages.c_str());
+    }
+
     static constexpr std::size_t MeshBudget = 12u << 20;
 
     void dropMesh(std::unordered_map<std::uint64_t, CachedMesh>::iterator it) {
@@ -528,14 +554,22 @@ struct Renderer {
     // GX_CallDisplayList: a list of primitives under a state the GPU path covers is drawn from its mesh (made the first
     // time); anything else is read by the command processor as before.
     bool displayList(const GxCommandProcessor& gpu, std::uint32_t address, std::uint32_t size) {
+        const unsigned why = displayListMesh(gpu, address, size);
+        listRefusal = why;
+        return !why;
+    }
+    unsigned listRefusal = 0;
+
+    // 0 when the list was drawn from a mesh, else why not.
+    unsigned displayListMesh(const GxCommandProcessor& gpu, std::uint32_t address, std::uint32_t size) {
         const std::uint8_t* list = gpu.memoryFunction()(address);
-        if (!list || size < 3) return false;
-        if (list[0] < 0x80 || list[0] >= 0xA8) return ++perf.refusedOpcode[list[0]], ++perf.refused[GxVertexPipeline::MeshCommand], false;
+        if (!list || size < 3) return GxVertexPipeline::MeshUnsupported;
+        if (list[0] < 0x80 || list[0] >= 0xA8) return ++perf.refusedOpcode[list[0]], ++perf.refused[GxVertexPipeline::MeshCommand], GxVertexPipeline::MeshCommand;
         applyChangedMemory();
         ensureState(gpu);
-        if (!pipeline.prepare(gpu, state, frame, 0x90, 0)) return ++perf.refused[GxVertexPipeline::MeshUnsupported], false;
-        if (scissorEmpty) return false;
-        if (const unsigned why = pipeline.meshEligible()) return ++perf.refused[why], false;
+        if (!pipeline.prepare(gpu, state, frame, 0x90, 0)) return ++perf.refused[GxVertexPipeline::MeshUnsupported], GxVertexPipeline::MeshUnsupported;
+        if (scissorEmpty) return GxVertexPipeline::MeshEmpty;
+        if (const unsigned why = pipeline.meshEligible()) return ++perf.refused[why], why;
         // The key: the list, its first and last words (another list at a freed address differs), where the colour comes
         // from and the texgens' sources. The CP registers its vertices were read under are checked apart, only those it
         // uses: other formats' tables and the matrix arrays (12-15) change every frame without touching it.
@@ -553,12 +587,14 @@ struct Renderer {
         if (stale) dropMesh(found), found = meshes.end(), ++perf.meshMismatches;
         if (found == meshes.end()) {
             GxMesh mesh;
-            if (const unsigned why = pipeline.buildMesh(list, size, mesh)) return ++perf.refused[why], false;
+            if (const unsigned why = pipeline.buildMesh(list, size, mesh)) return ++perf.refused[why], why;
+            static const bool checking = smgDevGxCheck();
+            if (checking) checkMesh(gpu, list, size, mesh, address);
             const std::size_t vertexBytes = mesh.vertices.size() * sizeof(GxMeshVertex), bytes = vertexBytes + mesh.indices.size() * sizeof(std::uint16_t);
             if (meshBytes + bytes > MeshBudget) dropAllMeshes(), ++perf.meshBudgetDrops;
             void* block = linearAlloc(bytes);
             if (!block && !meshes.empty()) dropAllMeshes(), block = linearAlloc(bytes);
-            if (!block) return false;
+            if (!block) return GxVertexPipeline::MeshTooLarge;
             std::memcpy(block, mesh.vertices.data(), vertexBytes);
             std::memcpy(static_cast<std::uint8_t*>(block) + vertexBytes, mesh.indices.data(), mesh.indices.size() * sizeof(std::uint16_t));
             GSPGPU_FlushDataCache(block, bytes);
@@ -593,7 +629,89 @@ struct Renderer {
             found = meshes.find(hash);
         }
         drawMesh(found->second);
-        return true;
+        return GxVertexPipeline::MeshOk;
+    }
+
+    // dev.gx_check: a new mesh against the CPU path, vertex by vertex, under the state it is first drawn with (each
+    // group's uniforms through gxMeshModel); a mesh's first difference is logged.
+    void checkMesh(const GxCommandProcessor& gpu, const std::uint8_t* list, std::uint32_t size, const GxMesh& mesh, std::uint32_t address) {
+        ++perf.meshesChecked;
+        std::vector<GxMeshUniforms> uniforms(mesh.groups.size());
+        pipeline.meshUniforms(mesh.slots, mesh.groups[0], uniforms[0]);
+        for (std::size_t g = 1; g < mesh.groups.size(); ++g) uniforms[g] = uniforms[0], pipeline.meshSlotUniforms(mesh.groups[g], uniforms[g]);
+        std::vector<u32> group(mesh.vertices.size(), 0);
+        for (u32 g = 0; g < mesh.groups.size(); ++g)
+            for (u32 i = mesh.groups[g].firstIndex; i < mesh.groups[g].firstIndex + mesh.groups[g].indexCount; ++i) group[mesh.indices[i]] = g;
+        std::vector<GxDrawVertex> cpu, drawn;
+        std::vector<std::uint16_t> indices;
+        std::vector<u32> corners;  // the list's triangles, as buildMesh makes them, by list vertex
+        for (u32 at = 0; at < size;) {
+            const std::uint8_t op = list[at];
+            if (!op) {
+                ++at;
+                continue;
+            }
+            const std::uint16_t count = static_cast<std::uint16_t>(list[at + 1] << 8 | list[at + 2]);
+            if (!pipeline.prepare(gpu, state, frame, op & 0xF8, op & 7)) return void(std::fprintf(stderr, "gx check: the CPU path refuses a mesh's primitive\n"));
+            drawn.resize(count), indices.resize(GxVertexPipeline::maxIndices(count));
+            pipeline.run(list + at + 3, count, drawn.data(), 0, indices.data());
+            const u32 first = u32(cpu.size());
+            const auto triangle = [&](u32 a, u32 b, u32 c) { corners.insert(corners.end(), {first + a, first + b, first + c}); };
+            switch (op & 0xF8) {
+            case 0x80: case 0x88:
+                for (u32 i = 0; i + 3 < count; i += 4) triangle(i, i + 1, i + 2), triangle(i, i + 2, i + 3);
+                break;
+            case 0x90:
+                for (u32 i = 0; i + 2 < count; i += 3) triangle(i, i + 1, i + 2);
+                break;
+            case 0x98:
+                for (u32 i = 0; i + 2 < count; ++i) i & 1 ? triangle(i + 1, i, i + 2) : triangle(i, i + 1, i + 2);
+                break;
+            case 0xA0:
+                for (u32 i = 1; i + 1 < count; ++i) triangle(0, i, i + 1);
+                break;
+            }
+            cpu.insert(cpu.end(), drawn.begin(), drawn.end());
+            at += 3 + u32(count) * gpu.layout(op & 7).size;
+        }
+        bool sameTriangles = corners.size() == mesh.indices.size();
+        for (std::size_t i = 0; sameTriangles && i < corners.size(); ++i) sameTriangles = mesh.indices[i] < mesh.origin.size() && mesh.origin[mesh.indices[i]] == corners[i];
+        u32 drawnIndices = 0;
+        for (const GxMesh::Group& g : mesh.groups) sameTriangles &= g.firstIndex == drawnIndices, drawnIndices += g.indexCount;
+        if (!sameTriangles || drawnIndices != mesh.indices.size()) {
+            ++perf.meshesDiffering;
+            return void(std::fprintf(stderr, "gx check: mesh at 0x%08lx (%zu groups) has triangles other than its list's\n", static_cast<unsigned long>(address),
+                                     mesh.groups.size()));
+        }
+        pipeline.prepare(gpu, state, frame, 0x90, 0);
+        const auto off = [](float got, float want) { return std::fabs(got - want) > 1e-3f * std::max(1.0f, std::fabs(want)); };
+        for (std::size_t j = 0; j < mesh.vertices.size(); ++j) {
+            if (mesh.origin[j] >= cpu.size()) return void(std::fprintf(stderr, "gx check: a mesh vertex from past its list's\n"));
+            const GxDrawVertex& want = cpu[mesh.origin[j]];
+            const GxMeshUniforms& u = uniforms[group[j]];
+            float clip[4], color[4], tex[CombinerProgram::MaxUnits][2];
+            gxMeshModel(u, mesh.vertices[j], clip, color, tex);
+            const char* what = nullptr;
+            for (int r = 0; r < 4 && !what; ++r)
+                if (off(clip[r], want.position[r])) what = "position";
+            for (int c = 0; c < 4 && !what; ++c)
+                if (std::abs(int(std::lround(color[c] * 255)) - int(want.color[c])) > 2) what = "colour";
+            for (unsigned t = 0; t < u.units && !what; ++t)
+                if (off(tex[t][0], want.texcoord[t][0]) || off(tex[t][1], want.texcoord[t][1])) what = "texture coordinates";
+            if (!what) continue;
+            ++perf.meshesDiffering;
+            const GxMesh::Group& in = mesh.groups[group[j]];
+            std::fprintf(stderr, "gx check: mesh at 0x%08lx (%zu vertices, %zu groups, lit %d, %u light entries, %u units, slots 0x%x) vertex %zu "
+                         "(list vertex %lu, group %lu of slots %u %u %u %u, slot row %.0f) differs in %s: position %.3f %.3f %.3f %.3f vs %.3f %.3f "
+                         "%.3f %.3f; colour %.0f %.0f %.0f %.0f vs %u %u %u %u; first texcoords %.3f %.3f vs %.3f %.3f; normal %.3f %.3f %.3f\n",
+                         static_cast<unsigned long>(address), mesh.vertices.size(), mesh.groups.size(), u.lit, u.lights, u.units, mesh.slots, j,
+                         static_cast<unsigned long>(mesh.origin[j]), static_cast<unsigned long>(group[j]), in.slotMap[0], in.slotMap[1], in.slotMap[2],
+                         in.slotMap[3], mesh.vertices[j].slot, what, clip[0], clip[1], clip[2], clip[3], want.position[0], want.position[1],
+                         want.position[2], want.position[3], color[0] * 255, color[1] * 255, color[2] * 255, color[3] * 255, want.color[0], want.color[1],
+                         want.color[2], want.color[3], tex[0][0], tex[0][1], want.texcoord[0][0], want.texcoord[0][1], mesh.vertices[j].normal[0],
+                         mesh.vertices[j].normal[1], mesh.vertices[j].normal[2]);
+            return;
+        }
     }
 
     void drawMesh(const CachedMesh& mesh) {
@@ -603,6 +721,7 @@ struct Renderer {
         applyState();
         GxMeshUniforms u;
         pipeline.meshUniforms(mesh.slots, mesh.groups[0], u);
+        if (dumping) dumpMesh(mesh, u);
         if (u.reject == 3) return;  // GX culls every triangle
         slotUniforms(u);
         C3D_BoolUnifSet(GPU_VERTEX_SHADER, litUniform, u.lit);
@@ -790,6 +909,19 @@ struct Renderer {
             refusals += item;
             perf.refusedOpcode[most - perf.refusedOpcode] = 0;
         }
+        if (perf.timed[0] | perf.timed[1] | perf.timed[2] | perf.timed[3] | perf.timed[4] | perf.timed[5]) {
+            const double ms = 1000.0 / SYSCLOCK_ARM11 / n;
+            std::fprintf(stderr, "gx perf: renderer time per frame: CPU-path primitives %.1f ms immediate + %.1f ms in lists (%.0f vertices), display "
+                         "lists %.1f ms, texture copies %.1f ms (%.1f CPU taking %.1f ms, %.1f GPU), frame end %.1f ms, movie %.1f ms\n", perf.timed[0] * ms,
+                         perf.timed[4] * ms, perf.listVertices / n, perf.timed[1] * ms, perf.timed[2] * ms, perf.cpuCopies / n, perf.cpuCopyTicks * ms, perf.gpuCopies / n,
+                         perf.timed[5] * ms, perf.timed[3] * ms);
+        }
+        std::string listed;
+        for (unsigned why = 0; why < GxVertexPipeline::MeshRefusals; ++why)
+            if (perf.refusedVertices[why]) listed += " " + std::to_string(why) + ":" + std::to_string(unsigned(perf.refusedVertices[why] / n));
+        std::fprintf(stderr, "gx perf: CPU-path vertices in lists refused by reason (per frame):%s\n", listed.c_str());
+        if (perf.meshesChecked) std::fprintf(stderr, "gx perf: meshes checked %lu, differing %lu\n", static_cast<unsigned long>(perf.meshesChecked),
+                                             static_cast<unsigned long>(perf.meshesDiffering));
         std::fprintf(stderr, "gx perf: display lists refused by reason (per frame):%s; meshes invalidated %.1f, overflows %.1f, over budget %.1f, "
                      "key mismatches %.1f, flushes queued %.1f; GX FIFO writes %.0f per frame\n", refusals.c_str(), perf.meshInvalidated / n,
                      perf.meshOverflows / n, perf.meshBudgetDrops / n, perf.meshMismatches / n, perf.flushesQueued / n, (smgFifoWrites - perf.writesBefore) / n);
@@ -841,10 +973,19 @@ struct Renderer {
         if (dumping) flushBatch(), dumpEfbAverage("at the copy");
         if (!inFrame) begin();
         flushBatch();
-        if (!sCopiesStayOnGpu || !gpuCopy(gpu, copy)) {
+        if (sCopiesStayOnGpu && gpuCopy(gpu, copy)) {
+            ++perf.gpuCopies;
+        } else {
+            ++perf.cpuCopies;
+            const u64 start = svcGetSystemTick();
             dropGpuCopy(copy.address);
             const Efb efb = efbView(gpu);
             encodeTextureCopy(copy, efbPixel, &efb, static_cast<std::uint8_t*>(OSPhysicalToCached(copy.address)));
+            perf.cpuCopyTicks += svcGetSystemTick() - start;
+            static unsigned noted = 0;
+            if (dumping || noted++ < 4)
+                std::fprintf(stderr, "gx perf: CPU copy (%u,%u %ux%u) to 0x%08lx format %u took %.2f ms\n", copy.x, copy.y, copy.width, copy.height,
+                             static_cast<unsigned long>(copy.address), copy.format, double(svcGetSystemTick() - start) * 1000.0 / SYSCLOCK_ARM11);
         }
         forget(copy.address, textureCopySize(copy));
         stateValid = applied = false;  // its textures may be gone
@@ -1167,10 +1308,28 @@ Renderer& renderer() {
 }
 } // namespace
 
+namespace {
+// dev.gx_timing: the clock around a renderer entry point, into perf.timed[part].
+struct Timed {
+    explicit Timed(int part) : part_(part), start_(on() ? svcGetSystemTick() : 0) {}
+    ~Timed() {
+        if (start_) renderer().perf.timed[part_] += svcGetSystemTick() - start_;
+    }
+    static bool on() {
+        static const bool timing = smgDevGxTiming();
+        return timing;
+    }
+    int part_;
+    u64 start_;
+};
+} // namespace
+
 void gxRenderPrimitive(const GxCommandProcessor& gpu, std::uint8_t kind, std::uint8_t format, std::uint16_t count, const std::uint8_t* vertices) {
     static const bool null = smgDevGxNull();
     if (null) return;
     const PortMemory memory;
+    const Timed timed(gpu.displayListDepth ? 4 : 0);
+    if (gpu.displayListDepth) renderer().perf.listVertices += count, renderer().perf.refusedVertices[renderer().listRefusal] += count;
     renderer().draw(gpu, kind, format, count, vertices);
 }
 
@@ -1183,6 +1342,7 @@ bool gxRenderDisplayList(const GxCommandProcessor& gpu, std::uint32_t address, s
     static const bool null = smgDevGxNull();
     if (null) return true;
     const PortMemory memory;
+    const Timed timed(1);
     return renderer().displayList(gpu, address, size);
 }
 
@@ -1206,6 +1366,7 @@ void gxRenderMemoryChanged(const void* start, std::uint32_t size) {
 void gxRenderMovieFrame(const std::uint8_t* y, const std::uint8_t* u, const std::uint8_t* v, unsigned width, unsigned height, unsigned generation,
                         int x, int top, int w, int h) {
     const PortMemory memory;
+    const Timed timed(3);
     renderer().movieFrame(y, u, v, width, height, generation, x, top, w, h);
 }
 
@@ -1216,7 +1377,10 @@ std::uint32_t gxRenderPeek(const GxCommandProcessor& gpu, unsigned x, unsigned y
 
 void gxRenderCopy(const GxCommandProcessor& gpu, std::uint32_t command) {
     const PortMemory memory;
-    renderer().copy(gpu, command);
+    {
+        const Timed timed(command >> 14 & 1 ? 5 : 2);
+        renderer().copy(gpu, command);
+    }
     if (command >> 14 & 1) renderer().perfLine();
     // Every 300th frame the game's state is logged (source/compat/GameScene.cpp), from the thread that draws.
     static unsigned frames = 0;

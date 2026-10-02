@@ -93,6 +93,8 @@ public:
     std::uint32_t bpChanges = 0, xfChanges = 0, cpChanges = 0;
     // Display lists called, and their bytes (for the renderer's perf line).
     std::uint32_t displayListCalls = 0, displayListBytes = 0;
+    // How deep the processor is in called display lists (0: the FIFO itself).
+    unsigned displayListDepth = 0;
 
 private:
     // One command from `at` if all of it is there: its length, or 0 to wait for more bytes.

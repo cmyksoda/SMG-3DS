@@ -68,6 +68,8 @@ BOOL smgDevSkipStory() { return input().settings().devSkipStory; }
 // Development only (dev.gx_dump=1): the renderer lists a frame's draws now and then (source/compat/GxRender.cpp).
 BOOL smgDevGxDump() { return input().settings().devGxDump; }
 BOOL smgDevGxNull() { return input().settings().devGxNull; }
+BOOL smgDevGxTiming() { return input().settings().devGxTiming; }
+BOOL smgDevGxCheck() { return input().settings().devGxCheck; }
 
 // In stylus mode the pointer is on the screen only while the stylus touches it (adapted StarPointerGuidance asks).
 BOOL smgPointerIsStylus() { return input().settings().pointer == smg::PointerMode::Stylus; }

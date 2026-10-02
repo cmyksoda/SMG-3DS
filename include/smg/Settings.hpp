@@ -37,6 +37,11 @@ struct Settings {
     // For development only (dev.gx_null=1): the renderer draws nothing, so a frame's time is the game's own (the command
     // processor still runs, raising draw-done and tokens).
     bool devGxNull = false;
+    // For development only (dev.gx_timing=1): the perf line times the renderer's parts (each reading of the clock
+    // costs Azahar 150 cycles, so this slows what it measures a little).
+    bool devGxTiming = false;
+    // For development only (dev.gx_check=1): each new mesh is checked against the CPU path, vertex by vertex.
+    bool devGxCheck = false;
     static constexpr int MinSpeed = 25, MaxSpeed = 300, SpeedStep = 25;
 };
 bool operator==(const Settings& a, const Settings& b);

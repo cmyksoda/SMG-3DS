@@ -292,7 +292,11 @@ std::uint32_t GxCommandProcessor::command(const std::uint8_t* at, std::uint32_t 
     if (opcode == 0x40) {  // call a display list at its physical address
         if (available < 9) return 0;
         ++displayListCalls, displayListBytes += word(at + 5);
-        if (!host_.displayList || !host_.displayList(word(at + 1), word(at + 5))) run(host_.memory(word(at + 1)), word(at + 5));
+        if (!host_.displayList || !host_.displayList(word(at + 1), word(at + 5))) {
+            ++displayListDepth;
+            run(host_.memory(word(at + 1)), word(at + 5));
+            --displayListDepth;
+        }
         return 9;
     }
     if (opcode >= 0x80 && opcode < 0xC0) {  // a primitive: its vertex count, then the vertices in its format

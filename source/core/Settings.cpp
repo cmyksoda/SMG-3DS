@@ -91,7 +91,8 @@ bool operator==(const Settings& a, const Settings& b) {
     return a.pointer == b.pointer && a.bindings == b.bindings && a.motionSpeed == b.motionSpeed &&
            a.stickSpeed == b.stickSpeed && a.invertX == b.invertX && a.invertY == b.invertY &&
            a.previewGalaxy == b.previewGalaxy && a.previewScenario == b.previewScenario && a.devSkipStory == b.devSkipStory &&
-           a.devGxDump == b.devGxDump && a.devGxNull == b.devGxNull;
+           a.devGxDump == b.devGxDump && a.devGxNull == b.devGxNull && a.devGxTiming == b.devGxTiming &&
+           a.devGxCheck == b.devGxCheck;
 }
 
 Settings parseSettings(const std::string& text, Settings base) {
@@ -114,9 +115,13 @@ Settings parseSettings(const std::string& text, Settings base) {
             if (value == "0" || value == "1") (key == "invert_x" ? settings.invertX : settings.invertY) = value == "1";
         } else if (key == "preview") {
             parsePreview(value, settings);
-        } else if (key == "dev.skip_story" || key == "dev.gx_dump" || key == "dev.gx_null") {
+        } else if (key == "dev.skip_story" || key == "dev.gx_dump" || key == "dev.gx_null" || key == "dev.gx_timing" || key == "dev.gx_check") {
             if (value == "0" || value == "1")
-                (key == "dev.gx_dump" ? settings.devGxDump : key == "dev.gx_null" ? settings.devGxNull : settings.devSkipStory) = value == "1";
+                (key == "dev.gx_dump"     ? settings.devGxDump
+                 : key == "dev.gx_null"   ? settings.devGxNull
+                 : key == "dev.gx_timing" ? settings.devGxTiming
+                 : key == "dev.gx_check"  ? settings.devGxCheck
+                                          : settings.devSkipStory) = value == "1";
         } else if (key.rfind("bind.", 0) == 0) {
             const int action = lookup(actionNames, key.substr(5));
             std::uint32_t keys;
@@ -139,6 +144,8 @@ std::string formatSettings(const Settings& settings) {
     if (settings.devSkipStory) text += "dev.skip_story=1\n";  // written only when on: players never see them
     if (settings.devGxDump) text += "dev.gx_dump=1\n";
     if (settings.devGxNull) text += "dev.gx_null=1\n";
+    if (settings.devGxTiming) text += "dev.gx_timing=1\n";
+    if (settings.devGxCheck) text += "dev.gx_check=1\n";
     return text;
 }
 
