@@ -1,5 +1,6 @@
 #include <smg/GxCommands.hpp>
 #include <algorithm>
+#include <array>
 #include <cstring>
 
 namespace smg {
@@ -24,7 +25,7 @@ constexpr int VcdLo = 0x50, VcdHi = 0x60, VatA = 0x70, VatB = 0x80, VatC = 0x90,
 
 // The BP registers a draw reads (smg::readGxDrawState): generation mode, indirect stages, scissor, TEV orders, depth and
 // blend modes, destination alpha, the texture maps' modes, sizes and addresses, TEV stages and colours, alpha test, depth texture, konst selects.
-bool drawsReadRegister(std::uint32_t address) {
+constexpr bool drawsReadRegister(std::uint32_t address) {
     if (address == 0x00 || address == 0x20 || address == 0x21 || address == 0x40 || address == 0x41 || address == 0x42) return true;
     if ((address >= 0x10 && address <= 0x1F) || (address >= 0x28 && address <= 0x2F) || (address >= 0xC0 && address <= 0xE7) ||
         (address >= 0xF3 && address <= 0xFD))
@@ -32,6 +33,19 @@ bool drawsReadRegister(std::uint32_t address) {
     const std::uint32_t map = address & 0xDF;  // 0x80-0x9F and 0xA0-0xBF: the same layout for maps 0-3 and 4-7
     return (map >= 0x80 && map <= 0x83) || (map >= 0x88 && map <= 0x8B) || (map >= 0x94 && map <= 0x97);
 }
+
+// What loading each BP register does besides storing it, looked up once per load: most loads only store.
+enum : std::uint8_t { BpDrawn = 1, BpColour = 2, BpEvent = 4, BpMask = 8 };
+constexpr std::array<std::uint8_t, 0x100> bpKinds = [] {
+    std::array<std::uint8_t, 0x100> kinds{};
+    for (std::uint32_t a = 0; a < 0x100; ++a) {
+        if (drawsReadRegister(a)) kinds[a] |= BpDrawn;
+        if (a >= 0xE0 && a <= 0xE7) kinds[a] |= BpColour;
+        if (a == 0x45 || a == 0x47 || a == 0x48 || a == 0x52) kinds[a] |= BpEvent;
+    }
+    kinds[0xFE] = BpMask;
+    return kinds;
+}();
 
 // A component's bytes by its format: u8, s8, u16, s16, f32.
 std::uint32_t componentSize(std::uint32_t format) { return format == 4 ? 4 : format >= 2 ? 2 : 1; }
@@ -260,15 +274,17 @@ void GxCommandProcessor::loadXf(std::uint32_t address, std::uint32_t count, cons
 
 void GxCommandProcessor::loadBp(std::uint32_t value) {
     const std::uint32_t address = value >> 24;
-    if (address == 0xFE) {  // the mask for the next load only
+    const std::uint8_t kind = bpKinds[address];
+    if (kind & BpMask) {  // the mask for the next load only
         bpMask_ = value & 0xFFFFFF;
         return;
     }
     const std::uint32_t data = (bp[address] & ~bpMask_) | (value & bpMask_);
     bpMask_ = 0xFFFFFF;
-    if (bp[address] != data && drawsReadRegister(address)) ++bpChanges;
+    if ((kind & BpDrawn) && bp[address] != data) ++bpChanges;
     bp[address] = data;
-    if (address >= 0xE0 && address <= 0xE7) (data >> 23 & 1 ? tevKonst : tevColor)[address - 0xE0] = data;
+    if (!(kind & (BpColour | BpEvent))) return;
+    if (kind & BpColour) (data >> 23 & 1 ? tevKonst : tevColor)[address - 0xE0] = data;
     if (address == 0x45) host_.drawDone();                                    // PE_DONE
     else if (address == 0x47 || address == 0x48) host_.token(static_cast<std::uint16_t>(data), address == 0x48);  // PE_TOKEN(_INT)
     else if (address == 0x52 && host_.copy) host_.copy(data);
@@ -288,6 +304,11 @@ void GxCommandProcessor::run(const std::uint8_t* at, std::uint32_t size) {
 
 std::uint32_t GxCommandProcessor::command(const std::uint8_t* at, std::uint32_t available) {
     const std::uint8_t opcode = at[0];
+    if (opcode == 0x61) {  // load a BP register: most of a material's display list
+        if (available < 5) return 0;
+        loadBp(word(at + 1));
+        return 5;
+    }
     if (opcode == 0x00 || opcode == 0x48) return 1;  // NOP; invalidate the vertex cache, which the port has none of
     if (opcode == 0x01) {                           // the port's own: whether texture copies stay on the GPU
         if (available < 2) return 0;
@@ -307,11 +328,6 @@ std::uint32_t GxCommandProcessor::command(const std::uint8_t* at, std::uint32_t 
         if (available < 5 + count * 4) return 0;
         loadXf(address, count, at + 5, false);
         return 5 + count * 4;
-    }
-    if (opcode == 0x61) {  // load a BP register
-        if (available < 5) return 0;
-        loadBp(word(at + 1));
-        return 5;
     }
     if (opcode == 0x40) {  // call a display list at its physical address
         if (available < 9) return 0;
