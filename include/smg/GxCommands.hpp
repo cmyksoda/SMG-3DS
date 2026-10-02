@@ -89,7 +89,9 @@ private:
     mutable GxVertexLayout layouts_[8];
     mutable std::uint32_t layoutChanges_[8] = {~0u, ~0u, ~0u, ~0u, ~0u, ~0u, ~0u, ~0u};
     std::uint32_t bpMask_ = 0xFFFFFF;  // BP 0xFE: the bits the next BP load changes
+    // The whole length of the command a stream has begun, from its header (at least the header itself).
+    std::uint32_t length(const std::uint8_t* at, std::uint32_t available) const;
     std::uint8_t pending_[Streams][0x10000];
-    std::uint32_t pendingSize_[Streams] = {};
+    std::uint32_t pendingSize_[Streams] = {}, needed_[Streams] = {}, neededCp_[Streams] = {};
 };
 } // namespace smg

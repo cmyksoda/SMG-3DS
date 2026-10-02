@@ -267,13 +267,29 @@ void GxCommandProcessor::put(unsigned stream, const std::uint8_t* bytes, std::ui
     }
     std::memcpy(pending + size, bytes, count);
     size += count;
+    // A command still short of the length its header gave waits without being read again (immediate-mode vertices
+    // arrive a word at a time); a CP load in between may have changed a vertex's size, so that counts too.
+    if (size < needed_[stream] && cpChanges == neededCp_[stream]) return;
     std::uint32_t read = 0;
     while (read < size) {
         const std::uint32_t used = command(pending + read, size - read);
         if (!used) break;
         read += used;
     }
-    std::memmove(pending, pending + read, size - read);
-    size -= read;
+    if (read) {
+        std::memmove(pending, pending + read, size - read);
+        size -= read;
+    }
+    needed_[stream] = size ? length(pending, size) : 0, neededCp_[stream] = cpChanges;
+}
+
+std::uint32_t GxCommandProcessor::length(const std::uint8_t* at, std::uint32_t available) const {
+    const std::uint8_t opcode = at[0];
+    if (opcode == 0x08) return 6;
+    if (opcode == 0x10) return available < 5 ? 5 : 5 + ((word(at + 1) >> 16) + 1) * 4;
+    if (opcode == 0x61 || (opcode & 0xE7) == 0x20) return 5;
+    if (opcode == 0x40) return 9;
+    if (opcode >= 0x80 && opcode < 0xC0) return available < 3 ? 3 : 3 + half(at + 1) * vertexSize(opcode & 7);
+    return 1;
 }
 } // namespace smg
