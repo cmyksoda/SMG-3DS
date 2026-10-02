@@ -355,6 +355,38 @@ void compareWithoutC(std::mt19937& rng) {
     }
 }
 
+// BloomEffect's blur: six stages each add one tap of the same map (its own coordinate) weighted by the rasterized colour.
+// The PICA has three units; the extra taps share one, so black stays black instead of each adding white.
+void sixTapBlur(std::mt19937& rng) {
+    smg::ModelMaterial m;
+    m.textures[0] = 0;
+    m.tevStageCount = 6;
+    for (int i = 0; i < 6; ++i) {
+        auto& s = m.stages[i];
+        const std::uint8_t color[4]{15, 8, 10, std::uint8_t(i ? 0 : 15)}, alpha[4]{7, 7, 7, 6};
+        std::copy(color, color + 4, s.colorIn);
+        std::copy(alpha, alpha + 4, s.alphaIn);
+        s.colorClamp = i == 5;
+        s.texMap = 0, s.texCoord = static_cast<std::uint8_t>(i), s.channel = 4;
+    }
+    m.konstColors[0] = {1, 1, 1, 1};
+    const auto program = smg::compileTev(m);
+    check(program.unitCount == 3 && program.units[2].texture == 0, "six taps of one map share three units");
+    Inputs black = randomInputs(rng);
+    black.texture[0] = {0, 0, 0, 1};
+    black.raster = {0.16f, 0.16f, 0.16f, 1};
+    const Rgba dark = pica(program, black);
+    check(dark[0] == 0 && dark[1] == 0 && dark[2] == 0, "a black source blurs to black");
+    for (int i = 0; i < 100; ++i) {
+        Inputs in = randomInputs(rng);
+        for (auto& c : in.raster) c *= 0.16f;
+        const Rgba g = gx(m, in), q = pica(program, in);
+        bool within = true;  // six stages hold five taps here, so a sixth of the weight may go, but nothing is added
+        for (int c = 0; c < 3; ++c) within &= q[c] <= g[c] + 1 / 255.0f && q[c] >= g[c] * 5 / 6 - 1 / 255.0f;
+        check(within, "and the taps that fit keep their weight, never adding light");
+    }
+}
+
 void randomMaterials(std::mt19937& rng) {
     std::uniform_int_distribution<int> colorInput(0, 15), alphaInput(0, 7), small(0, 3), stageCount(1, 4), selection(0, 0x1f);
     std::uniform_real_distribution<float> unit(0, 1), wide(-1.5f, 2.0f);
@@ -419,6 +451,7 @@ int runCombinerTests() {
     marioEyeLid(rng);
     previousTwice(rng);
     compareWithoutC(rng);
+    sixTapBlur(rng);
     randomMaterials(rng);
     std::printf("%u TEV combiner checks passed\n", checks);
     return 0;

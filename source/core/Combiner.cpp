@@ -156,8 +156,15 @@ struct Compiler {
         if (texture < 0) return kind(Arg::One);
         const std::uint8_t coord = s.texCoord < 8 ? s.texCoord : 0;
         int& unit = unitFor[s.texMap][coord];
+        if (unit < 0 && program.unitCount == CombinerProgram::MaxUnits) {
+            // A multi-tap filter (a blur's six taps of one map) keeps its weight on a unit already sampling the map;
+            // read as one, each extra tap added white.
+            for (unsigned u = 0; u < program.unitCount && unit < 0; ++u)
+                if (program.units[u].texture == texture) unit = static_cast<int>(u);
+            approximate("more than three textures");
+            if (unit < 0) return kind(Arg::One);
+        }
         if (unit < 0) {
-            if (program.unitCount == CombinerProgram::MaxUnits) { approximate("more than three textures"); return kind(Arg::One); }
             unit = program.unitCount++;
             program.units[unit] = {texture, coord};
         }
