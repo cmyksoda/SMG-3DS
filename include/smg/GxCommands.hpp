@@ -23,12 +23,14 @@ public:
 
 private:
     // type: 0 none, 1 direct, 2 an 8-bit index, 3 a 16-bit one. count: components; skip: extra index bytes (NBT's three).
+    // An indexed attribute's array starts at `array` in the host's memory; scale is 1 / 2^shift.
     struct Attribute {
         std::uint8_t type = 0, format = 0, count = 0, shift = 0, skip = 0, componentSize = 0, directSize = 0;
         std::uint32_t base = 0, stride = 0;
+        float scale = 1;
+        const std::uint8_t* array = nullptr;
     };
     const std::uint8_t* source(const Attribute& a, const std::uint8_t*& at) const;
-    const std::uint8_t* (*memory_)(std::uint32_t) = nullptr;
     bool matrixIndex_ = false;
     std::uint8_t texMatrixIndexes_ = 0;
     Attribute position_, normal_, color_[2], texcoord_[8];

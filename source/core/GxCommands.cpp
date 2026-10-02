@@ -34,7 +34,8 @@ bool drawsReadRegister(std::uint32_t address) {
 
 // A component's bytes by its format: u8, s8, u16, s16, f32.
 std::uint32_t componentSize(std::uint32_t format) { return format == 4 ? 4 : format >= 2 ? 2 : 1; }
-float component(const std::uint8_t* at, std::uint32_t format, std::uint32_t shift, bool native) {
+// Every vertex's every component goes through here: kept inline, its fixed point a multiply (exact for powers of two).
+[[gnu::always_inline]] inline float component(const std::uint8_t* at, std::uint32_t format, float scale, bool native) {
     float value;
     switch (format) {
     case 0: value = at[0]; break;
@@ -47,7 +48,7 @@ float component(const std::uint8_t* at, std::uint32_t format, std::uint32_t shif
         return value;
     }
     }
-    return value / static_cast<float>(1u << shift);
+    return value * scale;
 }
 // A colour's bytes by its format: RGB565, RGB888, RGB888x, RGBA4444, RGBA6666, RGBA8888.
 std::uint32_t colorSize(std::uint32_t format) { static const std::uint8_t sizes[] = {2, 3, 4, 2, 3, 4, 4, 4}; return sizes[format & 7]; }
@@ -75,7 +76,7 @@ void readColor(const std::uint8_t* at, std::uint32_t format, bool native, std::u
 }
 } // namespace
 
-GxVertexLayout::GxVertexLayout(const GxCommandProcessor& gpu, std::uint8_t format) : memory_(nullptr) {
+GxVertexLayout::GxVertexLayout(const GxCommandProcessor& gpu, std::uint8_t format) {
     const std::uint32_t lo = gpu.cp[VcdLo], hi = gpu.cp[VcdHi], a = gpu.cp[VatA + format], b = gpu.cp[VatB + format], c = gpu.cp[VatC + format];
     matrixIndex_ = field(lo, 0, 1);
     size = matrixIndex_;
@@ -87,6 +88,9 @@ GxVertexLayout::GxVertexLayout(const GxCommandProcessor& gpu, std::uint8_t forma
         at.type = static_cast<std::uint8_t>(type), at.format = static_cast<std::uint8_t>(fmt), at.count = static_cast<std::uint8_t>(count);
         at.shift = static_cast<std::uint8_t>(shift), at.componentSize = static_cast<std::uint8_t>(componentSize(fmt));
         at.base = gpu.cp[ArrayBase + array], at.stride = gpu.cp[ArrayStride + array], at.directSize = static_cast<std::uint8_t>(direct);
+        at.scale = 1.0f / static_cast<float>(1u << at.shift);
+        // The host's memory is one offset from the Wii's addresses, so an array's elements follow its base there too.
+        if (type >= 2) at.array = gpu.memoryFunction()(at.base);
         size += type == 0 ? 0 : type == 1 ? direct : type == 2 ? 1 + at.skip : 2 + at.skip;
     };
     set(position_, field(lo, 9, 2), 0, field(a, 1, 3), field(a, 0, 1) + 2, field(a, 4, 5), (field(a, 0, 1) + 2) * componentSize(field(a, 1, 3)));
@@ -108,7 +112,6 @@ GxVertexLayout::GxVertexLayout(const GxCommandProcessor& gpu, std::uint8_t forma
                                      {field(c, 14, 1), field(c, 15, 3), field(c, 18, 5)}, {field(c, 23, 1), field(c, 24, 3), field(c, 27, 5)}};
     for (int i = 0; i < 8; ++i)
         set(texcoord_[i], field(hi, 2 * i, 2), 4 + i, tex[i][1], tex[i][0] + 1, tex[i][2], (tex[i][0] + 1) * componentSize(tex[i][1]));
-    memory_ = gpu.memoryFunction();
 }
 
 // An attribute's own bytes: in the stream when direct, else in its array at the index the stream gives.
@@ -120,7 +123,7 @@ const std::uint8_t* GxVertexLayout::source(const Attribute& a, const std::uint8_
     }
     const std::uint32_t index = a.type == 2 ? *at : half(at);
     at += (a.type == 2 ? 1 : 2) + a.skip;
-    return memory_(a.base + index * a.stride);
+    return a.array + index * a.stride;
 }
 
 void GxVertexLayout::read(const std::uint8_t* at, GxVertex& vertex) const {
@@ -131,12 +134,12 @@ void GxVertexLayout::read(const std::uint8_t* at, GxVertex& vertex) const {
         const std::uint8_t* data = source(position_, at);
         const bool native = position_.type != 1;
         for (std::uint32_t i = 0; i < position_.count; ++i)
-            vertex.position[i] = component(data + i * position_.componentSize, position_.format, position_.shift, native);
+            vertex.position[i] = component(data + i * position_.componentSize, position_.format, position_.scale, native);
     }
     if (normal_.type) {
         const std::uint8_t* data = source(normal_, at);
         const bool native = normal_.type != 1;
-        for (int i = 0; i < 3; ++i) vertex.normal[i] = component(data + i * normal_.componentSize, normal_.format, normal_.shift, native);
+        for (int i = 0; i < 3; ++i) vertex.normal[i] = component(data + i * normal_.componentSize, normal_.format, normal_.scale, native);
     }
     for (int channel = 0; channel < 2; ++channel) {
         const Attribute& c = color_[channel];
@@ -146,7 +149,7 @@ void GxVertexLayout::read(const std::uint8_t* at, GxVertex& vertex) const {
         const Attribute& t = texcoord_[i];
         if (!t.type) continue;
         const std::uint8_t* data = source(t, at);
-        for (std::uint32_t k = 0; k < t.count; ++k) vertex.texcoord[i][k] = component(data + k * t.componentSize, t.format, t.shift, t.type != 1);
+        for (std::uint32_t k = 0; k < t.count; ++k) vertex.texcoord[i][k] = component(data + k * t.componentSize, t.format, t.scale, t.type != 1);
     }
 }
 
