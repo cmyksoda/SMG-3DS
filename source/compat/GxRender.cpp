@@ -115,9 +115,11 @@ struct Renderer {
     bool indirectNoted = false;
     // Per-frame costs, logged every few seconds (perfLine): what each optimization is measured by.
     struct Perf {
-        u64 since = 0, renderTicks = 0;
+        u64 since = 0, phaseTicks[4] = {}, syncTicks = 0;
+        u32 phaseFrames = 0;
         u32 frames = 0, primitives = 0, vertices = 0, triangles = 0, draws = 0, sameState = 0;
         u32 changed[0x100] = {};  // per BP register: state rebuilds it took part in
+        u32 compilesBefore = gxTevCompiles();
     } perf;
     u32 bpSeen[0x100] = {};
 
@@ -135,7 +137,10 @@ struct Renderer {
 
     void begin() {
         if (!ready) init();
+        // Waiting here for the GPU's last frame and the vblank is idle time inside the draw phase: timed apart.
+        const u64 start = svcGetSystemTick();
         C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
+        perf.syncTicks += svcGetSystemTick() - start;
         C3D_FrameDrawOn(target);
         if (clearPending) C3D_RenderTargetClear(target, C3D_CLEAR_ALL, clearColor, clearDepth);
         fresh[0] = fresh[1] = false;
@@ -310,10 +315,12 @@ struct Renderer {
         const double ms = double(now - perf.since) * 1000.0 / SYSCLOCK_ARM11;
         if (ms < 4000) return;
         const double n = perf.frames;
-        std::fprintf(stderr, "gx perf: %lu frames, %.1f ms/frame, render path %.1f ms/frame; per frame %.0f primitives (%.0f same state), "
-                     "%.0f vertices, %.0f triangles, %.0f draws\n", static_cast<unsigned long>(perf.frames), ms / n,
-                     double(perf.renderTicks) * 1000.0 / SYSCLOCK_ARM11 / n, perf.primitives / n, perf.sameState / n, perf.vertices / n,
-                     perf.triangles / n, perf.draws / n);
+        const double phase = perf.phaseFrames ? 1000.0 / SYSCLOCK_ARM11 / perf.phaseFrames : 0;
+        std::fprintf(stderr, "gx perf: %lu frames, %.1f ms/frame: draw %.1f (%.1f of it waiting for the GPU and vblank), logic %.1f, "
+                     "animation %.1f, retrace wait %.1f; per frame %.0f primitives (%.0f same state), %.0f vertices, %.0f triangles, %.0f draws\n",
+                     static_cast<unsigned long>(perf.frames), ms / n, perf.phaseTicks[0] * phase, perf.syncTicks * 1000.0 / SYSCLOCK_ARM11 / n,
+                     perf.phaseTicks[1] * phase, perf.phaseTicks[2] * phase, perf.phaseTicks[3] * phase, perf.primitives / n,
+                     perf.sameState / n, perf.vertices / n, perf.triangles / n, perf.draws / n);
         // The registers behind most state changes, so batching can be aimed at them.
         std::string top;
         for (int k = 0; k < 6; ++k) {
@@ -324,7 +331,8 @@ struct Renderer {
             top += item;
             perf.changed[most - perf.changed] = 0;
         }
-        std::fprintf(stderr, "gx perf: state changes by BP register (per frame):%s\n", top.c_str());
+        std::fprintf(stderr, "gx perf: TEV programs compiled %.1f per frame; state changes by BP register (per frame):%s\n",
+                     (gxTevCompiles() - perf.compilesBefore) / n, top.c_str());
         perf = Perf{};
         perf.since = now;
     }
@@ -690,9 +698,7 @@ Renderer& renderer() {
 
 void gxRenderPrimitive(const GxCommandProcessor& gpu, std::uint8_t kind, std::uint8_t format, std::uint16_t count, const std::uint8_t* vertices) {
     const PortMemory memory;
-    const u64 start = svcGetSystemTick();
     renderer().draw(gpu, kind, format, count, vertices);
-    renderer().perf.renderTicks += svcGetSystemTick() - start;
 }
 
 void gxRenderCopiesStayOnGpu(bool stay) { sCopiesStayOnGpu = stay; }
@@ -700,9 +706,7 @@ void gxRenderCopiesStayOnGpu(bool stay) { sCopiesStayOnGpu = stay; }
 void gxRenderMovieFrame(const std::uint8_t* y, const std::uint8_t* u, const std::uint8_t* v, unsigned width, unsigned height, unsigned generation,
                         int x, int top, int w, int h) {
     const PortMemory memory;
-    const u64 start = svcGetSystemTick();
     renderer().movieFrame(y, u, v, width, height, generation, x, top, w, h);
-    renderer().perf.renderTicks += svcGetSystemTick() - start;
 }
 
 std::uint32_t gxRenderPeek(const GxCommandProcessor& gpu, unsigned x, unsigned y, bool depth) {
@@ -712,12 +716,22 @@ std::uint32_t gxRenderPeek(const GxCommandProcessor& gpu, unsigned x, unsigned y
 
 void gxRenderCopy(const GxCommandProcessor& gpu, std::uint32_t command) {
     const PortMemory memory;
-    const u64 start = svcGetSystemTick();
     renderer().copy(gpu, command);
-    renderer().perf.renderTicks += svcGetSystemTick() - start;
     if (command >> 14 & 1) renderer().perfLine();
     // Every 300th frame the game's state is logged (source/compat/GameScene.cpp), from the thread that draws.
     static unsigned frames = 0;
     if (++frames % 300 == 0) smgHeartbeat();
 }
 } // namespace smg
+
+// GameSystem::frameLoop's phases (adapted): 0 drawing begins, 1 the logic step, 2 animation, 3 the retrace wait. Ticks
+// are read only here, a few times a frame: Azahar charges 150 cycles for each read.
+extern "C" void smgFramePhase(int phase) {
+    static u64 last = 0;
+    static int current = -1;
+    const u64 now = svcGetSystemTick();
+    auto& perf = smg::renderer().perf;
+    if (current >= 0) perf.phaseTicks[current] += now - last;
+    if (phase == 0 && current >= 0) ++perf.phaseFrames;
+    current = phase, last = now;
+}
