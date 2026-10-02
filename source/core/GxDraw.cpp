@@ -369,6 +369,8 @@ bool GxVertexPipeline::prepare(const GxCommandProcessor& gpu, const GxDrawState&
                     t.fold[r][c] = static_cast<float>(sum);
                 }
         }
+        // A texcoord source, or the AB11 form, gives a third input of one; with q fixed at one there's nothing to divide.
+        t.planar = t.folded && (t.source >= 5 || !t.threeInputs) && t.fold[2][0] == 0 && t.fold[2][1] == 0 && t.fold[2][2] == 0 && t.fold[2][3] == 1;
     }
     if (gpu.xfChanges == xfSeen_ && frame == frameSeen_) return true;
     xfSeen_ = gpu.xfChanges, clipReady_ = 0;
@@ -439,6 +441,12 @@ const float* GxVertexPipeline::clipMatrix(std::uint32_t index) {
 
 // One texture coordinate set: the texgen's input through its matrix, then the dual transform when it is on.
 void GxVertexPipeline::texgen(const TexGen& t, const GxVertex& v, float st[2]) const {
+    if (t.planar) {
+        const float* in = t.source == 0 ? v.position : t.source == 1 ? v.normal : v.texcoord[t.source - 5];
+        st[0] = t.fold[0][0] * in[0] + t.fold[0][1] * in[1] + (t.fold[0][2] + t.fold[0][3]);
+        st[1] = t.fold[1][0] * in[0] + t.fold[1][1] * in[1] + (t.fold[1][2] + t.fold[1][3]);
+        return;
+    }
     float in[4] = {0, 0, 1, 1};
     if (t.source == 0) std::memcpy(in, v.position, sizeof v.position);
     else if (t.source == 1) std::memcpy(in, v.normal, sizeof v.normal);

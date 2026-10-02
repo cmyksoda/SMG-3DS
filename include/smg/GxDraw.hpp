@@ -84,7 +84,7 @@ private:
         std::uint32_t matrix = 0, post = 0;
         // With one matrix for the whole primitive and no normalizing, the texgen is one affine map: the matrix and the
         // dual transform folded together (the input's fourth component is always one).
-        bool folded = false;
+        bool folded = false, planar = false;  // planar: two inputs, two outputs, nothing to divide by
         float fold[3][4] = {};
         // What the fold was made from (setup, then the matrices' words), and the XF change count it was checked at.
         std::uint32_t source_[32] = {}, sourceWords = 0, foldXf = ~0u;
