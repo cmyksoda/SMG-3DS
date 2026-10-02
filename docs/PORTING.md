@@ -690,12 +690,79 @@ one map, more than the PICA's three texture units, and each tap past the third r
 unit already samples now shares that unit, which keeps five of the six weights and the picture right
 (`CombinerTests` checks a six-tap blur is never brighter than its map).
 
+**A render thread.** `GameSystem::frameLoop` draws (beginRender, draw, endRender), then runs the logic step and
+animation, and only then waits for the GPU's draw done (`MainLoopFramework::endFrame`): the Wii's GPU drew a frame while
+its CPU computed the next. The port ran its command processor and renderer inside `GXFlush`, on the game's thread, so
+none of that overlapped. Now the game thread's inline GX writes go into a 512 KB ring (`GxFifo.cpp`), handed over at
+`GXFlush` and every 16 KB, and a render thread on the New 3DS's third core (core 2; else the system core at 80%; else
+none, and the old way) reads and draws them. The game waits only where Wii games wait for their GPU (draw done,
+tokens) and where the port reads the GPU's results from another thread (peeks, movie frames: they wait for the ring to
+drain). The render thread raises the pixel engine's interrupts itself, as the audio thread raises its own, so a
+draw-sync callback's `GXPeekZ` runs as its token is read, at the right point in the stream. One difference from the
+Wii remains: an interrupt handler runs on its own core while the game thread runs on, where the Wii froze the
+interrupted thread; data a game thread shares with a handler under `OSDisableInterrupts` is still exact (the port's CPU
+lock spans cores), and the game's draw-sync callbacks only leave values for the next frame's logic. The copy-mode switch
+around `JUTTexture::capture` became the port's own command in the stream (0x01) so it stays in order with the copy it
+wraps, and a new mesh marks its pages before it is read for good (a write and flush from another thread in between would
+otherwise be missed). `dev.gx_inline=1` keeps the old way, for comparison. Azahar emulates both cores on one host thread,
+so a run takes longer in wall time; its emulated time is what counts. The frame also stopped waiting for the next
+vblank before it began (`C3D_FRAME_SYNCDRAW`): the game paces itself by the retrace, and a frame that ran long lost half
+a refresh on average. The Star Festival plaza went from 70-83 to 38-46 ms a frame (timing on), the frame now bound by
+the render thread (about 40 ms) while the game's own thread needs about 17.
+
+**Per-draw work, continued.** A state cache hit cost about 29 µs: a 143-word key built by `push_back`, hashed with 64-bit
+multiplies (the ARM11 has none), compared through `std::vector`, then a 1.7 KB draw state (with a `std::string` in its
+material) copied out. The key is now gathered into an array and hashed with 32-bit multiplies, and the draw uses the
+cached state where it lies; the TEV program cache hashes by words too. citro3d marks a whole block of registers to be
+sent again for each setter called, so the renderer now remembers what it last gave citro3d (combiner stages, blend,
+alpha and depth tests, cull, scissor, texture bindings, fixed attributes, the mesh attribute layout) and calls a setter
+only when its value changed. citro3d's `C3D_FrameEnd(0)` flushes the CPU cache over the whole linear heap at every frame
+end and every readback (Azahar models no caches, so only a real console pays for it): the renderer flushes what it
+writes itself (meshes and textures when made, the frame's vertices before each command list ends), so it now passes
+`GX_CMDLIST_FLUSH`. The command processor parses about 200 KB a frame, most of it J3D's material lists of BP loads;
+a load now looks up in a 256-entry table whether a draw reads its register and whether it does anything besides being
+stored (most don't), and BP is the first opcode it checks.
+
+**Fewer, leaner mesh draws.** A lit matrix slot took ten uniform rows (its whole clip transform, modelview and normal
+rows), so only four fit and Mario's skinned lists drew in 21 to 34 groups. Lit slots now take six rows (modelview,
+normal) after four rows from view to clip space that every slot shares, and the shader goes through view space, which it
+needs for lighting anyway: nine slots a draw, so a GX list (ten at most) is one draw or two. When citro3d holds nothing
+of the renderer's yet to send (none of its setters called since its last draw), a mesh draw writes its own registers
+into the command list: the uniform rows that changed, buffer 0 aimed at the mesh, and the fifteen registers
+`C3D_DrawElements` writes for a draw. The uniform values always live in citro3d's own copies (`C3D_FVUnif` and its
+kin), sent by citro3d when it has something pending anyway and by the renderer otherwise, so the two never disagree.
+Every command list starts with something pending, so its first draw is citro3d's and citro3d submits the list. A
+command's header counts at most 256 values; `GPUCMD_Add` splits longer writes and so does the renderer's writer.
+`dev.gx_noraw=1` sends every draw through citro3d. One trap found on the way: `C3D_FixedAttribGetWritePtr` takes an
+attribute's index (its place among the loaders and fixed attributes, in the order they were added), not the shader
+register it feeds. The mesh layout's normal (register 6) is attribute 5 and its matrix slot (register 5) attribute 6;
+they had been swapped since the first lit meshes, harmlessly while both fixed values were zero, until a rigid lit mesh
+(Mario's hands, on one joint) needed its slot to be 4 and drew from the view-to-clip rows instead: a giant glove over
+the camera. The shader's C++ model reads the slot from the vertex, so the mesh check could not see it.
+
+**The DSP on its own core.** The Wii's DSP ran JAudio2's microcode beside the CPU, answering its mail by interrupt;
+the port ran it inside `DSPSendMailToDSP`, on the game's core, about 5 to 7 ms of a plaza frame. Now a thread on the
+system core (`APT_SetAppCpuTimeLimit(80)`, core 1; the New 3DS's third core is the render thread's) takes the mails in
+order and raises the DSP's interrupts itself. The Wii's mailbox held one mail and its sender spun, interrupts off,
+until the DSP took it; spinning here would hold the game's core until the other core got to it, so the queue takes
+each mail as it is sent. A mail sent by an interrupt handler running on the DSP's own thread (which raised the
+interrupt) runs at once, as that thread can't take its own mail.
+
+**Thirty frames a second.** The game's logic runs 60 steps a second; drawing every one would need about 16 ms a frame.
+`MainLoopFramework` already has a render interval (`mRenderInterval`, `mDoRenderFrame`): the adapted
+`GameSystem::frameLoop` sets it to two and draws only when the framework says to, so the game runs at full speed and
+shows every second step, 30 frames a second (`dev.draw_every=1` draws every step, for comparing the renderer).
+The scene's view matrices and draw lists are computed in `calcAnim` (`executeCalcViewAndEntryList`) and its draw lists
+are persistent, so a step that isn't drawn leaves nothing behind; `endFrame` waits for the GPU only after a drawn step.
+
 **Development settings.** Keys in `settings.ini` for development only, written back only when on: `dev.skip_story=1`
 skips the prologue's storybook and movies; `dev.gx_dump=1` dumps a frame's draws to the log once a minute;
 `dev.gx_null=1` draws nothing, to measure the game's own work; `dev.gx_timing=1` adds the renderer's parts to the perf
-line (CPU-path primitives, display lists, texture copies, frame ends; each clock read costs Azahar 150 cycles, so it
-slows what it measures a little) with the vertices of refused lists by reason; `dev.gx_check=1` checks each new mesh
-against the CPU path. Azahar runs the 3DS CPU at its base 268 MHz although the port switches a New 3DS to 804 MHz
+line (CPU-path primitives, display lists, texture copies, frame ends, then each per-call step: state builds and how many
+were cache hits, the CPU path's vertices and draws, a mesh draw's lookup, uniforms and draw calls; each clock read costs
+Azahar 150 cycles, so it slows what it measures, by up to a fifth with all of them) with the vertices of refused lists
+by reason; `dev.gx_check=1` checks each new mesh against the CPU path; `dev.gx_inline=1` draws on the game's thread
+instead of the render thread. Azahar runs the 3DS CPU at its base 268 MHz although the port switches a New 3DS to 804 MHz
 (`osSetSpeedupEnable`), so every millisecond figure here is a slow-clock one; how much faster hardware is can only be
 measured on hardware.
 
