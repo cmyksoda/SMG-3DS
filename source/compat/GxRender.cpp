@@ -677,6 +677,13 @@ struct Renderer {
         if (found == meshes.end()) {
             GxMesh mesh;
             if (const unsigned why = pipeline.buildMesh(list, size, mesh)) return ++perf.refused[why], why;
+            // Its pages are marked before it is read for good: a write and flush from another thread between a reading and
+            // the marking would never reach it (the flush hook passes unmarked pages by), so the first reading only finds them.
+            markPages(reinterpret_cast<std::uintptr_t>(list), reinterpret_cast<std::uintptr_t>(list) + size);
+            markPages(reinterpret_cast<std::uintptr_t>(mesh.arraysLo), reinterpret_cast<std::uintptr_t>(mesh.arraysHi));
+            std::atomic_thread_fence(std::memory_order_seq_cst);
+            mesh = GxMesh{};
+            if (const unsigned why = pipeline.buildMesh(list, size, mesh)) return ++perf.refused[why], why;
             static const bool checking = smgDevGxCheck();
             if (checking) checkMesh(gpu, list, size, mesh, address);
             const std::size_t vertexBytes = mesh.vertices.size() * sizeof(GxMeshVertex), bytes = vertexBytes + mesh.indices.size() * sizeof(std::uint16_t);
@@ -707,18 +714,20 @@ struct Renderer {
             cached.range[0][0] = reinterpret_cast<std::uintptr_t>(list), cached.range[0][1] = cached.range[0][0] + size;
             cached.range[1][0] = reinterpret_cast<std::uintptr_t>(mesh.arraysLo), cached.range[1][1] = reinterpret_cast<std::uintptr_t>(mesh.arraysHi);
             if (cached.range[1][1] <= cached.range[1][0]) cached.range[1][0] = cached.range[1][1] = 0;  // all attributes direct
-            for (const auto& r : cached.range) {
-                if (r[1] <= r[0]) continue;
-                for (std::uintptr_t page = r[0] >> 12; page <= (r[1] - 1) >> 12; ++page) {
-                    meshPages.insert(page);
-                    sMeshPageBits[page >> 5].fetch_or(1u << (page & 31), std::memory_order_relaxed);
-                }
-            }
+            for (const auto& r : cached.range) markPages(r[0], r[1]);
             meshBytes += bytes, ++perf.meshesMade;
             found = meshes.find(hash);
         }
         drawMesh(found->second);
         return GxVertexPipeline::MeshOk;
+    }
+
+    void markPages(std::uintptr_t lo, std::uintptr_t hi) {
+        if (hi <= lo) return;
+        for (std::uintptr_t page = lo >> 12; page <= (hi - 1) >> 12; ++page) {
+            meshPages.insert(page);
+            sMeshPageBits[page >> 5].fetch_or(1u << (page & 31), std::memory_order_relaxed);
+        }
     }
 
     // dev.gx_check: a new mesh against the CPU path, vertex by vertex, under the state it is first drawn with (each
@@ -1444,6 +1453,7 @@ bool gxRenderDisplayList(const GxCommandProcessor& gpu, std::uint32_t address, s
 
 void gxRenderMemoryChanged(const void* start, std::uint32_t size) {
     if (!size) return;
+    std::atomic_thread_fence(std::memory_order_seq_cst);  // the game's writes before the page bits are read (see markPages)
     const std::uintptr_t first = reinterpret_cast<std::uintptr_t>(start) >> 12, last = (reinterpret_cast<std::uintptr_t>(start) + size - 1) >> 12;
     bool meshPage = false;
     for (std::uintptr_t page = first; page <= last && !meshPage; ++page)
