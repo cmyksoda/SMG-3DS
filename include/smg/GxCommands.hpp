@@ -34,6 +34,7 @@ private:
     bool matrixIndex_ = false;
     std::uint8_t texMatrixIndexes_ = 0;
     Attribute position_, normal_, color_[2], texcoord_[8];
+    std::uint8_t texcoords_[8] = {}, texcoordCount_ = 0;  // the sets the format has, in order
 };
 
 // The Wii GPU's command processor: the FIFO's big-endian stream, taken byte by byte as GX sends it. It keeps the

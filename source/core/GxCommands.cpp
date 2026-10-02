@@ -34,21 +34,28 @@ bool drawsReadRegister(std::uint32_t address) {
 
 // A component's bytes by its format: u8, s8, u16, s16, f32.
 std::uint32_t componentSize(std::uint32_t format) { return format == 4 ? 4 : format >= 2 ? 2 : 1; }
-// Every vertex's every component goes through here: kept inline, its fixed point a multiply (exact for powers of two).
-[[gnu::always_inline]] inline float component(const std::uint8_t* at, std::uint32_t format, float scale, bool native) {
-    float value;
+// An attribute's components, its format chosen once per attribute rather than per component; fixed point is a multiply
+// (exact for powers of two), and floats take no shift.
+void components(const std::uint8_t* at, std::uint32_t format, std::uint32_t count, float scale, bool native, float* out) {
     switch (format) {
-    case 0: value = at[0]; break;
-    case 1: value = static_cast<std::int8_t>(at[0]); break;
-    case 2: value = static_cast<float>(half(at, native)); break;
-    case 3: value = static_cast<std::int16_t>(half(at, native)); break;
-    default: {
-        const std::uint32_t bits = word(at, native);
-        std::memcpy(&value, &bits, 4);
-        return value;
+    case 0:
+        for (std::uint32_t i = 0; i < count; ++i) out[i] = at[i] * scale;
+        break;
+    case 1:
+        for (std::uint32_t i = 0; i < count; ++i) out[i] = static_cast<std::int8_t>(at[i]) * scale;
+        break;
+    case 2:
+        for (std::uint32_t i = 0; i < count; ++i) out[i] = static_cast<float>(half(at + 2 * i, native)) * scale;
+        break;
+    case 3:
+        for (std::uint32_t i = 0; i < count; ++i) out[i] = static_cast<std::int16_t>(half(at + 2 * i, native)) * scale;
+        break;
+    default:
+        for (std::uint32_t i = 0; i < count; ++i) {
+            const std::uint32_t bits = word(at + 4 * i, native);
+            std::memcpy(&out[i], &bits, 4);
+        }
     }
-    }
-    return value * scale;
 }
 // A colour's bytes by its format: RGB565, RGB888, RGB888x, RGBA4444, RGBA6666, RGBA8888.
 std::uint32_t colorSize(std::uint32_t format) { static const std::uint8_t sizes[] = {2, 3, 4, 2, 3, 4, 4, 4}; return sizes[format & 7]; }
@@ -110,12 +117,14 @@ GxVertexLayout::GxVertexLayout(const GxCommandProcessor& gpu, std::uint8_t forma
                                      {field(b, 9, 1), field(b, 10, 3), field(b, 13, 5)}, {field(b, 18, 1), field(b, 19, 3), field(b, 22, 5)},
                                      {field(b, 27, 1), field(b, 28, 3), field(c, 0, 5)}, {field(c, 5, 1), field(c, 6, 3), field(c, 9, 5)},
                                      {field(c, 14, 1), field(c, 15, 3), field(c, 18, 5)}, {field(c, 23, 1), field(c, 24, 3), field(c, 27, 5)}};
-    for (int i = 0; i < 8; ++i)
+    for (int i = 0; i < 8; ++i) {
         set(texcoord_[i], field(hi, 2 * i, 2), 4 + i, tex[i][1], tex[i][0] + 1, tex[i][2], (tex[i][0] + 1) * componentSize(tex[i][1]));
+        if (texcoord_[i].type) texcoords_[texcoordCount_++] = static_cast<std::uint8_t>(i);
+    }
 }
 
 // An attribute's own bytes: in the stream when direct, else in its array at the index the stream gives.
-const std::uint8_t* GxVertexLayout::source(const Attribute& a, const std::uint8_t*& at) const {
+inline const std::uint8_t* GxVertexLayout::source(const Attribute& a, const std::uint8_t*& at) const {
     if (a.type == 1) {
         const std::uint8_t* here = at;
         at += a.directSize;
@@ -130,26 +139,15 @@ void GxVertexLayout::read(const std::uint8_t* at, GxVertex& vertex) const {
     if (matrixIndex_) vertex.matrixIndex = *at++;
     if (texMatrixIndexes_)
         for (int i = 0; i < 8; ++i) if (texMatrixIndexes_ >> i & 1) vertex.texMatrixIndex[i] = *at++;
-    if (position_.type) {
-        const std::uint8_t* data = source(position_, at);
-        const bool native = position_.type != 1;
-        for (std::uint32_t i = 0; i < position_.count; ++i)
-            vertex.position[i] = component(data + i * position_.componentSize, position_.format, position_.scale, native);
-    }
-    if (normal_.type) {
-        const std::uint8_t* data = source(normal_, at);
-        const bool native = normal_.type != 1;
-        for (int i = 0; i < 3; ++i) vertex.normal[i] = component(data + i * normal_.componentSize, normal_.format, normal_.scale, native);
-    }
+    if (position_.type) components(source(position_, at), position_.format, position_.count, position_.scale, position_.type != 1, vertex.position);
+    if (normal_.type) components(source(normal_, at), normal_.format, 3, normal_.scale, normal_.type != 1, vertex.normal);
     for (int channel = 0; channel < 2; ++channel) {
         const Attribute& c = color_[channel];
         if (c.type) readColor(source(c, at), c.format, c.type != 1, vertex.color[channel]);
     }
-    for (int i = 0; i < 8; ++i) {
-        const Attribute& t = texcoord_[i];
-        if (!t.type) continue;
-        const std::uint8_t* data = source(t, at);
-        for (std::uint32_t k = 0; k < t.count; ++k) vertex.texcoord[i][k] = component(data + k * t.componentSize, t.format, t.scale, t.type != 1);
+    for (std::uint8_t k = 0; k < texcoordCount_; ++k) {
+        const Attribute& t = texcoord_[texcoords_[k]];
+        components(source(t, at), t.format, t.count, t.scale, t.type != 1, vertex.texcoord[texcoords_[k]]);
     }
 }
 
