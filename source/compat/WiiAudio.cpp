@@ -1,6 +1,7 @@
 // The Wii's audio hardware as the SDK's DSP and AI libraries saw it. The DSP runs JAudio2's microcode in software
-// (smg::WiiDsp) behind its mailboxes; the AI's DMA plays each buffer the game hands it through the 3DS's own DSP
-// (NDSP) and interrupts as each one starts, so JAudio2's audio thread paces itself as on the Wii.
+// (smg::WiiDsp) behind its mailboxes, on a thread of its own on the system core when the 3DS lends it one, as the Wii's
+// DSP worked beside its CPU; the AI's DMA plays each buffer the game hands it through the 3DS's own DSP (NDSP) and
+// interrupts as each one starts, so JAudio2's audio thread paces itself as on the Wii.
 #include <3ds.h>
 #include <smg/FreeStore.hpp>
 #include <smg/WiiDsp.hpp>
@@ -48,6 +49,52 @@ auto withDsp(Call call) {
     RecursiveLock_Unlock(&sDspLock);
     if (raise) smgRaiseInterrupt(__OS_INTERRUPT_DSP_DSP);
     return result;
+}
+
+// The CPU's mails to the DSP, run in order by the DSP's thread: the sender goes on (waiting only if the queue is full)
+// and the microcode's work, mixing included, runs on the other core.
+class Mailbox {
+public:
+    void push(u32 mail) {
+        LightLock_Lock(&lock_);
+        while (count_ == Capacity) CondVar_Wait(&taken_, &lock_);
+        mails_[(first_ + count_++) % Capacity] = mail;
+        CondVar_Signal(&arrived_);
+        LightLock_Unlock(&lock_);
+    }
+    u32 take() {
+        LightLock_Lock(&lock_);
+        while (!count_) CondVar_Wait(&arrived_, &lock_);
+        const u32 mail = mails_[first_];
+        first_ = (first_ + 1) % Capacity, --count_;
+        CondVar_Broadcast(&taken_);
+        LightLock_Unlock(&lock_);
+        return mail;
+    }
+private:
+    static constexpr unsigned Capacity = 64;
+    LightLock lock_ = 1;
+    CondVar arrived_ = 0, taken_ = 0;
+    u32 mails_[Capacity] = {};
+    unsigned first_ = 0, count_ = 0;
+};
+Mailbox sToDsp;
+Thread sDspThread = nullptr;
+void* sDspTls = nullptr;
+
+void dspLoop(void*) {
+    sDspTls = getThreadLocalStorage();
+    for (;;) {
+        const u32 mail = sToDsp.take();
+        withDsp([mail] { sDsp.send(mail); return 0; });
+    }
+}
+
+// The system core, at the app's largest share of it (only the New 3DS's third core is free, and the GX stream has it).
+void startDspThread() {
+    if (R_FAILED(APT_SetAppCpuTimeLimit(80))) return void(std::fputs("The Wii's DSP: run on the game's core (no share of the system core)\n", stderr));
+    sDspThread = threadCreate(dspLoop, nullptr, 0x8000, 0x18, 1, true);
+    std::fputs(sDspThread ? "The Wii's DSP: run on core 1\n" : "The Wii's DSP: run on the game's core (no thread on core 1)\n", stderr);
 }
 
 // The AI: the buffer the game last handed over, and the engine playing them one after another.
@@ -128,15 +175,23 @@ void DSPInit() {
     done = true;
     RecursiveLock_Init(&sDspLock);
     withDsp([] { sDsp.reset(); return 0; });
+    startDspThread();
     const BOOL enabled = OSDisableInterrupts();
     __OSSetInterruptHandler(__OS_INTERRUPT_DSP_DSP, __DSPHandler);
     __OSUnmaskInterrupts(OS_INTERRUPTMASK_DSP_DSP);
     OSRestoreInterrupts(enabled);
 }
-u32 DSPCheckMailToDSP() { return 0; }  // the DSP takes each mail as it is sent
+// The queue takes each mail as it is sent: the Wii's one-mail box made its sender wait (spinning, interrupts off),
+// which here would hold the game's core until the other one got to it. Mails stay in order.
+u32 DSPCheckMailToDSP() { return 0; }
 u32 DSPCheckMailFromDSP() { return withDsp([] { return u32(sDsp.mailWaiting()); }); }
 u32 DSPReadMailFromDSP() { return withDsp([] { return sDsp.readMail(); }); }
-void DSPSendMailToDSP(u32 mail) { withDsp([mail] { sDsp.send(mail); return 0; }); }
+// A mail from an interrupt handler running on the DSP's own thread (which raised the interrupt) runs at once, as the
+// thread can't take its own mail while it runs the handler; the handler holds the CPU, so the queue is in order.
+void DSPSendMailToDSP(u32 mail) {
+    if (sDspThread && getThreadLocalStorage() != sDspTls) sToDsp.push(mail);
+    else withDsp([mail] { sDsp.send(mail); return 0; });
+}
 void DSPAssertInt() {}
 
 // AI (the SDK's ai.c, over NDSP).
