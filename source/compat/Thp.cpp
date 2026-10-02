@@ -40,6 +40,9 @@ void LCDisable() {}
 
 BOOL THPInit() { return TRUE; }
 
+// Movie frames decoded so far, for the renderer's perf line (how the player paces itself when the game runs slowly).
+unsigned smgMovieDecodes() { return sDecodes; }
+
 // A frame's video component, at most a read buffer long (the bound only matters for a damaged frame).
 s32 THPVideoDecode(void* file, void* tileY, void* tileU, void* tileV, void*) {
     if (!file || !tileY || !tileU || !tileV) return 1;

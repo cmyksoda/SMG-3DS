@@ -24,7 +24,8 @@
 #include <tuple>
 #include <vector>
 
-extern "C" void smgHeartbeat();  // source/compat/GameScene.cpp
+extern "C" void smgHeartbeat();          // source/compat/GameScene.cpp
+extern "C" unsigned smgMovieDecodes();  // source/compat/Thp.cpp
 
 namespace smg {
 namespace {
@@ -120,7 +121,7 @@ struct Renderer {
         u32 phaseFrames = 0;
         u32 frames = 0, primitives = 0, vertices = 0, triangles = 0, draws = 0, sameState = 0, color0Rides = 0;
         u32 changed[0x100] = {};  // per BP register: state rebuilds it took part in
-        u32 compilesBefore = gxTevCompiles();
+        u32 compilesBefore = gxTevCompiles(), moviesBefore = smgMovieDecodes();
     } perf;
     // The BP registers a draw reads and the TEV colour and konst words, as of the last state built.
     u32 bpAtBuild[0x100] = {}, colorAtBuild[8] = {}, konstAtBuild[8] = {};
@@ -344,10 +345,11 @@ struct Renderer {
         if (ms < 4000) return;
         const double n = perf.frames;
         const double phase = perf.phaseFrames ? 1000.0 / SYSCLOCK_ARM11 / perf.phaseFrames : 0;
-        std::fprintf(stderr, "gx perf: %lu frames, %.1f ms/frame: draw %.1f (%.1f of it waiting for the GPU and vblank), logic %.1f, "
+        // t= is the emulated clock (drives time their actions by it when Azahar runs faster than real time).
+        std::fprintf(stderr, "gx perf: t=%.0f, %lu frames, %.1f ms/frame: draw %.1f (%.1f of it waiting for the GPU and vblank), logic %.1f, "
                      "animation %.1f, retrace wait %.1f; per frame %.0f primitives (%.0f same state, %.0f with only C0 new), %.0f vertices, "
                      "%.0f triangles, %.0f draws\n",
-                     static_cast<unsigned long>(perf.frames), ms / n, perf.phaseTicks[0] * phase, perf.syncTicks * 1000.0 / SYSCLOCK_ARM11 / n,
+                     double(now) / SYSCLOCK_ARM11, static_cast<unsigned long>(perf.frames), ms / n, perf.phaseTicks[0] * phase, perf.syncTicks * 1000.0 / SYSCLOCK_ARM11 / n,
                      perf.phaseTicks[1] * phase, perf.phaseTicks[2] * phase, perf.phaseTicks[3] * phase, perf.primitives / n,
                      perf.sameState / n, perf.color0Rides / n, perf.vertices / n, perf.triangles / n, perf.draws / n);
         // The registers behind most state changes, so batching can be aimed at them.
@@ -360,8 +362,8 @@ struct Renderer {
             top += item;
             perf.changed[most - perf.changed] = 0;
         }
-        std::fprintf(stderr, "gx perf: TEV programs compiled %.1f per frame; state changes by BP register (per frame):%s\n",
-                     (gxTevCompiles() - perf.compilesBefore) / n, top.c_str());
+        std::fprintf(stderr, "gx perf: TEV programs compiled %.1f, movie frames decoded %.1f per frame; state changes by BP register (per frame):%s\n",
+                     (gxTevCompiles() - perf.compilesBefore) / n, (smgMovieDecodes() - perf.moviesBefore) / n, top.c_str());
         perf = Perf{};
         perf.since = now;
     }
