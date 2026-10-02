@@ -9,6 +9,31 @@ struct GxVertex {
     std::uint8_t color[2][4] = {};
 };
 
+class GxCommandProcessor;
+
+// A vertex format's layout, read once from the CP's descriptor (VCD), attribute table (VAT) and array registers: what
+// each vertex of a primitive is read by. It stays right while the processor's cpChanges stays the same.
+class GxVertexLayout {
+public:
+    GxVertexLayout() = default;
+    GxVertexLayout(const GxCommandProcessor& gpu, std::uint8_t format);
+    // Overwrites the attributes the format has; the others keep what `vertex` held.
+    void read(const std::uint8_t* at, GxVertex& vertex) const;
+    std::uint32_t size = 0;
+
+private:
+    // type: 0 none, 1 direct, 2 an 8-bit index, 3 a 16-bit one. count: components; skip: extra index bytes (NBT's three).
+    struct Attribute {
+        std::uint8_t type = 0, format = 0, count = 0, shift = 0, skip = 0, componentSize = 0, directSize = 0;
+        std::uint32_t base = 0, stride = 0;
+    };
+    const std::uint8_t* source(const Attribute& a, const std::uint8_t*& at) const;
+    const std::uint8_t* (*memory_)(std::uint32_t) = nullptr;
+    bool matrixIndex_ = false;
+    std::uint8_t texMatrixIndexes_ = 0;
+    Attribute position_, normal_, color_[2], texcoord_[8];
+};
+
 // The Wii GPU's command processor: the FIFO's big-endian stream, taken byte by byte as GX sends it. It keeps the
 // register loads, follows display lists and reports pixel-engine events; what it cannot take yet goes to `unsupported`.
 class GxCommandProcessor {
@@ -32,9 +57,14 @@ public:
     void put(unsigned stream, const std::uint8_t* bytes, std::uint32_t count);
     void put(const std::uint8_t* bytes, std::uint32_t count) { put(0, bytes, count); }
     // Bytes one vertex takes in a vertex format, by the CP's descriptor (VCD) and attribute table (VAT).
-    std::uint32_t vertexSize(std::uint8_t format) const;
+    std::uint32_t vertexSize(std::uint8_t format) const { return layout(format).size; }
+    // The format's layout, read again only after the CP's registers change.
+    const GxVertexLayout& layout(std::uint8_t format) const;
+    // Whether a draw reads BP register `address` (what bpChanges counts).
+    static bool drawsRead(std::uint32_t address);
     // One vertex from `at`; indexed attributes are read from the CP's arrays through the host's memory.
     GxVertex readVertex(const std::uint8_t* at, std::uint8_t format) const;
+    const std::uint8_t* (*memoryFunction() const)(std::uint32_t) { return host_.memory; }
     std::uint32_t pending(unsigned stream = 0) const { return pendingSize_[stream]; }
 
     std::uint32_t cp[0x100] = {};
@@ -42,14 +72,20 @@ public:
     std::uint32_t bp[0x100] = {};
     // BP 0xE0-0xE7 hold a TEV colour register or a konst colour by their type bit: the last write of each kind.
     std::uint32_t tevColor[8] = {}, tevKonst[8] = {};
+    // Loads that changed something, by kind: equal counts mean that part of the state is as it was. bpChanges counts only
+    // the BP registers a draw reads (TEV, textures, pixel tests, scissor, culling), so a run of primitives can share one draw.
+    std::uint32_t bpChanges = 0, xfChanges = 0, cpChanges = 0;
 
 private:
     // One command from `at` if all of it is there: its length, or 0 to wait for more bytes.
     std::uint32_t command(const std::uint8_t* at, std::uint32_t available);
     void run(const std::uint8_t* at, std::uint32_t size);
     void loadBp(std::uint32_t value);
+    void loadXf(std::uint32_t address, std::uint32_t count, const std::uint8_t* from, bool native);
 
     Host host_;
+    mutable GxVertexLayout layouts_[8];
+    mutable std::uint32_t layoutChanges_[8] = {~0u, ~0u, ~0u, ~0u, ~0u, ~0u, ~0u, ~0u};
     std::uint32_t bpMask_ = 0xFFFFFF;  // BP 0xFE: the bits the next BP load changes
     std::uint8_t pending_[Streams][0x10000];
     std::uint32_t pendingSize_[Streams] = {};

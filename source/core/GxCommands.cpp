@@ -21,6 +21,17 @@ std::uint32_t field(std::uint32_t reg, int shift, int size) { return reg >> shif
 // The CP's registers for vertices, as private/cp_reg.h and gd/GDGeometry.h number them.
 constexpr int VcdLo = 0x50, VcdHi = 0x60, VatA = 0x70, VatB = 0x80, VatC = 0x90, ArrayBase = 0xA0, ArrayStride = 0xB0;
 
+// The BP registers a draw reads (smg::readGxDrawState): generation mode, indirect stages, scissor, TEV orders, depth and
+// blend modes, the texture maps' modes, sizes and addresses, TEV stages and colours, alpha test, depth texture, konst selects.
+bool drawsReadRegister(std::uint32_t address) {
+    if (address == 0x00 || address == 0x20 || address == 0x21 || address == 0x40 || address == 0x41) return true;
+    if ((address >= 0x10 && address <= 0x1F) || (address >= 0x28 && address <= 0x2F) || (address >= 0xC0 && address <= 0xE7) ||
+        (address >= 0xF3 && address <= 0xFD))
+        return true;
+    const std::uint32_t map = address & 0xDF;  // 0x80-0x9F and 0xA0-0xBF: the same layout for maps 0-3 and 4-7
+    return (map >= 0x80 && map <= 0x83) || (map >= 0x88 && map <= 0x8B) || (map >= 0x94 && map <= 0x97);
+}
+
 // A component's bytes by its format: u8, s8, u16, s16, f32.
 std::uint32_t componentSize(std::uint32_t format) { return format == 4 ? 4 : format >= 2 ? 2 : 1; }
 float component(const std::uint8_t* at, std::uint32_t format, std::uint32_t shift, bool native) {
@@ -64,72 +75,103 @@ void readColor(const std::uint8_t* at, std::uint32_t format, bool native, std::u
 }
 } // namespace
 
-std::uint32_t GxCommandProcessor::vertexSize(std::uint8_t format) const {
-    const std::uint32_t lo = cp[VcdLo], hi = cp[VcdHi], a = cp[VatA + format], b = cp[VatB + format], c = cp[VatC + format];
-    std::uint32_t size = 0;
-    for (int i = 0; i < 9; ++i) size += field(lo, i, 1);  // the position/normal matrix index and eight texture matrix indices
-    const auto attribute = [&](std::uint32_t type, std::uint32_t direct, std::uint32_t indexes = 1) {
-        return type == 0 ? 0 : type == 1 ? direct : type == 2 ? indexes : 2 * indexes;
-    };
-    size += attribute(field(lo, 9, 2), (field(a, 0, 1) + 2) * componentSize(field(a, 1, 3)));
-    const bool nbt = field(a, 9, 1), threeIndexes = nbt && field(a, 31, 1);
-    size += attribute(field(lo, 11, 2), (nbt ? 9 : 3) * componentSize(field(a, 10, 3)), threeIndexes ? 3 : 1);
-    size += attribute(field(lo, 13, 2), colorSize(field(a, 14, 3)));
-    size += attribute(field(lo, 15, 2), colorSize(field(a, 18, 3)));
-    // Each coordinate set's count and format, from VAT A, B and C in turn.
-    const std::uint32_t tex[8][2] = {{field(a, 21, 1), field(a, 22, 3)}, {field(b, 0, 1), field(b, 1, 3)}, {field(b, 9, 1), field(b, 10, 3)},
-                                     {field(b, 18, 1), field(b, 19, 3)}, {field(b, 27, 1), field(b, 28, 3)}, {field(c, 5, 1), field(c, 6, 3)},
-                                     {field(c, 14, 1), field(c, 15, 3)}, {field(c, 23, 1), field(c, 24, 3)}};
-    for (int i = 0; i < 8; ++i) size += attribute(field(hi, 2 * i, 2), (tex[i][0] + 1) * componentSize(tex[i][1]));
-    return size;
-}
-
-GxVertex GxCommandProcessor::readVertex(const std::uint8_t* at, std::uint8_t format) const {
-    const std::uint32_t lo = cp[VcdLo], hi = cp[VcdHi], a = cp[VatA + format], b = cp[VatB + format], c = cp[VatC + format];
-    GxVertex vertex;
-    if (field(lo, 0, 1)) vertex.matrixIndex = *at++;
-    for (int i = 0; i < 8; ++i) if (field(lo, 1 + i, 1)) vertex.texMatrixIndex[i] = *at++;
-    // An attribute's own bytes: in the stream when direct, else in its array at the index the stream gives.
-    bool native = false;
-    const auto source = [&](std::uint32_t type, int array, std::uint32_t directSize) -> const std::uint8_t* {
-        native = type != 1;
-        if (type == 1) { const std::uint8_t* here = at; at += directSize; return here; }
-        const std::uint32_t index = type == 2 ? *at : half(at);
-        at += type == 2 ? 1 : 2;
-        return host_.memory(cp[ArrayBase + array] + index * cp[ArrayStride + array]);
-    };
-    if (const std::uint32_t type = field(lo, 9, 2)) {
-        const std::uint32_t count = field(a, 0, 1) + 2, fmt = field(a, 1, 3), size = componentSize(fmt);
-        const std::uint8_t* data = source(type, 0, count * size);
-        for (std::uint32_t i = 0; i < count; ++i) vertex.position[i] = component(data + i * size, fmt, field(a, 4, 5), native);
+GxVertexLayout::GxVertexLayout(const GxCommandProcessor& gpu, std::uint8_t format) : memory_(nullptr) {
+    const std::uint32_t lo = gpu.cp[VcdLo], hi = gpu.cp[VcdHi], a = gpu.cp[VatA + format], b = gpu.cp[VatB + format], c = gpu.cp[VatC + format];
+    matrixIndex_ = field(lo, 0, 1);
+    size = matrixIndex_;
+    for (int i = 0; i < 8; ++i) {
+        texMatrixIndexes_ |= static_cast<std::uint8_t>(field(lo, 1 + i, 1) << i);
+        size += field(lo, 1 + i, 1);
     }
-    if (const std::uint32_t type = field(lo, 11, 2)) {
+    const auto set = [&](Attribute& at, std::uint32_t type, int array, std::uint32_t fmt, std::uint32_t count, std::uint32_t shift, std::uint32_t direct) {
+        at.type = static_cast<std::uint8_t>(type), at.format = static_cast<std::uint8_t>(fmt), at.count = static_cast<std::uint8_t>(count);
+        at.shift = static_cast<std::uint8_t>(shift), at.componentSize = static_cast<std::uint8_t>(componentSize(fmt));
+        at.base = gpu.cp[ArrayBase + array], at.stride = gpu.cp[ArrayStride + array], at.directSize = static_cast<std::uint8_t>(direct);
+        size += type == 0 ? 0 : type == 1 ? direct : type == 2 ? 1 + at.skip : 2 + at.skip;
+    };
+    set(position_, field(lo, 9, 2), 0, field(a, 1, 3), field(a, 0, 1) + 2, field(a, 4, 5), (field(a, 0, 1) + 2) * componentSize(field(a, 1, 3)));
+    {
         // Normals take a fixed point by their format: six fraction bits for s8, fourteen for s16.
-        const std::uint32_t fmt = field(a, 10, 3), size = componentSize(fmt), shift = fmt == 1 ? 6 : fmt == 3 ? 14 : 0;
+        const std::uint32_t fmt = field(a, 10, 3), type = field(lo, 11, 2);
         const bool nbt = field(a, 9, 1), threeIndexes = nbt && field(a, 31, 1);
-        const std::uint8_t* data = source(type, 1, (nbt ? 9 : 3) * size);
-        if (threeIndexes && type != 1) at += 2 * (type == 2 ? 1 : 2);  // binormal and tangent indexes, not kept
-        for (int i = 0; i < 3; ++i) vertex.normal[i] = component(data + i * size, fmt, shift, native);
+        if (threeIndexes && type >= 2) normal_.skip = static_cast<std::uint8_t>(2 * (type == 2 ? 1 : 2));  // binormal and tangent indexes, not kept
+        set(normal_, type, 1, fmt, 3, fmt == 1 ? 6 : fmt == 3 ? 14 : 0, (nbt ? 9 : 3) * componentSize(fmt));
     }
     for (int channel = 0; channel < 2; ++channel) {
-        if (const std::uint32_t type = field(lo, 13 + 2 * channel, 2)) {
-            const std::uint32_t fmt = field(a, 14 + 4 * channel, 3);
-            const std::uint8_t* data = source(type, 2 + channel, colorSize(fmt));
-            readColor(data, fmt, native, vertex.color[channel]);
-        }
+        const std::uint32_t fmt = field(a, 14 + 4 * channel, 3);
+        set(color_[channel], field(lo, 13 + 2 * channel, 2), 2 + channel, fmt, 0, 0, colorSize(fmt));
     }
+    // Each coordinate set's count, format and shift, from VAT A, B and C in turn.
     const std::uint32_t tex[8][3] = {{field(a, 21, 1), field(a, 22, 3), field(a, 25, 5)}, {field(b, 0, 1), field(b, 1, 3), field(b, 4, 5)},
                                      {field(b, 9, 1), field(b, 10, 3), field(b, 13, 5)}, {field(b, 18, 1), field(b, 19, 3), field(b, 22, 5)},
                                      {field(b, 27, 1), field(b, 28, 3), field(c, 0, 5)}, {field(c, 5, 1), field(c, 6, 3), field(c, 9, 5)},
                                      {field(c, 14, 1), field(c, 15, 3), field(c, 18, 5)}, {field(c, 23, 1), field(c, 24, 3), field(c, 27, 5)}};
-    for (int i = 0; i < 8; ++i) {
-        if (const std::uint32_t type = field(hi, 2 * i, 2)) {
-            const std::uint32_t count = tex[i][0] + 1, size = componentSize(tex[i][1]);
-            const std::uint8_t* data = source(type, 4 + i, count * size);
-            for (std::uint32_t k = 0; k < count; ++k) vertex.texcoord[i][k] = component(data + k * size, tex[i][1], tex[i][2], native);
-        }
+    for (int i = 0; i < 8; ++i)
+        set(texcoord_[i], field(hi, 2 * i, 2), 4 + i, tex[i][1], tex[i][0] + 1, tex[i][2], (tex[i][0] + 1) * componentSize(tex[i][1]));
+    memory_ = gpu.memoryFunction();
+}
+
+// An attribute's own bytes: in the stream when direct, else in its array at the index the stream gives.
+const std::uint8_t* GxVertexLayout::source(const Attribute& a, const std::uint8_t*& at) const {
+    if (a.type == 1) {
+        const std::uint8_t* here = at;
+        at += a.directSize;
+        return here;
     }
+    const std::uint32_t index = a.type == 2 ? *at : half(at);
+    at += (a.type == 2 ? 1 : 2) + a.skip;
+    return memory_(a.base + index * a.stride);
+}
+
+void GxVertexLayout::read(const std::uint8_t* at, GxVertex& vertex) const {
+    if (matrixIndex_) vertex.matrixIndex = *at++;
+    if (texMatrixIndexes_)
+        for (int i = 0; i < 8; ++i) if (texMatrixIndexes_ >> i & 1) vertex.texMatrixIndex[i] = *at++;
+    if (position_.type) {
+        const std::uint8_t* data = source(position_, at);
+        const bool native = position_.type != 1;
+        for (std::uint32_t i = 0; i < position_.count; ++i)
+            vertex.position[i] = component(data + i * position_.componentSize, position_.format, position_.shift, native);
+    }
+    if (normal_.type) {
+        const std::uint8_t* data = source(normal_, at);
+        const bool native = normal_.type != 1;
+        for (int i = 0; i < 3; ++i) vertex.normal[i] = component(data + i * normal_.componentSize, normal_.format, normal_.shift, native);
+    }
+    for (int channel = 0; channel < 2; ++channel) {
+        const Attribute& c = color_[channel];
+        if (c.type) readColor(source(c, at), c.format, c.type != 1, vertex.color[channel]);
+    }
+    for (int i = 0; i < 8; ++i) {
+        const Attribute& t = texcoord_[i];
+        if (!t.type) continue;
+        const std::uint8_t* data = source(t, at);
+        for (std::uint32_t k = 0; k < t.count; ++k) vertex.texcoord[i][k] = component(data + k * t.componentSize, t.format, t.shift, t.type != 1);
+    }
+}
+
+bool GxCommandProcessor::drawsRead(std::uint32_t address) { return drawsReadRegister(address); }
+
+const GxVertexLayout& GxCommandProcessor::layout(std::uint8_t format) const {
+    format &= 7;
+    if (layoutChanges_[format] != cpChanges) layouts_[format] = GxVertexLayout(*this, format), layoutChanges_[format] = cpChanges;
+    return layouts_[format];
+}
+
+GxVertex GxCommandProcessor::readVertex(const std::uint8_t* at, std::uint8_t format) const {
+    GxVertex vertex;
+    layout(format).read(at, vertex);
     return vertex;
+}
+
+void GxCommandProcessor::loadXf(std::uint32_t address, std::uint32_t count, const std::uint8_t* from, bool native) {
+    bool changed = false;
+    for (std::uint32_t i = 0; i < count && address + i < sizeof xf / sizeof *xf; ++i) {
+        const std::uint32_t value = word(from + i * 4, native);
+        changed |= xf[address + i] != value;
+        xf[address + i] = value;
+    }
+    xfChanges += changed;
 }
 
 void GxCommandProcessor::loadBp(std::uint32_t value) {
@@ -140,6 +182,7 @@ void GxCommandProcessor::loadBp(std::uint32_t value) {
     }
     const std::uint32_t data = (bp[address] & ~bpMask_) | (value & bpMask_);
     bpMask_ = 0xFFFFFF;
+    if (bp[address] != data && drawsReadRegister(address)) ++bpChanges;
     bp[address] = data;
     if (address >= 0xE0 && address <= 0xE7) (data >> 23 & 1 ? tevKonst : tevColor)[address - 0xE0] = data;
     if (address == 0x45) host_.drawDone();                                    // PE_DONE
@@ -164,15 +207,15 @@ std::uint32_t GxCommandProcessor::command(const std::uint8_t* at, std::uint32_t 
     if (opcode == 0x00 || opcode == 0x48) return 1;  // NOP; invalidate the vertex cache, which the port has none of
     if (opcode == 0x08) {                           // load a CP register
         if (available < 6) return 0;
-        cp[at[1]] = word(at + 2);
+        const std::uint32_t value = word(at + 2);
+        if (cp[at[1]] != value) cp[at[1]] = value, ++cpChanges;
         return 6;
     }
     if (opcode == 0x10) {  // load XF registers: the count less one, then the first address
         if (available < 5) return 0;
         const std::uint32_t header = word(at + 1), count = (header >> 16) + 1, address = header & 0xFFFF;
         if (available < 5 + count * 4) return 0;
-        for (std::uint32_t i = 0; i < count; ++i)
-            if (address + i < sizeof xf / sizeof *xf) xf[address + i] = word(at + 5 + i * 4);
+        loadXf(address, count, at + 5, false);
         return 5 + count * 4;
     }
     if (opcode == 0x61) {  // load a BP register
@@ -203,8 +246,7 @@ std::uint32_t GxCommandProcessor::command(const std::uint8_t* at, std::uint32_t 
             return 5;
         }
         // The CPU wrote these (J3D's matrices, GX's light objects): read in its order, as indexed vertex arrays are.
-        for (std::uint32_t i = 0; i < count; ++i)
-            if (address + i < sizeof xf / sizeof *xf) xf[address + i] = word(from + i * 4, true);
+        loadXf(address, count, from, true);
         return 5;
     }
     host_.unsupported("an opcode the Wii's GPU does not know", opcode);
