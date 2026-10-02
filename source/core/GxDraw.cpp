@@ -222,6 +222,8 @@ struct TevKey {
     TevStage stages[16];
 };
 
+std::uint32_t tevCompiles = 0;
+
 const CombinerProgram& cachedTev(const ModelMaterial& m) {
     TevKey key;
     std::memset(static_cast<void*>(&key), 0, sizeof key);
@@ -241,12 +243,15 @@ const CombinerProgram& cachedTev(const ModelMaterial& m) {
     thread_local std::unordered_map<std::uint64_t, Entry> cache;
     if (auto found = cache.find(hash); found != cache.end() && !std::memcmp(&found->second.key, &key, length)) return found->second.program;
     if (cache.size() > 4096) cache.clear();
+    ++tevCompiles;
     Entry& entry = cache[hash];
     entry.key = key;
     entry.program = compileTev(m);
     return entry.program;
 }
 } // namespace
+
+std::uint32_t gxTevCompiles() { return tevCompiles; }
 
 void readGxDrawState(const GxCommandProcessor& gpu, GxDrawState& out) {
     out = GxDrawState{};
@@ -288,6 +293,22 @@ bool GxVertexPipeline::prepare(const GxCommandProcessor& gpu, const GxDrawState&
         const std::uint32_t post = gpu.xf[XfPostTexGen + coord];
         t.normalize = XF_DUALTEX_F_GET_NORMAL_ENABLE(post);
         t.post = XfPostMatrices / 4 + XF_DUALTEX_F_GET_DUALMATRIX_ADRS(post);
+        t.folded = !t.perVertexMatrix && !(t.dual && t.normalize);
+        if (t.folded && !foldStillHolds(t, ctrl, post)) {
+            // The matrix's rows (a third of (0, 0, 0, 1) without projection), then the dual transform over them.
+            double m[3][4] = {{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 1}};
+            for (int r = 0; r < t.rows; ++r)
+                for (int c = 0; c < 4; ++c) m[r][c] = matrix(t.matrix + r, c);
+            for (int r = 0; r < 3; ++r)
+                for (int c = 0; c < 4; ++c) {
+                    double sum = m[r][c];
+                    if (t.dual) {
+                        sum = c == 3 ? matrix(t.post + r, 3) : 0;
+                        for (int k = 0; k < 3; ++k) sum += matrix(t.post + r, k) * m[k][c];
+                    }
+                    t.fold[r][c] = static_cast<float>(sum);
+                }
+        }
     }
     if (gpu.xfChanges == xfSeen_ && frame == frameSeen_) return true;
     xfSeen_ = gpu.xfChanges, clipReady_ = 0;
@@ -323,6 +344,23 @@ bool GxVertexPipeline::prepare(const GxCommandProcessor& gpu, const GxDrawState&
     return true;
 }
 
+// A primitive's texgen usually reuses the last one's matrices: their words are compared rather than folded again.
+bool GxVertexPipeline::foldStillHolds(TexGen& t, std::uint32_t ctrl, std::uint32_t post) const {
+    if (t.foldXf == gpu_->xfChanges && t.sourceWords && t.source_[0] == t.coord && t.source_[1] == ctrl) return true;
+    std::uint32_t words[32];
+    std::uint32_t n = 0;
+    words[n++] = t.coord, words[n++] = ctrl, words[n++] = t.dual, words[n++] = post, words[n++] = t.matrix;
+    for (int r = 0; r < t.rows; ++r)
+        for (int c = 0; c < 4; ++c) words[n++] = gpu_->xf[((t.matrix + r) * 4 + c) & 0xFFF];
+    if (t.dual)
+        for (int r = 0; r < 3; ++r)
+            for (int c = 0; c < 4; ++c) words[n++] = gpu_->xf[((t.post + r) * 4 + c) & 0xFFF];
+    const bool same = n == t.sourceWords && !std::memcmp(words, t.source_, n * 4);
+    std::memcpy(t.source_, words, n * 4);
+    t.sourceWords = n, t.foldXf = gpu_->xfChanges;
+    return same;
+}
+
 // A position matrix (three rows from `index`) through toClip_: one 4x4 per vertex instead of a matrix, the projection
 // and the viewport.
 const float* GxVertexPipeline::clipMatrix(std::uint32_t index) {
@@ -346,8 +384,15 @@ void GxVertexPipeline::texgen(const TexGen& t, const GxVertex& v, float st[2]) c
     else if (t.source == 1) std::memcpy(in, v.normal, sizeof v.normal);
     else in[0] = v.texcoord[t.source - 5][0], in[1] = v.texcoord[t.source - 5][1];
     if (!t.threeInputs) in[2] = 1;
+    float c[3];
+    if (t.folded) {
+        for (int r = 0; r < 3; ++r) c[r] = t.fold[r][0] * in[0] + t.fold[r][1] * in[1] + t.fold[r][2] * in[2] + t.fold[r][3];
+        if (std::fabs(c[2] - 1) > 1e-5f && c[2] != 0) st[0] = c[0] / c[2], st[1] = c[1] / c[2];
+        else st[0] = c[0], st[1] = c[1];
+        return;
+    }
     const std::uint32_t index = t.perVertexMatrix ? v.texMatrixIndex[t.coord] : t.matrix;
-    float c[3] = {0, 0, 1};
+    c[0] = 0, c[1] = 0, c[2] = 1;
     for (int r = 0; r < t.rows; ++r)
         c[r] = matrix(index + r, 0) * in[0] + matrix(index + r, 1) * in[1] + matrix(index + r, 2) * in[2] + matrix(index + r, 3) * in[3];
     if (t.dual) {

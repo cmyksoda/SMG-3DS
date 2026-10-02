@@ -51,6 +51,8 @@ struct GxDrawState {
     const char* unsupported = nullptr;
 };
 void readGxDrawState(const GxCommandProcessor& gpu, GxDrawState& out);
+// TEV programs compiled so far (readGxDrawState keeps each by what compileTev reads): how often its cache missed.
+std::uint32_t gxTevCompiles();
 
 // One primitive as triangles, for tests and tools: the state, and every surviving triangle's three vertices.
 struct GxDraw : GxDrawState {
@@ -75,8 +77,15 @@ private:
         std::uint8_t source = 0, coord = 0, rows = 2;
         bool threeInputs = false, perVertexMatrix = false, dual = false, normalize = false;
         std::uint32_t matrix = 0, post = 0;
+        // With one matrix for the whole primitive and no normalizing, the texgen is one affine map: the matrix and the
+        // dual transform folded together (the input's fourth component is always one).
+        bool folded = false;
+        float fold[3][4] = {};
+        // What the fold was made from (setup, then the matrices' words), and the XF change count it was checked at.
+        std::uint32_t source_[32] = {}, sourceWords = 0, foldXf = ~0u;
     };
     const float* clipMatrix(std::uint32_t index);
+    bool foldStillHolds(TexGen& t, std::uint32_t ctrl, std::uint32_t post) const;
     void texgen(const TexGen& t, const GxVertex& v, float st[2]) const;
     float matrix(std::uint32_t row, int column) const;
 

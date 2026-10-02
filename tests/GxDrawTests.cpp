@@ -298,6 +298,37 @@ void pipelineAcrossPrimitives() {
     gpu.put(changed.bytes.data(), static_cast<std::uint32_t>(changed.bytes.size()));
     check(gpu.bpChanges == before + 1, "a TEV stage that changes counts");
 }
+
+// A texgen through a texture matrix and the dual transform, as one folded map; loading another matrix between
+// primitives changes the next one's coordinates.
+void dualTexgen() {
+    auto owned = std::make_unique<smg::GxCommandProcessor>(host());
+    smg::GxCommandProcessor& gpu = *owned;
+    Stream s;
+    clearState(s);
+    s.bp(0xC008FFF8);                                          // colour (0, 0, 0, TEXC): texture 0 takes a unit
+    s.xff(30 * 4, {2, 0, 0, 0.5f, 0, 3, 0, 0.25f});            // texture matrix at row 30, two rows (ST)
+    s.xf(0x1018, {30 << 6});                                   // texgen 0's matrix
+    s.xf(0x1012, {1}), s.xf(0x1050, {0});                      // dual transform on, post matrix 0, not normalized
+    s.xff(0x500, {1, 0, 0, 0.1f, 0, 1, 0, 0.2f, 0, 0, 1, 0});  // post matrix 0: an offset
+    quad(s, {0, 1, 3, 2});
+    drawn.clear();
+    gpu.put(s.bytes.data(), static_cast<std::uint32_t>(s.bytes.size()));
+    smg::GxDrawState state;
+    smg::readGxDrawState(gpu, state);
+    smg::GxVertexPipeline pipeline;
+    smg::GxDrawVertex v[4];
+    std::uint16_t indices[12];
+    pipeline.prepare(gpu, state, {}, drawn[0].kind, drawn[0].format);
+    pipeline.run(drawn[0].data.data(), 4, v, 0, indices);
+    check(near(v[2].texcoord[0][0], 2.6f) && near(v[2].texcoord[0][1], 3.45f), "the texture matrix, then the post matrix's offset");
+    Stream other;
+    other.xff(30 * 4, {1, 0, 0, 0, 0, 1, 0, 0});
+    gpu.put(other.bytes.data(), static_cast<std::uint32_t>(other.bytes.size()));
+    pipeline.prepare(gpu, state, {}, drawn[0].kind, drawn[0].format);
+    pipeline.run(drawn[0].data.data(), 4, v, 0, indices);
+    check(near(v[2].texcoord[0][0], 1.1f) && near(v[2].texcoord[0][1], 1.2f), "a texture matrix loaded between primitives takes effect");
+}
 } // namespace
 
 // nw4r's layout material: black (C0) to white (C1) by the texture, which is the texture itself. The material keeps
@@ -339,6 +370,7 @@ int runGxDrawTests() {
     perspective();
     channels();
     pipelineAcrossPrimitives();
+    dualTexgen();
     std::printf("%u GX draw checks passed\n", checks);
     return 0;
 }
