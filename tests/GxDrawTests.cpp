@@ -362,6 +362,44 @@ void color0Rides() {
     smg::readGxDrawState(gpu, state);
     check(!state.color0InVertex, "a program that reads the rasterized colour keeps C0 a constant");
 }
+
+// The GPU path: a display list of primitives decodes once into model-space vertices and triangles; its uniforms move a
+// vertex where the CPU path would, and a list with anything but primitives stays the CPU's.
+void meshFromDisplayList() {
+    auto owned = std::make_unique<smg::GxCommandProcessor>(host());
+    smg::GxCommandProcessor& gpu = *owned;
+    Stream s;
+    clearState(s);
+    s.bp(0xC008FFF8);  // colour (0, 0, 0, TEXC): texture 0 through the identity texgen
+    gpu.put(s.bytes.data(), static_cast<std::uint32_t>(s.bytes.size()));
+    Stream list;
+    quad(list, {0, 1, 3, 2});
+    while (list.bytes.size() % 32) list.u8(0);  // GX pads a display list with NOPs
+    smg::GxDrawState state;
+    smg::readGxDrawState(gpu, state);
+    smg::GxVertexPipeline pipeline;
+    check(pipeline.prepare(gpu, state, {}, 0x90, 0) && pipeline.meshEligible() == smg::GxVertexPipeline::MeshOk, "an unlit, textured state can take the GPU path");
+    smg::GxMesh mesh;
+    check(pipeline.buildMesh(list.bytes.data(), static_cast<std::uint32_t>(list.bytes.size()), mesh) == smg::GxVertexPipeline::MeshOk, "a list of primitives decodes");
+    check(mesh.vertices.size() == 4 && mesh.indices.size() == 6, "a quad is four vertices and two triangles");
+    check(near(mesh.vertices[2].position[0], 640) && near(mesh.vertices[2].position[1], 480), "positions stay in model space");
+    check(near(mesh.vertices[2].source[0][0], 1) && near(mesh.vertices[2].source[0][1], 1) && near(mesh.vertices[2].source[0][2], 1),
+          "each texgen's input comes along, its third component one for a texture coordinate");
+    smg::GxMeshUniforms uniforms;
+    pipeline.meshUniforms(mesh.slots, uniforms);
+    const float* m = uniforms.clip[0];
+    const float* p = mesh.vertices[0].position;
+    float clip[4];
+    for (int r = 0; r < 4; ++r) clip[r] = m[r * 4] * p[0] + m[r * 4 + 1] * p[1] + m[r * 4 + 2] * p[2] + m[r * 4 + 3];
+    check(uniforms.slots == 1 && near(clip[0] / clip[3], -1) && near(clip[1] / clip[3], 1), "the draw's matrix puts the top left at (-1, 1)");
+    check(uniforms.units == 1 && near(uniforms.texgen[0][0][0], 1) && near(uniforms.texgen[0][1][1], 1) && !uniforms.projective[0],
+          "the texgen's rows ride along as uniforms");
+    Stream state0;
+    state0.bp(0xC008FFF2);
+    state0.bytes.insert(state0.bytes.end(), list.bytes.begin(), list.bytes.end());
+    check(pipeline.buildMesh(state0.bytes.data(), static_cast<std::uint32_t>(state0.bytes.size()), mesh) == smg::GxVertexPipeline::MeshCommand,
+          "a list with state commands stays the CPU's");
+}
 } // namespace
 
 // nw4r's layout material: black (C0) to white (C1) by the texture, which is the texture itself. The material keeps
@@ -405,6 +443,7 @@ int runGxDrawTests() {
     pipelineAcrossPrimitives();
     dualTexgen();
     color0Rides();
+    meshFromDisplayList();
     std::printf("%u GX draw checks passed\n", checks);
     return 0;
 }

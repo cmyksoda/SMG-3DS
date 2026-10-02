@@ -573,6 +573,112 @@ std::size_t GxVertexPipeline::run(const std::uint8_t* data, std::uint16_t count,
     return n;
 }
 
+bool GxVertexPipeline::meshColorFromVertex() const {
+    return channel_ && !color0InVertex_ && (lighting_.parts[0].materialFromVertex || lighting_.parts[1].materialFromVertex);
+}
+
+unsigned GxVertexPipeline::meshEligible() const {
+    if (unsupported) return MeshUnsupported;
+    if (fixedDepth_) return MeshDepthTexture;
+    if (lit_) return MeshLit;
+    for (unsigned u = 0; u < units_; ++u)
+        if (!texgens_[u].folded || texgens_[u].perVertexMatrix) return MeshTexgen;
+    return MeshOk;
+}
+
+unsigned GxVertexPipeline::buildMesh(const std::uint8_t* list, std::uint32_t size, GxMesh& mesh) const {
+    mesh = GxMesh{};
+    mesh.arraysLo = reinterpret_cast<const std::uint8_t*>(UINTPTR_MAX), mesh.arraysHi = nullptr;
+    const bool fromVertex = meshColorFromVertex();
+    std::uint32_t at = 0;
+    while (at < size) {
+        const std::uint8_t op = list[at];
+        if (op == 0x00) {
+            ++at;
+            continue;
+        }
+        if (op < 0x80 || op >= 0xA8 || at + 3 > size) return MeshCommand;  // state commands, lines and points stay the CPU's
+        const std::uint8_t kind = op & 0xF8;
+        const std::uint16_t count = static_cast<std::uint16_t>(list[at + 1] << 8 | list[at + 2]);
+        const GxVertexLayout& layout = gpu_->layout(op & 7);
+        mesh.formats = static_cast<std::uint8_t>(mesh.formats | 1u << (op & 7));
+        if (at + 3 + std::uint32_t(count) * layout.size > size) return MeshCommand;
+        const std::size_t first = mesh.vertices.size();
+        if (first + count > 0x10000) return MeshTooLarge;
+        GxVertex v;  // attributes the format lacks stay zero for every vertex
+        for (std::uint16_t i = 0; i < count; ++i) {
+            layout.read(list + at + 3 + std::uint32_t(i) * layout.size, v);
+            layout.indexedSpan(list + at + 3 + std::uint32_t(i) * layout.size, mesh.arraysLo, mesh.arraysHi);
+            GxMeshVertex m{};
+            std::memcpy(m.position, v.position, sizeof m.position);
+            if (fromVertex) std::memcpy(m.color, v.color[0], 4);
+            for (unsigned u = 0; u < units_; ++u) {
+                const TexGen& t = texgens_[u];
+                float* in = m.source[u];
+                if (t.source == 0) std::memcpy(in, v.position, 12);
+                else if (t.source == 1) std::memcpy(in, v.normal, 12);
+                else in[0] = v.texcoord[t.source - 5][0], in[1] = v.texcoord[t.source - 5][1], in[2] = 1;
+                if (!t.threeInputs) in[2] = 1;
+            }
+            if (perVertexMatrix_) {
+                if (v.matrixIndex % 3 || v.matrixIndex >= 30) return MeshMatrixIndex;
+                m.slot = static_cast<float>(v.matrixIndex / 3 * 4);
+                mesh.slots = static_cast<std::uint16_t>(mesh.slots | 1u << (v.matrixIndex / 3));
+            }
+            mesh.vertices.push_back(m);
+        }
+        const auto triangle = [&](int a, int b, int c) {
+            for (int k : {a, b, c}) mesh.indices.push_back(static_cast<std::uint16_t>(first + k));
+        };
+        switch (kind) {
+        case 0x80: case 0x88:  // quads
+            for (int i = 0; i + 3 < count; i += 4) triangle(i, i + 1, i + 2), triangle(i, i + 2, i + 3);
+            break;
+        case 0x90:  // triangles
+            for (int i = 0; i + 2 < count; i += 3) triangle(i, i + 1, i + 2);
+            break;
+        case 0x98:  // a strip: every other triangle turns the other way
+            for (int i = 0; i + 2 < count; ++i) i & 1 ? triangle(i + 1, i, i + 2) : triangle(i, i + 1, i + 2);
+            break;
+        case 0xA0:  // a fan
+            for (int i = 1; i + 1 < count; ++i) triangle(0, i, i + 1);
+            break;
+        }
+        at += 3 + std::uint32_t(count) * layout.size;
+    }
+    return mesh.indices.empty() ? MeshEmpty : MeshOk;
+}
+
+std::uint32_t GxVertexPipeline::meshSources() const {
+    std::uint32_t key = units_;
+    for (unsigned u = 0; u < units_; ++u) key |= std::uint32_t(texgens_[u].source | texgens_[u].threeInputs << 4) << (2 + 8 * u);
+    return key;
+}
+
+void GxVertexPipeline::meshUniforms(std::uint16_t slots, GxMeshUniforms& out) {
+    out.slots = 0;
+    if (perVertexMatrix_) {
+        for (unsigned slot = 0; slot < 10; ++slot)
+            if (slots >> slot & 1) std::memcpy(out.clip[slot], clipMatrix(slot * 3), sizeof out.clip[slot]), out.slots |= 1u << slot;
+    } else {
+        std::memcpy(out.clip[0], clipMatrix(defaultMatrix_), sizeof out.clip[0]);
+        out.slots = 1;
+    }
+    out.units = units_;
+    for (unsigned u = 0; u < units_; ++u) {
+        std::memcpy(out.texgen[u], texgens_[u].fold, sizeof out.texgen[u]);
+        const float* q = texgens_[u].fold[2];
+        out.projective[u] = !(q[0] == 0 && q[1] == 0 && q[2] == 0 && q[3] == 1);
+    }
+    out.fixedColor = !meshColorFromVertex();
+    out.rgbFromVertex = !out.fixedColor && lighting_.parts[0].materialFromVertex;
+    out.alphaFromVertex = !out.fixedColor && lighting_.parts[1].materialFromVertex;
+    if (color0InVertex_) std::memcpy(out.color, color0_, 4);
+    else if (!channel_) std::memset(out.color, 0, 4);
+    else std::memcpy(out.color, lighting_.material, 4);
+    out.reject = reject_;
+}
+
 void buildGxDraw(const GxCommandProcessor& gpu, std::uint8_t kind, std::uint8_t format, std::uint16_t count, const std::uint8_t* vertices,
                  const GxFrame& frame, GxDraw& out) {
     std::vector<GxDrawVertex> triangles = std::move(out.triangles);
