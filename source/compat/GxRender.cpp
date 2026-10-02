@@ -184,8 +184,11 @@ struct Renderer {
         u32 meshInvalidated = 0, meshOverflows = 0, meshBudgetDrops = 0, meshMismatches = 0, flushesQueued = 0;
         u64 timed[6] = {};  // dev.gx_timing: CPU-path primitives (immediate, in lists), display lists (mesh draws), texture copies, movie, frame ends
         u64 cpuCopyTicks = 0;  // of the texture copies, those read back and encoded on the CPU
-        u64 stepTicks[6] = {};  // dev.gx_timing: building the draw state, applying it, preparing the vertex pipeline; of the
-        u32 steps[6] = {};      // first, reading GX's state, the per-register stats, the pixel state
+        // dev.gx_timing: building the draw state, applying it, preparing the vertex pipeline; of the first, reading GX's
+        // state, the per-register stats, the pixel state; the CPU path's vertices and draws; a mesh's lookup, uniforms, draw.
+        u64 stepTicks[11] = {};
+        u32 steps[11] = {};
+        u32 stateHits = 0, stateMisses = 0;
         u32 cpuCopies = 0, gpuCopies = 0;
         u32 meshesChecked = 0, meshesDiffering = 0;  // dev.gx_check
         u32 listVertices = 0;
@@ -380,6 +383,7 @@ struct Renderer {
         if (scissorEmpty || !count) return;
         if (!inFrame) begin();
         roomFor(count);
+        const Step step(perf, 6);
         indexUsed += pipeline.run(data, count, vertices + used, static_cast<std::uint16_t>(used), indices + indexUsed);
         used += count;
     }
@@ -424,8 +428,10 @@ struct Renderer {
         for (u32 w : stateWords) hash = (hash ^ w) * 0x100000001B3ull;
         if (auto found = states.find(hash); found != states.end() && found->second.words == stateWords) {
             stateEntry = &found->second;
+            ++perf.stateHits;
             return void(state = found->second.state);
         }
+        ++perf.stateMisses;
         readGxDrawState(gpu, state);
         if (states.size() >= 512) states.clear();
         CachedState& entry = states[hash];
@@ -447,6 +453,12 @@ struct Renderer {
         int which_;
         u64 start_;
     };
+
+    // dev.gx_timing: a step's clock where a scope doesn't fit.
+    u64 stepStart() const { return Step::timing() ? svcGetSystemTick() : 0; }
+    void stepEnd(int which, u64 start) {
+        if (start) perf.stepTicks[which] += svcGetSystemTick() - start, ++perf.steps[which];
+    }
 
     void buildState(const GxCommandProcessor& gpu) {
         flushBatch();
@@ -663,6 +675,7 @@ struct Renderer {
         if (!prepared) return ++perf.refused[GxVertexPipeline::MeshUnsupported], GxVertexPipeline::MeshUnsupported;
         if (scissorEmpty) return GxVertexPipeline::MeshEmpty;
         if (const unsigned why = pipeline.meshEligible()) return ++perf.refused[why], why;
+        const u64 lookup = stepStart();
         // The key: the list, its first and last words (another list at a freed address differs), where the colour comes
         // from and the texgens' sources. The CP registers its vertices were read under are checked apart, only those it
         // uses: other formats' tables and the matrix arrays (12-15) change every frame without touching it.
@@ -678,6 +691,7 @@ struct Renderer {
         if (found != meshes.end() && !stale)
             for (const auto& [reg, value] : found->second.depends) stale |= gpu.cp[reg] != value;
         if (stale) dropMesh(found), found = meshes.end(), ++perf.meshMismatches;
+        stepEnd(8, lookup);
         if (found == meshes.end()) {
             GxMesh mesh;
             if (const unsigned why = pipeline.buildMesh(list, size, mesh)) return ++perf.refused[why], why;
@@ -821,6 +835,7 @@ struct Renderer {
         flushBatch();
         roomFor(0, DrawCommandWords + u32(mesh.groups.size() - 1) * GroupCommandWords);
         applyState();
+        const u64 uniforms = stepStart();
         GxMeshUniforms u;
         pipeline.meshUniforms(mesh.slots, mesh.groups[0], u);
         if (dumping) dumpMesh(mesh, u);
@@ -850,6 +865,8 @@ struct Renderer {
         C3D_BoolUnifSet(GPU_VERTEX_SHADER, rgbRegUniform, !u.fixedColor && !u.rgbFromVertex);
         C3D_BoolUnifSet(GPU_VERTEX_SHADER, alphaRegUniform, !u.fixedColor && !u.alphaFromVertex);
         setRow(materialUniform, u.color[0] / 255.0f, u.color[1] / 255.0f, u.color[2] / 255.0f, u.color[3] / 255.0f);
+        stepEnd(9, uniforms);
+        const u64 drawing = stepStart();
         // GxMeshVertex: position (v0), colour (v1), three texgen inputs (v2-v4), normal (v6), slot (v5). What a draw doesn't
         // take from the vertices is a fixed attribute, and the bytes it skips are padding (0xC is four bytes, 0xE twelve).
         C3D_AttrInfo* attributes = C3D_GetAttrInfo();
@@ -894,6 +911,7 @@ struct Renderer {
         cpuBound = false;
         fresh[0] = fresh[1] = false;
         ++perf.meshDraws, perf.meshTriangles += mesh.indexCount / 3;
+        stepEnd(10, drawing);
     }
 
     // Each slot's rows: four of the clip matrix unlit; lit, ten (clip, modelview, normal) for each compact slot.
@@ -919,6 +937,7 @@ struct Renderer {
     // The pending primitives as one draw, under the state they share.
     void flushBatch() {
         if (indexUsed == batchStart) return;
+        const Step step(perf, 7);
         applyState();
         const bool wholeScreen = dumping && dumpBatch();
         ensureCpuBuffers();
@@ -1025,9 +1044,13 @@ struct Renderer {
                          perf.timed[4] * ms, perf.listVertices / n, perf.timed[1] * ms, perf.timed[2] * ms, perf.cpuCopies / n, perf.cpuCopyTicks * ms, perf.gpuCopies / n,
                          perf.timed[5] * ms, perf.timed[3] * ms);
             std::fprintf(stderr, "gx perf: of which per frame: building states %.1f ms (%.0f), applying them %.1f ms (%.0f), preparing the vertex "
-                         "pipeline %.1f ms (%.0f); building: reading GX %.1f ms, stats %.1f ms, pixel state %.1f ms\n", perf.stepTicks[0] * ms,
-                         perf.steps[0] / n, perf.stepTicks[1] * ms, perf.steps[1] / n, perf.stepTicks[2] * ms, perf.steps[2] / n, perf.stepTicks[3] * ms,
-                         perf.stepTicks[4] * ms, perf.stepTicks[5] * ms);
+                         "pipeline %.1f ms (%.0f); building: reading GX %.1f ms (%.0f cached, %.0f read), stats %.1f ms, pixel state %.1f ms\n",
+                         perf.stepTicks[0] * ms, perf.steps[0] / n, perf.stepTicks[1] * ms, perf.steps[1] / n, perf.stepTicks[2] * ms, perf.steps[2] / n,
+                         perf.stepTicks[3] * ms, perf.stateHits / n, perf.stateMisses / n, perf.stepTicks[4] * ms, perf.stepTicks[5] * ms);
+            std::fprintf(stderr, "gx perf: and: CPU-path vertices %.1f ms (%.0f calls), CPU-path draws %.1f ms (%.0f); mesh lookups %.1f ms (%.0f), "
+                         "uniforms %.1f ms (%.0f), draw calls %.1f ms (%.0f)\n", perf.stepTicks[6] * ms, perf.steps[6] / n, perf.stepTicks[7] * ms,
+                         perf.steps[7] / n, perf.stepTicks[8] * ms, perf.steps[8] / n, perf.stepTicks[9] * ms, perf.steps[9] / n, perf.stepTicks[10] * ms,
+                         perf.steps[10] / n);
         }
         std::string listed;
         for (unsigned why = 0; why < GxVertexPipeline::MeshRefusals; ++why)
