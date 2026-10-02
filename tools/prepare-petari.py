@@ -1283,14 +1283,17 @@ adapt("src/Game/Ride/SurfRay.cpp", "Game/Ride/SurfRay.cpp", [], cases=["    case
 
 # The Wii's entry point, kept whole under a name the port's own main can call (source/probe/MarioProbe.cpp).
 # Each frame's phases are timed for the renderer's perf line (source/compat/GxRender.cpp): drawing, the logic step
-# (update), animation, the wait for the GPU's draw done (endFrame), then the wait for the retrace.
+# (update), animation, the wait for the GPU's draw done (endFrame), then the wait for the retrace. The framework's own
+# render interval draws every second logic step (smgRenderInterval): the frame is drawn only when it says so.
 adapt("src/Game/System/GameSystem.cpp", "Game/System/GameSystem.cpp", [
     ("void main(void) {\n    OSInitFastCast();", "void smgGameMain() {\n    OSInitFastCast();", 1),
-    ('#include "Game/System/GameSystem.hpp"\n', '#include "Game/System/GameSystem.hpp"\n\nextern "C" void smgFramePhase(int phase);\n', 1),
+    ('#include "Game/System/GameSystem.hpp"\n', '#include "Game/System/GameSystem.hpp"\n\nextern "C" void smgFramePhase(int phase);\nextern "C" int smgRenderInterval();\n', 1),
     ("void GameSystem::frameLoop() {\n    MainLoopFramework::sManager->beginRender();\n    draw();\n    MainLoopFramework::sManager->endRender();\n"
      "    update();\n    calcAnim();\n    mObjHolder->captureIfAllowForScreenPreserver();\n    MainLoopFramework::sManager->endFrame();\n"
      "    MainLoopFramework::sManager->waitForRetrace();\n}",
-     "void GameSystem::frameLoop() {\n    smgFramePhase(0);\n    MainLoopFramework::sManager->beginRender();\n    draw();\n    MainLoopFramework::sManager->endRender();\n"
+     "void GameSystem::frameLoop() {\n    smgFramePhase(0);\n    MainLoopFramework::sManager->mRenderInterval = smgRenderInterval();\n"
+     "    MainLoopFramework::sManager->beginRender();\n    if (MainLoopFramework::sManager->mDoRenderFrame) {\n        draw();\n    }\n"
+     "    MainLoopFramework::sManager->endRender();\n"
      "    smgFramePhase(1);\n    update();\n    smgFramePhase(2);\n    calcAnim();\n    mObjHolder->captureIfAllowForScreenPreserver();\n"
      "    smgFramePhase(3);\n    MainLoopFramework::sManager->endFrame();\n    smgFramePhase(4);\n    MainLoopFramework::sManager->waitForRetrace();\n}", 1),
 ])

@@ -44,6 +44,9 @@ struct Settings {
     bool devGxCheck = false;
     // For development only (dev.gx_inline=1): the GX stream is drawn on the game's thread, not the render thread.
     bool devGxInline = false;
+    // For development only (dev.draw_every=1): every logic step is drawn, as on the Wii, instead of every second one
+    // (30 frames a second with the game at full speed).
+    bool devDrawEvery = false;
     // For development only (dev.gx_noraw=1): every draw goes through citro3d, none written into the command list directly.
     bool devGxNoRaw = false;
     static constexpr int MinSpeed = 25, MaxSpeed = 300, SpeedStep = 25;

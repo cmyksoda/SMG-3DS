@@ -1205,10 +1205,12 @@ struct Renderer {
         GxThreadClock& clock = gxThreadClock();
         const double tick = 1000.0 / SYSCLOCK_ARM11 / n;
         // t= is the emulated clock (drives time their actions by it when Azahar runs faster than real time).
-        std::fprintf(stderr, "gx perf: t=%.0f, %lu frames, %.1f ms/frame: game thread draw %.1f, logic %.1f, animation %.1f, waiting for the GPU "
-                     "%.1f, retrace wait %.1f; GX stream read %s %.1f ms (%.1f of it waiting for the PICA), game waiting for room %.1f ms, %.0f KB; DSP %.1f ms; per "
-                     "frame %.0f primitives (%.0f same state, %.0f with only C0 new), %.0f vertices, %.0f triangles, %.0f draws\n",
-                     double(now) / SYSCLOCK_ARM11, static_cast<unsigned long>(perf.frames), ms / n, phases[0], phases[1], phases[2], phases[3], phases[4],
+        std::fprintf(stderr, "gx perf: t=%.0f, %lu frames, %.1f ms/frame (%.1f fps, %.2f logic steps each); per logic step: game thread draw %.1f, "
+                     "logic %.1f, animation %.1f, waiting for the GPU %.1f, retrace wait %.1f; per frame: GX stream read %s %.1f ms (%.1f of it waiting "
+                     "for the PICA), game waiting for room %.1f ms, %.0f KB; DSP %.1f ms; %.0f primitives (%.0f same state, %.0f with only C0 new), %.0f "
+                     "vertices, %.0f triangles, %.0f draws\n",
+                     double(now) / SYSCLOCK_ARM11, static_cast<unsigned long>(perf.frames), ms / n, n * 1000.0 / ms, phaseFrames / n, phases[0], phases[1],
+                     phases[2], phases[3], phases[4],
                      clock.core == 2 ? "on core 2" : clock.core == 1 ? "on core 1" : "on the game's thread", clock.busy.exchange(0) * tick,
                      perf.syncTicks * tick, clock.gameWaits.exchange(0) * tick, clock.bytes.exchange(0) / 1024.0 / n,
                      smgDspTicks.exchange(0, std::memory_order_relaxed) * tick, perf.primitives / n,
