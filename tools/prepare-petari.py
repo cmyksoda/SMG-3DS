@@ -1566,9 +1566,20 @@ adapt("libs/JSystem/include/JSystem/JKernel/JKRAram.hpp", "include/JSystem/JKern
 ])
 # Petari's file select sets a Mii-name font from MiiFont.arc, which Jaxi's US disc doesn't have and its main.dol
 # never names: there the names keep their layouts' own fonts.
+# The port shows nothing about Miis (Jaxi, 2026-10-01; its RFL is an empty Mii database): a save whose icon is a Mii
+# (one from a Wii) takes Mario's icon without System_FileSelect009's "The Mii that you were using does not appear...".
 adapt("src/Game/Map/FileSelector.cpp", "Game/Map/FileSelector.cpp", [
     ('    JKRMemArchive* pArchive = MR::receiveArchive("/LayoutData/MiiFont.arc");\n',
      '    JKRMemArchive* pArchive = MR::receiveArchive("/LayoutData/MiiFont.arc");\n    if (pArchive == nullptr) {\n        return;\n    }\n', 1),
+    ('    if (MR::isFirstStep(this)) {\n        mSysInfoWindowMini->appear("System_FileSelect009", SysInfoWindow::Type_Key, SysInfoWindow::TextPos_Center, SysInfoWindow::MessageType_System);\n    }\n\n    if (MR::isDead(mSysInfoWindowMini)) {\n        setNerve(GET_NERVE(FileSelector, FileSelectorNrvFileConfirmMiiDeleteSave));\n    }\n',
+     '    setNerve(GET_NERVE(FileSelector, FileSelectorNrvFileConfirmMiiDeleteSave));\n', 1),
+])
+# Nor does the icon picker end with a "Mii" placeholder when there are no Miis (choosing it said "If you create a Mii in
+# the Mii Channel, you can use it as your icon!"): the slot stays empty like any past the last icon.
+adapt("src/Game/Screen/MiiSelect.cpp", "Game/Screen/MiiSelect.cpp", [
+    ("            } else if (baseIndex + i == iconNum) {\n                mIconArray[i]->appearMiiDummy();\n                continue;\n"
+     "            } else if (baseIndex + i > iconNum) {\n",
+     "            } else if (baseIndex + i >= iconNum) {\n", 1),
 ])
 # A BDL's material display lists carry texture numbers in their image-pointer BP commands, which J3D reads back from
 # the list: big-endian GPU data, so the number is its three data bytes in that order.
