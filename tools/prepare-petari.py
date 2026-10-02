@@ -1574,6 +1574,18 @@ adapt("src/Game/Map/FileSelector.cpp", "Game/Map/FileSelector.cpp", [
     ('    if (MR::isFirstStep(this)) {\n        mSysInfoWindowMini->appear("System_FileSelect009", SysInfoWindow::Type_Key, SysInfoWindow::TextPos_Center, SysInfoWindow::MessageType_System);\n    }\n\n    if (MR::isDead(mSysInfoWindowMini)) {\n        setNerve(GET_NERVE(FileSelector, FileSelectorNrvFileConfirmMiiDeleteSave));\n    }\n',
      '    setNerve(GET_NERVE(FileSelector, FileSelectorNrvFileConfirmMiiDeleteSave));\n', 1),
 ])
+# Jaxi's call (2026-10-01): in stylus mode the "Point at the screen with [Wii Remote]" banner never appears; there it
+# would show every time the stylus is lifted. Other modes keep it, and the blue star's guidance keeps its timing.
+adapt("src/Game/Screen/StarPointerGuidance.cpp", "Game/Screen/StarPointerGuidance.cpp", [
+    ('#include "Game/Screen/StarPointerGuidance.hpp"\n',
+     '#include "Game/Screen/StarPointerGuidance.hpp"\n\nextern "C" BOOL smgPointerIsStylus();  // source/compat/Kpad.cpp\n', 1),
+    ("            if (mSpineFrame1P->isCurrentNerve(GET_NERVE(StarPointerGuidance, HostTypeNrvEnd1P)) ||\n"
+     "                mSpineFrame1P->isCurrentNerve(GET_NERVE(StarPointerGuidance, HostTypeNrvEndWait))) {\n"
+     "                mSpineFrame1P->setNerve(GET_NERVE(StarPointerGuidance, HostTypeNrvAppear1P));\n",
+     "            if (!smgPointerIsStylus() && (mSpineFrame1P->isCurrentNerve(GET_NERVE(StarPointerGuidance, HostTypeNrvEnd1P)) ||\n"
+     "                                          mSpineFrame1P->isCurrentNerve(GET_NERVE(StarPointerGuidance, HostTypeNrvEndWait)))) {\n"
+     "                mSpineFrame1P->setNerve(GET_NERVE(StarPointerGuidance, HostTypeNrvAppear1P));\n", 1),
+])
 # Nor does the icon picker end with a "Mii" placeholder when there are no Miis (choosing it said "If you create a Mii in
 # the Mii Channel, you can use it as your icon!"): the slot stays empty like any past the last icon.
 adapt("src/Game/Screen/MiiSelect.cpp", "Game/Screen/MiiSelect.cpp", [

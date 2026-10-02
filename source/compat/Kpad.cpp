@@ -63,6 +63,9 @@ void KPADSetDistParam(s32 channel, f32 playRadius, f32 sensitivity) {
     if (validChannel(channel)) sDist[channel] = {playRadius, sensitivity};
 }
 
+// In stylus mode the pointer is on the screen only while the stylus touches it (adapted StarPointerGuidance asks).
+BOOL smgPointerIsStylus() { return input().settings().pointer == smg::PointerMode::Stylus; }
+
 // One sample per read, newest first as KPAD returns them; the count read, 0 for a channel with no controller.
 s32 KPADRead(s32 channel, KPADStatus* statuses, u32 count) {
     if (channel != 0 || count == 0) return 0;
