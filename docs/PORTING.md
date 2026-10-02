@@ -399,7 +399,7 @@ so only programs without the game (the preview, tests, tools) ever take one.
 | ARAM | `RVL_SDK/aralt/aralt.c` | the SDK's own "Dummy ARAM" in MEM2, compiled as it is |
 | Pure software | `Os.cpp`, `Math.cpp` (host too) | OSReport, OSPanic, PPCHalt, cache ops, MSR, error handlers kept; the SDK's matrix helpers |
 | GPU (GX, GD) | `RVL_SDK/gx/*.c`, `gd/*.c`, `GxFifo.cpp` | the SDK's own GX and GD, built as C++ with C's conversions; its register blocks are port memory (hardware blocks the port has no counterpart for stop by name); the FIFO takes big-endian bytes into a command processor (`smg::GxCommandProcessor`, portable and tested) that keeps CP/XF/BP state, follows display lists, raises the pixel engine's draw-done and token interrupts, sizes and decodes vertices by the CP's descriptor and attribute tables (the field layout of the SDK's own `private/cp_reg.h`), and hands each whole primitive to the host, which stops there until drawing is written |
-| GPU drawing | `GxRender.cpp`, `smg::buildGxDraw` | each primitive the command processor completes is built on the CPU (registers through the SDK's own `private/*_reg.h`, TEV to combiner stages, vertices transformed and culled in EFB space) and drawn with citro3d on the top screen; the display copy ends the frame |
+| GPU drawing | `GxRender.cpp`, `smg::readGxDrawState`, `smg::GxVertexPipeline` | the draw state (registers through the SDK's own `private/*_reg.h`, TEV to combiner stages) is read again only when a register a draw reads changes; each primitive's vertices are transformed and culled on the CPU, and consecutive primitives under one state are one indexed citro3d draw on the top screen; the display copy ends the frame |
 | Audio | `WiiAudio.cpp`, `smg::WiiDsp` | the Wii DSP running JAudio2's own microcode protocol in software (ROM boot, task mails, commands, voice mixing, filters, reverb); the AI's DMA blocks play through the 3DS's DSP (NDSP), raising the AI interrupt per block |
 | Alarms, thread priority | `OsThreads.cpp` | the SDK's alarm list on one alarm thread (one-shot and periodic, as `InsertAlarm` orders them); priorities read and change |
 | Reset, power, HOME | `OsReset.cpp` | the power callback runs once when the 3DS asks the app to close; no reset button |
@@ -604,6 +604,40 @@ TEV and konst colours, swap tables, each stage's texture), and the ETC1 encoder 
 whose halves' averages fit the block better) in one mode (differential when the halves allow) instead of searching all
 four.
 
+**Drawing in batches.** The renderer's own cost was the next wall: in the Star Festival's prologue a frame took 1.1 to
+3.4 seconds in Azahar, 88 to 95% of it turning GX primitives into 3DS draws. Up to 30,000 primitives a frame (small
+quads, at four or five vertices each) each paid for a whole draw: the TEV program and pixel tests read again, structs reset,
+citro3d's state set and a draw issued, about 29,000 instructions apiece. Yet 85 to 99.6% of them came with no register
+changed since the one before. So the command processor counts changes by kind (`bpChanges` for the BP registers a draw
+reads, `GxCommandProcessor::drawsRead`; `xfChanges`; `cpChanges`), and the renderer builds its state (`GxDrawState`)
+only when that count moves, applies it once, and lets every primitive under it join one indexed draw. The vertex
+pipeline (`GxVertexPipeline`) writes vertices once, straight into the PICA's buffer and already turned for the screen,
+with 16-bit indices (so the buffer holds no more than 65,536 vertices, and citro3d wants the indices above it in one
+block). Each matrix slot's whole transform (modelview, projection, viewport, EFB mapping, the screen's quarter turn) is
+one 4x4, kept until XF changes; the view-to-clip part is rebuilt only when the projection or viewport words do.
+Culling keeps GX's sign rule without dividing: with every w positive, a triangle's area in the EFB has the opposite sign
+of the determinant of its (x, y, w) rows. Each texgen's texture matrix and dual transform fold into one affine map (its
+input's fourth component is always one), kept while the matrices' words are the same; one that normalizes between them
+can't fold. Vertex layouts are read once per CP change, with each indexed array's base resolved once (the host's memory
+is the Wii's addresses plus one offset) and fixed point applied by multiplying (exact for powers of two). Particles
+broke batches another way: each sets its own fading colour in TEV register C0, a combiner constant on the PICA. When a
+program reads C0, never writes it and never reads the rasterized colour, C0 takes the rasterized colour's place, in
+every vertex's colour, so the program is compiled once whatever C0 holds and a primitive whose C0 alone changed stays in
+the batch (the title's draws fell from about 1,000 a frame to 23). Lighting is decoded from XF once per change (the
+control words, material, ambient, each light as floats), so a vertex only does the arithmetic, in the same order as
+before (bit for bit the same colours); when colour and alpha share their lights, each light's attenuation is worked out
+once. The FIFO, which immediate-mode drawing (particles, layouts) feeds a word at a time, used to parse its pending
+command again and move it onto itself after every word; now it waits until the length the header gave has arrived.
+Measured in the prologue's heaviest frames: draws 26,603 to 135 a frame and 3,410 ms to 552 ms; the title and the file
+select about three times faster. What is left is about 1,100 instructions a vertex (decoding, lighting, transform,
+texgen): the next step is structural (vertices kept on the PICA's side and transformed by its vertex shader).
+The renderer's `gx perf:` line in Azahar's log (every four seconds or more) shows a frame's milliseconds split into
+drawing (and how much of it waits for the GPU and vblank), the logic step, animation and the retrace wait
+(`GameSystem::frameLoop`, adapted, marks the phases), primitives, how many came without a state change, vertices,
+triangles, draws, TEV programs compiled, and the BP registers behind state changes. Azahar emulates the base 268 MHz
+clock at about one tick per instruction and charges 150 ticks for each `svcGetSystemTick`, so ticks are read only a
+few times a frame; a New 3DS at 804 MHz should run faster than these numbers.
+
 **More byte-order traps.** Data the GPU reads must hold the Wii's bytes even when the source wrote it as wider
 integers: `MainLoopFramework`'s `clearZTexData` (Z24X8 texels as `u32`s) cleared every frame to near on ARM, and every
 3D draw then failed its depth test. The SDK's GX read `GXColor` arguments through `u32` casts (TEV, konst, fog, light
@@ -735,6 +769,17 @@ recentering is native and never reaches the game.
 
 Aliased physical buttons are combined before transition detection, so pressing B while
 holding A does not create a second jump edge, and releasing one does not release the other.
+
+In stylus mode the pointer is on the screen only while the stylus touches it, so the game's "Point at the screen with
+[Wii Remote]" banner (`StarPointerGuidance`'s first frame) would appear every time the stylus is lifted; there it never
+appears (adapted, asking `smgPointerIsStylus` in `Kpad.cpp`). The other modes keep it, and the blue star's guidance keeps
+its own timing.
+
+The port shows nothing about Miis: its RFL is an empty Mii database, the icon picker ends at the character icons (the
+Wii's "Mii" placeholder slot led to "If you create a Mii in the Mii Channel, you can use it as your icon!"), and a save
+whose icon is a Mii (one from a Wii) takes Mario's icon without the "The Mii that you were using does not appear in the
+Mii Channel" notice. The picker's own texts ("Icon", "Select an icon.") never name Miis. The Mii Channel errors (RFL_01,
+RFL_02) and the Mii caution can't be reached with an empty database. Real Mii support is a post-1.0 goal.
 
 The motion pointer reads the gyro in the HID ring's order - pitch, yaw, roll, as Azahar
 lays them out; libctru's `angularRate` names the same fields x, z, y. Which way each axis
