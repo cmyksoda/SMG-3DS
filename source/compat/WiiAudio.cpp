@@ -9,12 +9,15 @@
 #include <revolution/os.h>
 #include <revolution/os/OSInterrupt.h>
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
 extern "C" void smgRaiseInterrupt(__OSInterrupt interrupt);
 extern "C" void __DSPHandler(__OSInterrupt interrupt, OSContext* context);  // JAudio2's (osdsp_task.cpp)
+// Ticks spent running the DSP's microcode, for the renderer's perf line: time the game's thread shares its core with.
+std::atomic<u32> smgDspTicks{0};
 
 namespace {
 // The DSP block's registers, which JAudio2's interrupt handler acknowledges by writing; the mailboxes are the
@@ -33,7 +36,9 @@ template <typename Call>
 auto withDsp(Call call) {
     const smg::PortMemory memory;
     RecursiveLock_Lock(&sDspLock);
+    const u64 start = svcGetSystemTick();
     auto result = call();
+    smgDspTicks.fetch_add(static_cast<u32>(svcGetSystemTick() - start), std::memory_order_relaxed);
     const bool raise = sRaiseDsp;
     sRaiseDsp = false;
     if (const char* what = sDsp.unsupported()) {
