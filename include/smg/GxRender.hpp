@@ -12,8 +12,10 @@ bool gxRenderDisplayList(const GxCommandProcessor& gpu, std::uint32_t address, s
 // The CPU changed memory the GPU reads (the game's cache flushes): cached meshes made from it are dropped.
 void gxRenderMemoryChanged(const void* start, std::uint32_t size);
 // While on, texture copies are kept in the PICA's memory and never written to the Wii's: for copies only the GPU reads
-// (JUTTexture::capture's). Every other copy is encoded into memory by the CPU, as the pixel engine writes it.
+// (JUTTexture::capture's). Every other copy is encoded into memory by the CPU, as the pixel engine writes it. The game's
+// side writes the switch into the GX stream (the port's command 0x01); the renderer's takes it there, in order.
 void gxRenderCopiesStayOnGpu(bool stay);
+void gxRenderKeepCopiesOnGpu(bool stay);
 // A THP movie frame's planes (smg::decodeThpVideo), drawn over the EFB rectangle (x, top, w, h); `generation` changes per decode.
 void gxRenderMovieFrame(const std::uint8_t* y, const std::uint8_t* u, const std::uint8_t* v, unsigned width, unsigned height, unsigned generation,
                         int x, int top, int w, int h);

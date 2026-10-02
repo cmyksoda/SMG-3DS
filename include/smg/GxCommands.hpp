@@ -69,6 +69,9 @@ public:
         void (*copy)(std::uint32_t command);
         // A display list called (physical address, bytes): true when the host drew it whole, so it isn't read here.
         bool (*displayList)(std::uint32_t physical, std::uint32_t size) = nullptr;
+        // The port's own command 0x01 (no GX opcode): texture copies from here on stay on the GPU (true) or not, in
+        // the stream's order, as the copies they wrap are.
+        void (*copiesStay)(bool stay) = nullptr;
     };
     explicit GxCommandProcessor(const Host& host) : host_(host) {}
 

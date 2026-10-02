@@ -189,6 +189,22 @@ void streams() {
 }
 
 namespace {
+std::vector<bool> copyModes, stayingAtCopy;
+
+// The port's command 0x01 switches whether copies stay on the GPU, in order with the copies around it.
+void copyMode() {
+    smg::GxCommandProcessor::Host withMode = host();
+    withMode.copiesStay = [](bool stay) { copyModes.push_back(stay); };
+    withMode.copy = [](std::uint32_t) { stayingAtCopy.push_back(!copyModes.empty() && copyModes.back()); };
+    auto* gpu = new smg::GxCommandProcessor(withMode);
+    const std::uint8_t stream[] = {0x01, 0x01, 0x61, 0x52, 0x00, 0x00, 0x01, 0x01, 0x00, 0x61, 0x52, 0x00, 0x00, 0x01};
+    for (std::uint8_t byte : stream) gpu->put(&byte, 1);
+    check(copyModes.size() == 2 && copyModes[0] && !copyModes[1], "the copy mode turns on, then off, as the stream says");
+    check(stayingAtCopy.size() == 2 && stayingAtCopy[0] && !stayingAtCopy[1], "each copy sees the mode set before it");
+    check(gpu->pending() == 0 && unsupported.empty(), "the port's command is taken whole");
+    delete gpu;
+}
+
 // Every kind (in the stream big-endian, by an 8-bit index, by a 16-bit one), format and component count a position or
 // texture coordinate can take reads the same values: indexed arrays are the CPU's (native), the stream the GPU's.
 void vertexDecoders() {
@@ -252,6 +268,7 @@ int runGxCommandTests() {
     displayLists();
     vertices();
     vertexDecoders();
+    copyMode();
     std::printf("%u GX command processor checks passed\n", checks);
     return 0;
 }

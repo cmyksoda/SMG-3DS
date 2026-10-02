@@ -37,6 +37,7 @@ smg::GxCommandProcessor& processor() {
         },
         [](std::uint32_t command) { smg::gxRenderCopy(processor(), command); },
         [](std::uint32_t physical, std::uint32_t size) { return smg::gxRenderDisplayList(processor(), physical, size); },
+        [](bool stay) { smg::gxRenderKeepCopiesOnGpu(stay); },
     });
     return instance;
 }

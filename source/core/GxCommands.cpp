@@ -289,6 +289,12 @@ void GxCommandProcessor::run(const std::uint8_t* at, std::uint32_t size) {
 std::uint32_t GxCommandProcessor::command(const std::uint8_t* at, std::uint32_t available) {
     const std::uint8_t opcode = at[0];
     if (opcode == 0x00 || opcode == 0x48) return 1;  // NOP; invalidate the vertex cache, which the port has none of
+    if (opcode == 0x01) {                           // the port's own: whether texture copies stay on the GPU
+        if (available < 2) return 0;
+        if (!host_.copiesStay) host_.unsupported("the port's copy-mode command with no host for it", at[1]);
+        else host_.copiesStay(at[1] != 0);
+        return 2;
+    }
     if (opcode == 0x08) {                           // load a CP register
         if (available < 6) return 0;
         const std::uint32_t value = word(at + 2);
@@ -383,6 +389,7 @@ void GxCommandProcessor::put(unsigned stream, const std::uint8_t* bytes, std::ui
 std::uint32_t GxCommandProcessor::length(const std::uint8_t* at, std::uint32_t available) const {
     const std::uint8_t opcode = at[0];
     if (opcode == 0x08) return 6;
+    if (opcode == 0x01) return 2;
     if (opcode == 0x10) return available < 5 ? 5 : 5 + ((word(at + 1) >> 16) + 1) * 4;
     if (opcode == 0x61 || (opcode & 0xE7) == 0x20) return 5;
     if (opcode == 0x40) return 9;

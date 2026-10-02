@@ -6,6 +6,7 @@
 #include <GxShader.hpp>
 #include <private/pe_reg.h>
 #include <smg/FreeStore.hpp>
+#include <smg/GxFifoWrite.h>
 #include <smg/GxCopy.hpp>
 #include <smg/GxDraw.hpp>
 #include <smg/GxRender.hpp>
@@ -30,7 +31,6 @@
 extern "C" void smgHeartbeat();          // source/compat/GameScene.cpp
 extern "C" unsigned smgMovieDecodes();  // source/compat/Thp.cpp
 extern "C" unsigned smgFifoWrites;       // source/compat/GxFifo.cpp
-extern "C" void smgGXFifoFlush();
 extern "C" int smgDevGxDump();           // source/compat/Kpad.cpp
 extern "C" int smgDevGxNull();
 extern "C" int smgDevGxTiming();
@@ -1428,9 +1428,11 @@ void gxRenderPrimitive(const GxCommandProcessor& gpu, std::uint8_t kind, std::ui
 }
 
 void gxRenderCopiesStayOnGpu(bool stay) {
-    smgGXFifoFlush();  // copies already written take the way they were written under
-    sCopiesStayOnGpu = stay;
+    smgGXFifo_u8(0x01);  // the port's own command, read in order with the copy it wraps
+    smgGXFifo_u8(stay);
 }
+
+void gxRenderKeepCopiesOnGpu(bool stay) { sCopiesStayOnGpu = stay; }
 
 bool gxRenderDisplayList(const GxCommandProcessor& gpu, std::uint32_t address, std::uint32_t size) {
     static const bool null = smgDevGxNull();
