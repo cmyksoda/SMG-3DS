@@ -1284,18 +1284,25 @@ adapt("src/Game/Ride/SurfRay.cpp", "Game/Ride/SurfRay.cpp", [], cases=["    case
 # The Wii's entry point, kept whole under a name the port's own main can call (source/probe/MarioProbe.cpp).
 # Each frame's phases are timed for the renderer's perf line (source/compat/GxRender.cpp): drawing, the logic step
 # (update), animation, the wait for the GPU's draw done (endFrame), then the wait for the retrace. The framework's own
-# render interval draws every second logic step (smgRenderInterval): the frame is drawn only when it says so.
+# render interval draws every second logic step (smgRenderInterval): the frame is drawn only when it says so. Then the
+# GPU's draw done is waited for in the next step, after its logic and before its calcAnim rewrites the matrices the
+# drawn frame's commands read (J3D's are double-buffered by calcAnim), so the GPU draws through two logic steps.
 adapt("src/Game/System/GameSystem.cpp", "Game/System/GameSystem.cpp", [
     ("void main(void) {\n    OSInitFastCast();", "void smgGameMain() {\n    OSInitFastCast();", 1),
     ('#include "Game/System/GameSystem.hpp"\n', '#include "Game/System/GameSystem.hpp"\n\nextern "C" void smgFramePhase(int phase);\nextern "C" int smgRenderInterval();\n', 1),
     ("void GameSystem::frameLoop() {\n    MainLoopFramework::sManager->beginRender();\n    draw();\n    MainLoopFramework::sManager->endRender();\n"
      "    update();\n    calcAnim();\n    mObjHolder->captureIfAllowForScreenPreserver();\n    MainLoopFramework::sManager->endFrame();\n"
      "    MainLoopFramework::sManager->waitForRetrace();\n}",
-     "void GameSystem::frameLoop() {\n    smgFramePhase(0);\n    MainLoopFramework::sManager->mRenderInterval = smgRenderInterval();\n"
+     "void GameSystem::frameLoop() {\n    static bool drawnFrameOut = false;\n    smgFramePhase(0);\n"
+     "    MainLoopFramework::sManager->mRenderInterval = smgRenderInterval();\n"
      "    MainLoopFramework::sManager->beginRender();\n    if (MainLoopFramework::sManager->mDoRenderFrame) {\n        draw();\n    }\n"
      "    MainLoopFramework::sManager->endRender();\n"
-     "    smgFramePhase(1);\n    update();\n    smgFramePhase(2);\n    calcAnim();\n    mObjHolder->captureIfAllowForScreenPreserver();\n"
-     "    smgFramePhase(3);\n    MainLoopFramework::sManager->endFrame();\n    smgFramePhase(4);\n    MainLoopFramework::sManager->waitForRetrace();\n}", 1),
+     "    smgFramePhase(1);\n    update();\n"
+     "    if (drawnFrameOut) {\n        smgFramePhase(3);\n        GXDrawDone();\n        drawnFrameOut = false;\n    }\n"
+     "    smgFramePhase(2);\n    calcAnim();\n    mObjHolder->captureIfAllowForScreenPreserver();\n"
+     "    smgFramePhase(3);\n    MainLoopFramework::sManager->endFrame();\n"
+     "    drawnFrameOut = MainLoopFramework::sManager->mDoRenderFrame && MainLoopFramework::sManager->mRenderInterval > 1;\n"
+     "    smgFramePhase(4);\n    MainLoopFramework::sManager->waitForRetrace();\n}", 1),
 ])
 
 # Metrowerks formed a pointer to member from the bare or unqualified name.
@@ -1378,6 +1385,9 @@ adapt("src/Game/System/MainLoopFramework.cpp", "Game/System/MainLoopFramework.cp
     ("C_MTXOrtho(proj, 0f, efbHeight, 0f, fbWidth, 0f, 1f);", "C_MTXOrtho(proj, 0.0f, efbHeight, 0.0f, fbWidth, 0.0f, 1.0f);", 1),
     ("GXSetViewport(0f, 0f, fbWidth, efbHeight, 0f, 1f);", "GXSetViewport(0.0f, 0.0f, fbWidth, efbHeight, 0.0f, 1.0f);", 1),
     ("    if (mCombinationRatio > 1f) {\n        mCombinationRatio = 1f;", "    if (mCombinationRatio > 1.0f) {\n        mCombinationRatio = 1.0f;", 1),
+    # Drawing every second step, GameSystem::frameLoop (adapted) waits for the drawn frame in the next step instead.
+    ("            ::waitDrawDoneAndSetAlarm();\n            GXFlush();",
+     "            if (mRenderInterval < 2) {\n                ::waitDrawDoneAndSetAlarm();\n            }\n            GXFlush();", 2),
     # The clear's Z24X8 texels are GPU data, so they keep the Wii's bytes: an AR block of 00 FF pairs, then GB of FF,
     # which is Z 0xFFFFFF. As little-endian words they read Z 0x00FFFF, near, and every frame cleared to it.
     ("u32 clearZTexData[] ATTRIBUTE_ALIGN(32) = {0x00FF00FF, 0x00FF00FF, 0x00FF00FF, 0x00FF00FF, 0x00FF00FF, 0x00FF00FF, 0x00FF00FF, 0x00FF00FF,\n"
