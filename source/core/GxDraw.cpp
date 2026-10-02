@@ -10,6 +10,7 @@
 #include <private/xf_mem.h>
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cmath>
 #include <cstring>
 #include <unordered_map>
@@ -305,32 +306,33 @@ struct Transformer {
     }
 };
 // compileTev reads only these; a scene's draws repeat a few hundred of them, so each is compiled once. Zeroed whole, so
-// two keys compare (and hash) by their bytes.
+// two keys compare (and hash) by their bytes, and only as far as the stages in use.
 struct TevKey {
+    std::array<float, 4> tevColors[4], konstColors[4];
+    int textures[8];
+    std::uint8_t swapTables[4][4];
     std::uint8_t count;
     TevStage stages[16];
-    std::array<float, 4> tevColors[4], konstColors[4];
-    std::uint8_t swapTables[4][4];
-    int textures[8];
 };
 
 const CombinerProgram& cachedTev(const ModelMaterial& m) {
     TevKey key;
     std::memset(static_cast<void*>(&key), 0, sizeof key);
-    key.count = m.tevStageCount;
-    std::copy(m.stages, m.stages + std::min<unsigned>(m.tevStageCount, 16), key.stages);
+    key.count = std::min<std::uint8_t>(m.tevStageCount, 16);
+    std::copy(m.stages, m.stages + key.count, key.stages);
     std::copy(m.tevColors, m.tevColors + 4, key.tevColors);
     std::copy(m.konstColors, m.konstColors + 4, key.konstColors);
     std::memcpy(key.swapTables, m.swapTables, sizeof key.swapTables);
     std::copy(m.textures, m.textures + 8, key.textures);
+    const std::size_t length = offsetof(TevKey, stages) + key.count * sizeof(TevStage);
     std::uint64_t hash = 0xCBF29CE484222325ull;
-    for (std::size_t i = 0; i < sizeof key; ++i) hash = (hash ^ reinterpret_cast<const std::uint8_t*>(&key)[i]) * 0x100000001B3ull;
+    for (std::size_t i = 0; i < length; ++i) hash = (hash ^ reinterpret_cast<const std::uint8_t*>(&key)[i]) * 0x100000001B3ull;
     struct Entry {
         TevKey key;
         CombinerProgram program;
     };
     thread_local std::unordered_map<std::uint64_t, Entry> cache;
-    if (auto found = cache.find(hash); found != cache.end() && !std::memcmp(&found->second.key, &key, sizeof key)) return found->second.program;
+    if (auto found = cache.find(hash); found != cache.end() && !std::memcmp(&found->second.key, &key, length)) return found->second.program;
     if (cache.size() > 4096) cache.clear();
     Entry& entry = cache[hash];
     entry.key = key;
