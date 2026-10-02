@@ -28,6 +28,9 @@ extern "C" void smgHeartbeat();  // source/compat/GameScene.cpp
 namespace smg {
 namespace {
 constexpr std::size_t VertexBytes = 2u << 20, CommandBytes = 1u << 20;
+// Triangles are drawn by 16-bit indices from the buffer's start, so it holds no more vertices than they can number.
+constexpr std::size_t MaxVertices = VertexBytes / sizeof(GxDrawVertex), MaxIndices = GxVertexPipeline::maxIndices(MaxVertices);
+static_assert(MaxVertices <= 0x10000, "vertex numbers are 16 bits");
 // Room a draw's commands need at most, in words: when less is left, the frame is ended and begun again (see roomFor).
 constexpr u32 DrawCommandWords = 0x800;
 // The render target read back whole for a texture copy, still tiled the screen's way round but linear.
@@ -70,8 +73,18 @@ struct Renderer {
     DVLB_s* shader = nullptr;
     shaderProgram_s program;
     GxDrawVertex* vertices = nullptr;
-    std::size_t used = 0, flushed = 0;
-    GxDraw drawing;  // kept between draws, so its vertices' memory is too
+    // Above the vertices in the same block: C3D_DrawElements takes indices only above the attribute buffers' base.
+    std::uint16_t* indices = nullptr;
+    std::size_t used = 0, flushed = 0, indexUsed = 0, indexFlushed = 0, batchStart = 0;
+    GxVertexPipeline pipeline;
+    // The state the pending primitives share, built again only when the BP registers a draw reads change; consecutive
+    // primitives under one state are one draw (flushBatch).
+    GxDrawState state;
+    PicaPixel pixel;
+    int writeMask = 0, scissor[4] = {};
+    bool stateValid = false, applied = false, scissorEmpty = false, scissorWhole = true;
+    u32 stateBp = 0, stateVersion = 0, appliedVersion = 0;
+    GxFrame stateFrame;
     // The target's colour and depth read back (both four bytes a pixel, the screen's way round), until drawn on again.
     u32* readback[2] = {};
     bool fresh[2] = {};
@@ -98,13 +111,15 @@ struct Renderer {
         unsigned generation = 0;
         bool ready = false;
     } movie[2];
-    GxFrame frame;
+    GxFrame frame{640, 480, true};
     bool indirectNoted = false;
     // Per-frame costs, logged every few seconds (perfLine): what each optimization is measured by.
     struct Perf {
         u64 since = 0, renderTicks = 0;
-        u32 frames = 0, primitives = 0, vertices = 0, triangles = 0, draws = 0, sameState = 0, lastBpChanges = ~0u;
+        u32 frames = 0, primitives = 0, vertices = 0, triangles = 0, draws = 0, sameState = 0;
+        u32 changed[0x100] = {};  // per BP register: state rebuilds it took part in
     } perf;
+    u32 bpSeen[0x100] = {};
 
     void init() {
         C3D_Init(CommandBytes);
@@ -112,7 +127,8 @@ struct Renderer {
         C3D_RenderTargetSetOutput(target, GFX_TOP, GFX_LEFT, DisplayTransferFlags);
         shader = DVLB_ParseFile(reinterpret_cast<u32*>(gxShader), sizeof gxShader);
         shaderProgramInit(&program);
-        vertices = static_cast<GxDrawVertex*>(linearAlloc(VertexBytes));
+        vertices = static_cast<GxDrawVertex*>(linearAlloc(VertexBytes + MaxIndices * sizeof(std::uint16_t)));
+        indices = reinterpret_cast<std::uint16_t*>(reinterpret_cast<std::uint8_t*>(vertices) + VertexBytes);
         if (!target || !shader || R_FAILED(shaderProgramSetVsh(&program, &shader->DVLE[0])) || !vertices) stop("setting up citro3d");
         ready = true;
     }
@@ -124,19 +140,37 @@ struct Renderer {
         if (clearPending) C3D_RenderTargetClear(target, C3D_CLEAR_ALL, clearColor, clearDepth);
         fresh[0] = fresh[1] = false;
         clearPending = false;
-        used = flushed = 0;
+        startBuffers();
         inFrame = true;
     }
 
-    // The vertices written since the GPU last took a command list, out of the CPU's cache (Azahar has none).
+    // Every draw reads one buffer from its start, in the shader's layout; set once per command list.
+    void startBuffers() {
+        used = flushed = indexUsed = indexFlushed = batchStart = 0;
+        C3D_BindProgram(&program);
+        C3D_AttrInfo* attributes = C3D_GetAttrInfo();
+        AttrInfo_Init(attributes);
+        AttrInfo_AddLoader(attributes, 0, GPU_FLOAT, 4);
+        AttrInfo_AddLoader(attributes, 1, GPU_UNSIGNED_BYTE, 4);
+        for (int unit = 0; unit < 3; ++unit) AttrInfo_AddLoader(attributes, 2 + unit, GPU_FLOAT, 2);
+        C3D_BufInfo* buffers = C3D_GetBufInfo();
+        BufInfo_Init(buffers);
+        BufInfo_Add(buffers, vertices, sizeof(GxDrawVertex), 5, 0x43210);
+        applied = false;
+    }
+
+    // The vertices and indices written since the GPU last took a command list, out of the CPU's cache (Azahar has none).
     void flushVertices() {
         if (used > flushed) GSPGPU_FlushDataCache(vertices + flushed, (used - flushed) * sizeof(GxDrawVertex));
-        flushed = used;
+        if (indexUsed > indexFlushed) GSPGPU_FlushDataCache(indices + indexFlushed, (indexUsed - indexFlushed) * sizeof(std::uint16_t));
+        flushed = used, indexFlushed = indexUsed;
     }
 
     // Ends the frame drawn so far without showing it; resume() begins again on the same target once the GPU is done, so
     // the vertex buffer can start over. Inside a frame citro3d's "sync" transfers only queue: readbacks go between.
     void pause() {
+        flushBatch();
+        flushVertices();
         C3D_RenderTargetDetachOutput(target);
         C3D_FrameEnd(0);
     }
@@ -144,7 +178,7 @@ struct Renderer {
         C3D_FrameBegin(0);
         C3D_FrameDrawOn(target);
         C3D_RenderTargetSetOutput(target, GFX_TOP, GFX_LEFT, DisplayTransferFlags);
-        used = flushed = 0;
+        startBuffers();
     }
 
     C3D_Tex& texture(const GxTextureMap& map) {
@@ -176,7 +210,7 @@ struct Renderer {
     }
 
     // Depth from a texture: the clear's constant Z texture is the one case the PICA can follow, by vertex depth.
-    void depthFromTexture(GxDraw& draw) {
+    void depthFromTexture(GxDrawState& draw) {
         const int stage = draw.material.tevStageCount - 1;
         const std::uint8_t map = draw.material.stages[stage].texMap;
         if (draw.depthTextureOp != 2 || draw.depthTextureType != 2 || map >= 8 || draw.textures[map].format != 6)
@@ -195,62 +229,78 @@ struct Renderer {
                 else if (z != depth) stop("a Z texture that is not one value");
             }
         }
-        const float depth01 = static_cast<float>((depth + draw.depthTextureOffset) & 0xFFFFFF) / 16777215.0f;
-        for (GxDrawVertex& v : draw.triangles) v.position[2] = (depth01 - 1) * v.position[3];
+        draw.fixedDepth = true;
+        draw.depth01 = static_cast<float>((depth + draw.depthTextureOffset) & 0xFFFFFF) / 16777215.0f;
     }
 
     void draw(const GxCommandProcessor& gpu, std::uint8_t kind, std::uint8_t format, std::uint16_t count, const std::uint8_t* data) {
         ++perf.primitives, perf.vertices += count;
-        if (gpu.bpChanges == perf.lastBpChanges) ++perf.sameState;
-        perf.lastBpChanges = gpu.bpChanges;
-        GxDraw& d = drawing;
-        buildGxDraw(gpu, kind, format, count, data, frame, d);
-        if (d.unsupported) stop(d.unsupported);
-        if (d.material.blend.type == 2 && d.material.blend.logic != 3) stop("a logic op other than copy");
-        if (d.depthTextureOp) depthFromTexture(d);
-        if (d.indirectDropped && !indirectNoted) {
+        if (!stateValid || gpu.bpChanges != stateBp || !(frame == stateFrame)) buildState(gpu);
+        else ++perf.sameState;
+        if (!pipeline.prepare(gpu, state, frame, kind, format)) stop(pipeline.unsupported);
+        if (scissorEmpty || !count) return;
+        if (!inFrame) begin();
+        roomFor(count);
+        indexUsed += pipeline.run(data, count, vertices + used, static_cast<std::uint16_t>(used), indices + indexUsed);
+        used += count;
+    }
+
+    void buildState(const GxCommandProcessor& gpu) {
+        flushBatch();
+        readGxDrawState(gpu, state);
+        for (u32 a = 0; a < 0x100; ++a)
+            if (gpu.bp[a] != bpSeen[a] && GxCommandProcessor::drawsRead(a)) ++perf.changed[a], bpSeen[a] = gpu.bp[a];
+        stateValid = true, stateBp = gpu.bpChanges, stateFrame = frame, ++stateVersion;
+        if (state.unsupported) stop(state.unsupported);
+        if (state.material.blend.type == 2 && state.material.blend.logic != 3) stop("a logic op other than copy");
+        if (state.depthTextureOp) depthFromTexture(state);
+        if (state.indirectDropped && !indirectNoted) {
             std::fprintf(stderr, "The Wii GPU's drawing: indirect texture offsets are left out (the PICA has no dependent reads)\n");
             indirectNoted = true;
         }
         // GX's scissor in screen pixels, then on the target turned a quarter as the LCD is (citro3d's convention).
-        const int x0 = std::clamp(static_cast<int>(std::lround(d.scissor[0] * 400.0f / frame.width)), 0, 400);
-        const int x1 = std::clamp(static_cast<int>(std::lround(d.scissor[2] * 400.0f / frame.width)), 0, 400);
-        const int y0 = std::clamp(static_cast<int>(std::lround(d.scissor[1] * 240.0f / frame.height)), 0, 240);
-        const int y1 = std::clamp(static_cast<int>(std::lround(d.scissor[3] * 240.0f / frame.height)), 0, 240);
-        if (d.triangles.empty() || x1 <= x0 || y1 <= y0) return;
-        if (!inFrame) begin();
-        roomFor(d.triangles.size());
-        if ((used + d.triangles.size()) * sizeof(GxDrawVertex) > VertexBytes) stop("a frame with more vertices than the port's buffer");
-        GxDrawVertex* out = vertices + used;
-        for (std::size_t i = 0; i < d.triangles.size(); ++i) {
-            out[i] = d.triangles[i];
-            // The top screen's framebuffer is turned a quarter: x takes y, y takes minus x, as citro3d's tilted projections.
-            out[i].position[0] = d.triangles[i].position[1];
-            out[i].position[1] = -d.triangles[i].position[0];
-        }
+        const int x0 = std::clamp(static_cast<int>(std::lround(state.scissor[0] * 400.0f / frame.width)), 0, 400);
+        const int x1 = std::clamp(static_cast<int>(std::lround(state.scissor[2] * 400.0f / frame.width)), 0, 400);
+        const int y0 = std::clamp(static_cast<int>(std::lround(state.scissor[1] * 240.0f / frame.height)), 0, 240);
+        const int y1 = std::clamp(static_cast<int>(std::lround(state.scissor[3] * 240.0f / frame.height)), 0, 240);
+        scissorEmpty = x1 <= x0 || y1 <= y0;
+        scissorWhole = x0 == 0 && y0 == 0 && x1 == 400 && y1 == 240;
+        scissor[0] = 240 - y1, scissor[1] = 400 - x1, scissor[2] = 240 - y0, scissor[3] = 400 - x0;
+        pixel = preparePixel(state.material, state.program);
+        writeMask = (state.colorUpdate ? GPU_WRITE_COLOR & ~GPU_WRITE_ALPHA : 0) | (state.alphaUpdate ? GPU_WRITE_ALPHA : 0) |
+                    (pixel.depthWrite ? GPU_WRITE_DEPTH : 0);
+    }
 
-        C3D_BindProgram(&program);
-        C3D_AttrInfo* attributes = C3D_GetAttrInfo();
-        AttrInfo_Init(attributes);
-        AttrInfo_AddLoader(attributes, 0, GPU_FLOAT, 4);
-        AttrInfo_AddLoader(attributes, 1, GPU_UNSIGNED_BYTE, 4);
-        for (int unit = 0; unit < 3; ++unit) AttrInfo_AddLoader(attributes, 2 + unit, GPU_FLOAT, 2);
-        C3D_BufInfo* buffers = C3D_GetBufInfo();
-        BufInfo_Init(buffers);
-        BufInfo_Add(buffers, out, sizeof(GxDrawVertex), 5, 0x43210);
-        const PicaPixel pixel = preparePixel(d.material, d.program);
-        pixel.apply();
-        const int mask = (d.colorUpdate ? GPU_WRITE_COLOR & ~GPU_WRITE_ALPHA : 0) | (d.alphaUpdate ? GPU_WRITE_ALPHA : 0) |
-                         (pixel.depthWrite ? GPU_WRITE_DEPTH : 0);
-        C3D_DepthTest(pixel.depthTest, pixel.depthTest ? pixel.depthFunc : GPU_ALWAYS, static_cast<GPU_WRITEMASK>(mask));
-        C3D_CullFace(GPU_CULL_NONE);  // culled in EFB space already
-        if (x0 == 0 && y0 == 0 && x1 == 400 && y1 == 240) C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
-        else C3D_SetScissor(GPU_SCISSOR_NORMAL, 240 - y1, 400 - x1, 240 - y0, 400 - x0);
-        for (unsigned unit = 0; unit < d.program.unitCount; ++unit) C3D_TexBind(unit, &texture(d.textures[d.program.units[unit].texture]));
-        C3D_DrawArrays(GPU_TRIANGLES, 0, static_cast<int>(d.triangles.size()));
+    // The pending primitives as one draw, under the state they share.
+    void flushBatch() {
+        if (indexUsed == batchStart) return;
+        if (!applied || appliedVersion != stateVersion) {
+            pixel.apply();
+            C3D_DepthTest(pixel.depthTest, pixel.depthTest ? pixel.depthFunc : GPU_ALWAYS, static_cast<GPU_WRITEMASK>(writeMask));
+            C3D_CullFace(GPU_CULL_NONE);  // culled in EFB space already
+            if (scissorWhole) C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
+            else C3D_SetScissor(GPU_SCISSOR_NORMAL, scissor[0], scissor[1], scissor[2], scissor[3]);
+            for (unsigned unit = 0; unit < state.program.unitCount; ++unit)
+                C3D_TexBind(unit, &texture(state.textures[state.program.units[unit].texture]));
+            applied = true, appliedVersion = stateVersion;
+        }
+        C3D_DrawElements(GPU_TRIANGLES, static_cast<int>(indexUsed - batchStart), C3D_UNSIGNED_SHORT, indices + batchStart);
+        ++perf.draws, perf.triangles += (indexUsed - batchStart) / 3;
+        batchStart = indexUsed;
         fresh[0] = fresh[1] = false;
-        used += d.triangles.size();
-        ++perf.draws, perf.triangles += d.triangles.size() / 3;
+    }
+
+    // A Wii frame's commands can outgrow citro3d's buffer (or its vertices the port's): the frame is ended and begun
+    // again on the same target with its display output held back, so no part-drawn frame is shown.
+    void roomFor(std::size_t vertexCount) {
+        u32* buffer;
+        u32 size, offset;
+        GPUCMD_GetBuffer(&buffer, &size, &offset);
+        if (size - offset >= DrawCommandWords && used + vertexCount <= MaxVertices && indexUsed + GxVertexPipeline::maxIndices(vertexCount) <= MaxIndices)
+            return;
+        if (vertexCount > MaxVertices) stop("a primitive with more vertices than the port's buffer");
+        pause();
+        resume();
     }
 
     void perfLine() {
@@ -264,21 +314,19 @@ struct Renderer {
                      "%.0f vertices, %.0f triangles, %.0f draws\n", static_cast<unsigned long>(perf.frames), ms / n,
                      double(perf.renderTicks) * 1000.0 / SYSCLOCK_ARM11 / n, perf.primitives / n, perf.sameState / n, perf.vertices / n,
                      perf.triangles / n, perf.draws / n);
-        const u32 last = perf.lastBpChanges;
+        // The registers behind most state changes, so batching can be aimed at them.
+        std::string top;
+        for (int k = 0; k < 6; ++k) {
+            const u32* most = std::max_element(perf.changed, perf.changed + 0x100);
+            if (!*most) break;
+            char item[32];
+            std::snprintf(item, sizeof item, " %02X:%.0f", unsigned(most - perf.changed), *most / n);
+            top += item;
+            perf.changed[most - perf.changed] = 0;
+        }
+        std::fprintf(stderr, "gx perf: state changes by BP register (per frame):%s\n", top.c_str());
         perf = Perf{};
-        perf.since = now, perf.lastBpChanges = last;
-    }
-
-    // A Wii frame's commands can outgrow citro3d's buffer (or its vertices the port's): the frame is ended and begun
-    // again on the same target with its display output held back, so no part-drawn frame is shown.
-    void roomFor(std::size_t vertexCount) {
-        u32* buffer;
-        u32 size, offset;
-        GPUCMD_GetBuffer(&buffer, &size, &offset);
-        if (size - offset >= DrawCommandWords && (used + vertexCount) * sizeof(GxDrawVertex) <= VertexBytes) return;
-        flushVertices();
-        pause();
-        resume();
+        perf.since = now;
     }
 
     // Textures made from memory a copy has just written are stale.
@@ -317,12 +365,14 @@ struct Renderer {
         GxTextureCopy copy;
         if (const char* why = readTextureCopy(gpu, command, copy)) stop(why);
         if (!inFrame) begin();
+        flushBatch();
         if (!sCopiesStayOnGpu || !gpuCopy(gpu, copy)) {
             dropGpuCopy(copy.address);
             const Efb efb = efbView(gpu);
             encodeTextureCopy(copy, efbPixel, &efb, static_cast<std::uint8_t*>(OSPhysicalToCached(copy.address)));
         }
         forget(copy.address, textureCopySize(copy));
+        stateValid = applied = false;  // its textures may be gone
         if (copy.clear) C3D_RenderTargetClear(target, C3D_CLEAR_ALL, copyClearColor(gpu), copyClearDepth(gpu)), fresh[0] = fresh[1] = false;
     }
 
@@ -375,7 +425,6 @@ struct Renderer {
             scratchReady = true;
         }
         roomFor(18);
-        flushVertices();
         // Queued behind the draws so far (inside a frame citro3d's "sync" copy does not wait), as the pass is behind it.
         C3D_SyncTextureCopy(static_cast<u32*>(target->frameBuf.colorBuf), GX_BUFFER_DIM(TargetTileRow / 16, 0), static_cast<u32*>(scratch.data),
                             GX_BUFFER_DIM(TargetTileRow / 16, (ScratchTileRow - TargetTileRow) / 16), TargetTileRow * 50, GX_TRANSFER_RAW_COPY(1));
@@ -404,15 +453,6 @@ struct Renderer {
         }
 
         C3D_FrameDrawOn(g.target);
-        C3D_BindProgram(&program);
-        C3D_AttrInfo* attributes = C3D_GetAttrInfo();
-        AttrInfo_Init(attributes);
-        AttrInfo_AddLoader(attributes, 0, GPU_FLOAT, 4);
-        AttrInfo_AddLoader(attributes, 1, GPU_UNSIGNED_BYTE, 4);
-        for (int unit = 0; unit < 3; ++unit) AttrInfo_AddLoader(attributes, 2 + unit, GPU_FLOAT, 2);
-        C3D_BufInfo* buffers = C3D_GetBufInfo();
-        BufInfo_Init(buffers);
-        BufInfo_Add(buffers, out, sizeof(GxDrawVertex), 5, 0x43210);
         copyCombiner(copy, taps, weights, noAlpha);
         C3D_AlphaTest(false, GPU_ALWAYS, 0);
         C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
@@ -420,8 +460,9 @@ struct Renderer {
         C3D_CullFace(GPU_CULL_NONE);
         C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
         for (int unit = 0; unit < 3; ++unit) C3D_TexBind(unit, &scratch);
-        C3D_DrawArrays(GPU_TRIANGLES, 0, static_cast<int>(n));
+        C3D_DrawArrays(GPU_TRIANGLES, static_cast<int>(used), static_cast<int>(n));
         used += n;
+        applied = false;
         C3D_FrameDrawOn(target);
         noteGpuCopy(gpu, copy);
         return true;
@@ -433,7 +474,7 @@ struct Renderer {
         const u64 kind = u64(copy.format) | u64(copy.intensity) << 4 | u64(copy.halfScale) << 5 | u64(copy.texWidth) << 8 | u64(copy.texHeight) << 24;
         if (std::find(checkedKinds.begin(), checkedKinds.end(), kind) != checkedKinds.end()) return;
         checkedKinds.push_back(kind);
-        flushVertices(), pause(), resume();  // the GPU has drawn the copy's quad
+        pause(), resume();  // the GPU has drawn the copy's quad
         const Efb efb = efbView(gpu);
         std::vector<std::uint8_t> bytes(textureCopySize(copy));
         encodeTextureCopy(copy, efbPixel, &efb, bytes.data());
@@ -541,6 +582,7 @@ struct Renderer {
             m.ready = true, m.key = nullptr;
         }
         if (!inFrame) begin();
+        flushBatch();
         if (m.key != y || m.generation != generation) {
             // Rows go in upside down and in 8x8 tiles, as tile() lays every texture out for the PICA.
             auto* texels = static_cast<std::uint16_t*>(m.texture.data);
@@ -572,15 +614,6 @@ struct Renderer {
         const GxDrawVertex a = corner(x, top, 0, 0), b = corner(x + w, top, s1, 0), c = corner(x + w, top + h, s1, t1), d = corner(x, top + h, 0, t1);
         unsigned n = 0;
         for (const GxDrawVertex& vertex : {a, b, c, a, c, d}) out[n++] = vertex;
-        C3D_BindProgram(&program);
-        C3D_AttrInfo* attributes = C3D_GetAttrInfo();
-        AttrInfo_Init(attributes);
-        AttrInfo_AddLoader(attributes, 0, GPU_FLOAT, 4);
-        AttrInfo_AddLoader(attributes, 1, GPU_UNSIGNED_BYTE, 4);
-        for (int unit = 0; unit < 3; ++unit) AttrInfo_AddLoader(attributes, 2 + unit, GPU_FLOAT, 2);
-        C3D_BufInfo* buffers = C3D_GetBufInfo();
-        BufInfo_Init(buffers);
-        BufInfo_Add(buffers, out, sizeof(GxDrawVertex), 5, 0x43210);
         for (int stage = 0; stage < int(CombinerProgram::MaxStages); ++stage) C3D_TexEnvInit(C3D_GetTexEnv(stage));
         C3D_TexEnv* env = C3D_GetTexEnv(0);
         C3D_TexEnvSrc(env, C3D_Both, GPU_TEXTURE0);
@@ -592,8 +625,9 @@ struct Renderer {
         C3D_CullFace(GPU_CULL_NONE);
         C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
         C3D_TexBind(0, &m.texture);
-        C3D_DrawArrays(GPU_TRIANGLES, 0, static_cast<int>(n));
+        C3D_DrawArrays(GPU_TRIANGLES, static_cast<int>(used), static_cast<int>(n));
         used += n;
+        applied = false;
         fresh[0] = fresh[1] = false;
     }
 
@@ -604,7 +638,7 @@ struct Renderer {
         if (!into) into = static_cast<u32*>(linearAlloc(240 * 400 * 4));
         if (!into) stop("reading the EFB back with no memory to read it into");
         if (!fresh[depth]) {
-            if (inFrame) flushVertices(), pause();
+            if (inFrame) pause();
             void* buffer = depth ? target->frameBuf.depthBuf : target->frameBuf.colorBuf;
             C3D_SyncDisplayTransfer(static_cast<u32*>(buffer), GX_BUFFER_DIM(240, 400), into, GX_BUFFER_DIM(240, 400), ReadbackFlags);
             GSPGPU_InvalidateDataCache(into, 240 * 400 * 4);
@@ -640,8 +674,10 @@ struct Renderer {
         const std::uint32_t size = gpu.bp[0x4A];
         frame.width = static_cast<float>((size & 0x3FF) + 1), frame.height = static_cast<float>((size >> 10 & 0x3FF) + 1);
         if (!inFrame) begin();
+        flushBatch();
         C3D_FrameEnd(0);
         inFrame = false;
+        stateValid = false;  // read again each frame, as a Z texture the CPU rewrites would be
         if (command >> 11 & 1) clearColor = copyClearColor(gpu), clearDepth = copyClearDepth(gpu), clearPending = true;
     }
 };

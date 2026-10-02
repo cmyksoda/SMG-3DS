@@ -53,7 +53,7 @@ std::uint8_t channelId(std::uint32_t hardware) {
     }
 }
 
-void readTev(const GxCommandProcessor& gpu, GxDraw& out) {
+void readTev(const GxCommandProcessor& gpu, GxDrawState& out) {
     ModelMaterial& m = out.material;
     const std::uint32_t gen = gpu.bp[0x00];
     m.tevStageCount = static_cast<std::uint8_t>(GEN_MODE_GET_NTEV(gen) + 1);
@@ -101,7 +101,7 @@ void readTev(const GxCommandProcessor& gpu, GxDraw& out) {
     }
 }
 
-void readPixel(const GxCommandProcessor& gpu, GxDraw& out) {
+void readPixel(const GxCommandProcessor& gpu, GxDrawState& out) {
     ModelMaterial& m = out.material;
     const std::uint32_t alpha = gpu.bp[0xF3];
     m.alphaTest.reference0 = static_cast<std::uint8_t>(TEV_ALPHAFUNC_GET_A0(alpha)), m.alphaTest.reference1 = static_cast<std::uint8_t>(TEV_ALPHAFUNC_GET_A1(alpha));
@@ -212,99 +212,6 @@ void gxLitChannel(const GxCommandProcessor& gpu, const float view[3], const floa
 }
 
 namespace {
-struct Transformer {
-    const GxCommandProcessor& gpu;
-    const GxFrame& frame;
-    GxDraw& out;
-
-    float matrix(std::uint32_t row, int column) const { return asFloat(gpu.xf[(row * 4 + column) & 0xFFF]); }
-    std::uint32_t texMatrixIndex(const GxVertex& v, int coord) const {
-        if (gpu.cp[0x50] >> (1 + coord) & 1) return v.texMatrixIndex[coord];
-        return coord < 4 ? gpu.xf[XfMatIndexA] >> (6 + 6 * coord) & 0x3F : gpu.xf[XfMatIndexB] >> (6 * (coord - 4)) & 0x3F;
-    }
-
-    // One texture coordinate set: the texgen's input through its matrix, then the dual transform when it is on.
-    void texgen(const GxVertex& v, int coord, float st[2]) {
-        const std::uint32_t ctrl = gpu.xf[XfTexGen + coord];
-        if (XF_TEX_GET_TEXGEN_TYPE(ctrl) != 0) {
-            out.unsupported = "emboss and colour texgens";
-            return;
-        }
-        const std::uint32_t row = XF_TEX_GET_SOURCE_ROW(ctrl);
-        float in[4] = {0, 0, 1, 1};
-        if (row == 0) std::memcpy(in, v.position, sizeof v.position);
-        else if (row == 1) std::memcpy(in, v.normal, sizeof v.normal);
-        else if (row >= 5 && row <= 12) in[0] = v.texcoord[row - 5][0], in[1] = v.texcoord[row - 5][1];
-        else { out.unsupported = "texgens from colours or binormals"; return; }
-        if (!XF_TEX_GET_INPUT_FORM(ctrl)) in[2] = 1;  // AB11: the third input is one whatever the source
-        const std::uint32_t index = texMatrixIndex(v, coord);
-        const int rows = XF_TEX_GET_PROJECTION(ctrl) ? 3 : 2;
-        float c[3] = {0, 0, 1};
-        for (int r = 0; r < rows; ++r)
-            c[r] = matrix(index + r, 0) * in[0] + matrix(index + r, 1) * in[1] + matrix(index + r, 2) * in[2] + matrix(index + r, 3) * in[3];
-        if (gpu.xf[XfDualTex] & 1) {
-            const std::uint32_t post = gpu.xf[XfPostTexGen + coord];
-            if (XF_DUALTEX_F_GET_NORMAL_ENABLE(post)) {
-                const float length = std::sqrt(c[0] * c[0] + c[1] * c[1] + c[2] * c[2]);
-                if (length > 0) for (float& k : c) k /= length;
-            }
-            const std::uint32_t base = XfPostMatrices / 4 + XF_DUALTEX_F_GET_DUALMATRIX_ADRS(post);
-            float p[3];
-            for (int r = 0; r < 3; ++r) p[r] = matrix(base + r, 0) * c[0] + matrix(base + r, 1) * c[1] + matrix(base + r, 2) * c[2] + matrix(base + r, 3);
-            std::memcpy(c, p, sizeof c);
-        }
-        // The GPU divides by q for each pixel; here it is divided once per vertex.
-        if (std::fabs(c[2] - 1) > 1e-5f && c[2] != 0) {
-            st[0] = c[0] / c[2], st[1] = c[1] / c[2];
-        } else {
-            st[0] = c[0], st[1] = c[1];
-        }
-    }
-
-    // Channel 0's colour and alpha at a vertex, lit when its control words say (the normal through its normal matrix).
-    void channel(const GxVertex& v, std::uint32_t index, const float view[3], std::uint8_t color[4]) {
-        if ((gpu.xf[XfNumChans] & 3) == 0) {
-            std::memset(color, 0, 4);
-            return;
-        }
-        float normal[3] = {0, 0, 0};
-        if (XF_COLOR0CNTRL_F_GET_LIGHTFUNC(gpu.xf[XfColor0Ctrl]) || XF_COLOR0CNTRL_F_GET_LIGHTFUNC(gpu.xf[XfAlpha0Ctrl])) {
-            // Normal matrices: three rows of three from XF 0x400, at the position matrix's row.
-            const std::uint32_t base = 0x400 + (index & 31) * 3;
-            for (int r = 0; r < 3; ++r)
-                normal[r] = asFloat(gpu.xf[base + r * 3]) * v.normal[0] + asFloat(gpu.xf[base + r * 3 + 1]) * v.normal[1] +
-                            asFloat(gpu.xf[base + r * 3 + 2]) * v.normal[2];
-            normalize(normal);
-        }
-        gxLitChannel(gpu, view, normal, v.color[0], color);
-    }
-
-    // Position through its matrix and the projection, then the viewport onto the EFB, then the EFB onto [-1, 1].
-    GxDrawVertex vertex(const GxVertex& v, float screen[2]) {
-        const std::uint32_t index = gpu.cp[0x50] & 1 ? v.matrixIndex : gpu.xf[XfMatIndexA] & 0x3F;
-        float view[3];
-        for (int r = 0; r < 3; ++r)
-            view[r] = matrix(index + r, 0) * v.position[0] + matrix(index + r, 1) * v.position[1] + matrix(index + r, 2) * v.position[2] + matrix(index + r, 3);
-        float p[6];
-        for (int k = 0; k < 6; ++k) p[k] = asFloat(gpu.xf[XfProjection + k]);
-        const bool orthographic = gpu.xf[XfProjection + 6] != 0;
-        const float xc = orthographic ? p[0] * view[0] + p[1] : p[0] * view[0] + p[1] * view[2];
-        const float yc = orthographic ? p[2] * view[1] + p[3] : p[2] * view[1] + p[3] * view[2];
-        const float zc = p[4] * view[2] + p[5], wc = orthographic ? 1.0f : -view[2];
-        float vp[6];
-        for (int k = 0; k < 6; ++k) vp[k] = asFloat(gpu.xf[XfViewport + k]);
-        // EFB pixel = ndc * scale + offset - 342; depth = ndc_z * zscale + zoffset, over 2^24 - 1.
-        const float ex = xc * vp[0] + (vp[3] - 342) * wc, ey = yc * vp[1] + (vp[4] - 342) * wc;
-        GxDrawVertex d{};
-        d.position[0] = ex / frame.width * 2 - wc;
-        d.position[1] = wc - ey / frame.height * 2;
-        d.position[2] = (zc * vp[2] + vp[5] * wc) / 16777215.0f - wc;  // citro3d's range: near -1, far 0
-        d.position[3] = wc;
-        screen[0] = wc != 0 ? ex / wc : 0, screen[1] = wc != 0 ? ey / wc : 0;
-        channel(v, index, view, d.color);
-        return d;
-    }
-};
 // compileTev reads only these; a scene's draws repeat a few hundred of them, so each is compiled once. Zeroed whole, so
 // two keys compare (and hash) by their bytes, and only as far as the stages in use.
 struct TevKey {
@@ -341,44 +248,164 @@ const CombinerProgram& cachedTev(const ModelMaterial& m) {
 }
 } // namespace
 
-void buildGxDraw(const GxCommandProcessor& gpu, std::uint8_t kind, std::uint8_t format, std::uint16_t count, const std::uint8_t* vertices,
-                 const GxFrame& frame, GxDraw& out) {
-    std::vector<GxDrawVertex> triangles = std::move(out.triangles);  // its memory, for the next primitive
-    triangles.clear();
-    out = GxDraw{};
-    out.triangles = std::move(triangles);
+void readGxDrawState(const GxCommandProcessor& gpu, GxDrawState& out) {
+    out = GxDrawState{};
     readTev(gpu, out);
     readPixel(gpu, out);
     out.program = cachedTev(out.material);
-    if (kind >= 0xA8) out.unsupported = "lines and points";
-    if (out.unsupported) return;
+}
 
-    Transformer transform{gpu, frame, out};
-    // Kept per thread between primitives, so drawing allocates only when a primitive is the largest yet.
-    thread_local std::vector<GxDrawVertex> drawn;
-    thread_local std::vector<std::array<float, 2>> screen;
-    thread_local std::vector<bool> behind;
-    drawn.assign(count, {}), screen.assign(count, {}), behind.assign(count, false);
-    const std::uint32_t size = gpu.vertexSize(format);
-    for (std::uint16_t i = 0; i < count; ++i) {
-        const GxVertex v = gpu.readVertex(vertices + i * size, format);
-        drawn[i] = transform.vertex(v, screen[i].data());
-        behind[i] = drawn[i].position[3] <= 0;
-        for (unsigned u = 0; u < out.program.unitCount; ++u) transform.texgen(v, out.program.units[u].texCoord, drawn[i].texcoord[u]);
-    }
-    if (out.unsupported) return;
+float GxVertexPipeline::matrix(std::uint32_t row, int column) const { return asFloat(gpu_->xf[(row * 4 + column) & 0xFFF]); }
 
+bool GxVertexPipeline::prepare(const GxCommandProcessor& gpu, const GxDrawState& state, const GxFrame& frame, std::uint8_t kind, std::uint8_t format) {
+    gpu_ = &gpu, state_ = &state, kind_ = kind;
+    unsupported = state.unsupported;
+    if (kind >= 0xA8) unsupported = "lines and points";
+    if (unsupported) return false;
+    layout_ = &gpu.layout(format);
     // GEN_MODE's reject bits as GXSetCullMode swaps them in: 1 culls what GX_CULL_BACK names, 2 GX_CULL_FRONT.
-    const std::uint32_t reject = GEN_MODE_GET_REJECT_EN(gpu.bp[0x00]);
-    const auto emit = [&](int a, int b, int c) {
-        if (reject && !behind[a] && !behind[b] && !behind[c]) {
-            const float area = (screen[b][0] - screen[a][0]) * (screen[c][1] - screen[a][1]) -
-                               (screen[b][1] - screen[a][1]) * (screen[c][0] - screen[a][0]);
-            if (reject == 3 || (reject == 1 && area < 0) || (reject == 2 && area > 0)) return;
+    reject_ = static_cast<std::uint8_t>(GEN_MODE_GET_REJECT_EN(gpu.bp[0x00]));
+    perVertexMatrix_ = gpu.cp[0x50] & 1;
+    defaultMatrix_ = gpu.xf[XfMatIndexA] & 0x3F;
+    channel_ = (gpu.xf[XfNumChans] & 3) != 0;
+    lit_ = channel_ && (XF_COLOR0CNTRL_F_GET_LIGHTFUNC(gpu.xf[XfColor0Ctrl]) || XF_COLOR0CNTRL_F_GET_LIGHTFUNC(gpu.xf[XfAlpha0Ctrl]));
+    fixedDepth_ = state.fixedDepth, depth01_ = state.depth01;
+    units_ = static_cast<std::uint8_t>(state.program.unitCount);
+    for (unsigned u = 0; u < units_; ++u) {
+        TexGen& t = texgens_[u];
+        const std::uint8_t coord = state.program.units[u].texCoord;
+        const std::uint32_t ctrl = gpu.xf[XfTexGen + coord];
+        const std::uint32_t row = XF_TEX_GET_SOURCE_ROW(ctrl);
+        if (XF_TEX_GET_TEXGEN_TYPE(ctrl) != 0) unsupported = "emboss and colour texgens";
+        else if (row != 0 && row != 1 && (row < 5 || row > 12)) unsupported = "texgens from colours or binormals";
+        if (unsupported) return false;
+        t.source = static_cast<std::uint8_t>(row), t.coord = coord;
+        t.threeInputs = XF_TEX_GET_INPUT_FORM(ctrl);  // AB11 otherwise: the third input is one whatever the source
+        t.rows = XF_TEX_GET_PROJECTION(ctrl) ? 3 : 2;
+        t.perVertexMatrix = gpu.cp[0x50] >> (1 + coord) & 1;
+        t.matrix = coord < 4 ? gpu.xf[XfMatIndexA] >> (6 + 6 * coord) & 0x3F : gpu.xf[XfMatIndexB] >> (6 * (coord - 4)) & 0x3F;
+        t.dual = gpu.xf[XfDualTex] & 1;
+        const std::uint32_t post = gpu.xf[XfPostTexGen + coord];
+        t.normalize = XF_DUALTEX_F_GET_NORMAL_ENABLE(post);
+        t.post = XfPostMatrices / 4 + XF_DUALTEX_F_GET_DUALMATRIX_ADRS(post);
+    }
+    if (gpu.xfChanges == xfSeen_ && frame == frameSeen_) return true;
+    xfSeen_ = gpu.xfChanges, clipReady_ = 0;
+    // Most XF loads are matrices; the projection and viewport change far less often.
+    std::uint32_t view[13];
+    std::memcpy(view, gpu.xf + XfViewport, sizeof view);
+    if (!(frame == frameSeen_) || std::memcmp(view, viewSeen_, sizeof view)) {
+        frameSeen_ = frame;
+        std::memcpy(viewSeen_, view, sizeof view);
+        // View space (x, y, z, 1) to clip space, then the viewport onto the EFB, then the EFB onto [-1, 1] (y up) with
+        // depth onto citro3d's [-1, 0]: EFB pixel = ndc * scale + offset - 342; depth = ndc_z * zscale + zoffset, over 2^24 - 1.
+        double p[6], vp[6];
+        for (int k = 0; k < 6; ++k) p[k] = asFloat(gpu.xf[XfProjection + k]), vp[k] = asFloat(gpu.xf[XfViewport + k]);
+        const bool orthographic = gpu.xf[XfProjection + 6] != 0;
+        const double X[4] = {p[0], 0, orthographic ? 0 : p[1], orthographic ? p[1] : 0};
+        const double Y[4] = {0, p[2], orthographic ? 0 : p[3], orthographic ? p[3] : 0};
+        const double Z[4] = {0, 0, p[4], p[5]};
+        const double W[4] = {0, 0, orthographic ? 0.0 : -1.0, orthographic ? 1.0 : 0.0};
+        double d[4][4];
+        for (int c = 0; c < 4; ++c) {
+            const double ex = X[c] * vp[0] + (vp[3] - 342) * W[c], ey = Y[c] * vp[1] + (vp[4] - 342) * W[c];
+            d[0][c] = ex / frame.width * 2 - W[c];
+            d[1][c] = W[c] - ey / frame.height * 2;
+            d[2][c] = (Z[c] * vp[2] + vp[5] * W[c]) / 16777215.0 - W[c];
+            d[3][c] = W[c];
         }
-        out.triangles.push_back(drawn[a]), out.triangles.push_back(drawn[b]), out.triangles.push_back(drawn[c]);
+        for (int c = 0; c < 4; ++c) {
+            toClip_[0][c] = frame.quarterTurn ? d[1][c] : d[0][c];
+            toClip_[1][c] = frame.quarterTurn ? -d[0][c] : d[1][c];
+            toClip_[2][c] = d[2][c], toClip_[3][c] = d[3][c];
+        }
+    }
+    return true;
+}
+
+// A position matrix (three rows from `index`) through toClip_: one 4x4 per vertex instead of a matrix, the projection
+// and the viewport.
+const float* GxVertexPipeline::clipMatrix(std::uint32_t index) {
+    thread_local float scratch[16];
+    float* out = index < 64 ? clip_[index] : scratch;
+    if (index < 64 && clipReady_ >> index & 1) return out;
+    for (int r = 0; r < 4; ++r)
+        for (int c = 0; c < 4; ++c) {
+            double sum = c == 3 ? toClip_[r][3] : 0;  // the position matrix's fourth row is (0, 0, 0, 1)
+            for (int k = 0; k < 3; ++k) sum += toClip_[r][k] * matrix(index + k, c);
+            out[r * 4 + c] = static_cast<float>(sum);
+        }
+    if (index < 64) clipReady_ |= std::uint64_t(1) << index;
+    return out;
+}
+
+// One texture coordinate set: the texgen's input through its matrix, then the dual transform when it is on.
+void GxVertexPipeline::texgen(const TexGen& t, const GxVertex& v, float st[2]) const {
+    float in[4] = {0, 0, 1, 1};
+    if (t.source == 0) std::memcpy(in, v.position, sizeof v.position);
+    else if (t.source == 1) std::memcpy(in, v.normal, sizeof v.normal);
+    else in[0] = v.texcoord[t.source - 5][0], in[1] = v.texcoord[t.source - 5][1];
+    if (!t.threeInputs) in[2] = 1;
+    const std::uint32_t index = t.perVertexMatrix ? v.texMatrixIndex[t.coord] : t.matrix;
+    float c[3] = {0, 0, 1};
+    for (int r = 0; r < t.rows; ++r)
+        c[r] = matrix(index + r, 0) * in[0] + matrix(index + r, 1) * in[1] + matrix(index + r, 2) * in[2] + matrix(index + r, 3) * in[3];
+    if (t.dual) {
+        if (t.normalize) {
+            const float length = std::sqrt(c[0] * c[0] + c[1] * c[1] + c[2] * c[2]);
+            if (length > 0) for (float& k : c) k /= length;
+        }
+        float q[3];
+        for (int r = 0; r < 3; ++r) q[r] = matrix(t.post + r, 0) * c[0] + matrix(t.post + r, 1) * c[1] + matrix(t.post + r, 2) * c[2] + matrix(t.post + r, 3);
+        std::memcpy(c, q, sizeof c);
+    }
+    // The GPU divides by q for each pixel; here it is divided once per vertex.
+    if (std::fabs(c[2] - 1) > 1e-5f && c[2] != 0) st[0] = c[0] / c[2], st[1] = c[1] / c[2];
+    else st[0] = c[0], st[1] = c[1];
+}
+
+std::size_t GxVertexPipeline::run(const std::uint8_t* data, std::uint16_t count, GxDrawVertex* vertices, std::uint16_t first, std::uint16_t* indices) {
+    const GxCommandProcessor& gpu = *gpu_;
+    const std::uint32_t size = layout_->size;
+    GxVertex v;  // attributes the format lacks stay zero for every vertex
+    for (std::uint16_t i = 0; i < count; ++i) {
+        layout_->read(data + i * size, v);
+        const std::uint32_t index = perVertexMatrix_ ? v.matrixIndex : defaultMatrix_;
+        const float* m = clipMatrix(index);
+        GxDrawVertex& d = vertices[i];
+        for (int r = 0; r < 4; ++r) d.position[r] = m[r * 4] * v.position[0] + m[r * 4 + 1] * v.position[1] + m[r * 4 + 2] * v.position[2] + m[r * 4 + 3];
+        if (fixedDepth_) d.position[2] = (depth01_ - 1) * d.position[3];
+        if (!channel_) {
+            std::memset(d.color, 0, 4);
+        } else {
+            float view[3] = {0, 0, 0}, normal[3] = {0, 0, 0};
+            if (lit_) {
+                for (int r = 0; r < 3; ++r)
+                    view[r] = matrix(index + r, 0) * v.position[0] + matrix(index + r, 1) * v.position[1] + matrix(index + r, 2) * v.position[2] + matrix(index + r, 3);
+                // Normal matrices: three rows of three from XF 0x400, at the position matrix's row.
+                const std::uint32_t base = 0x400 + (index & 31) * 3;
+                for (int r = 0; r < 3; ++r)
+                    normal[r] = asFloat(gpu.xf[base + r * 3]) * v.normal[0] + asFloat(gpu.xf[base + r * 3 + 1]) * v.normal[1] +
+                                asFloat(gpu.xf[base + r * 3 + 2]) * v.normal[2];
+                normalize(normal);
+            }
+            gxLitChannel(gpu, view, normal, v.color[0], d.color);
+        }
+        for (unsigned u = 0; u < units_; ++u) texgen(texgens_[u], v, d.texcoord[u]);
+    }
+
+    // Culling in EFB space, by the sign of each triangle's area there: with every w positive that is the sign of the
+    // determinant of its (x, y, w) rows, negated (the EFB's y runs down); the screen's quarter turn keeps it.
+    std::size_t n = 0;
+    const auto emit = [&](int a, int b, int c) {
+        const float* pa = vertices[a].position, *pb = vertices[b].position, *pc = vertices[c].position;
+        if (reject_ && pa[3] > 0 && pb[3] > 0 && pc[3] > 0) {
+            const float det = pa[0] * (pb[1] * pc[3] - pc[1] * pb[3]) - pb[0] * (pa[1] * pc[3] - pc[1] * pa[3]) + pc[0] * (pa[1] * pb[3] - pb[1] * pa[3]);
+            if (reject_ == 3 || (reject_ == 1 && det > 0) || (reject_ == 2 && det < 0)) return;
+        }
+        indices[n++] = static_cast<std::uint16_t>(first + a), indices[n++] = static_cast<std::uint16_t>(first + b), indices[n++] = static_cast<std::uint16_t>(first + c);
     };
-    switch (kind) {
+    switch (kind_) {
     case 0x80: case 0x88:  // quads
         for (int i = 0; i + 3 < count; i += 4) emit(i, i + 1, i + 2), emit(i, i + 2, i + 3);
         break;
@@ -392,5 +419,20 @@ void buildGxDraw(const GxCommandProcessor& gpu, std::uint8_t kind, std::uint8_t 
         for (int i = 1; i + 1 < count; ++i) emit(0, i, i + 1);
         break;
     }
+    return n;
+}
+
+void buildGxDraw(const GxCommandProcessor& gpu, std::uint8_t kind, std::uint8_t format, std::uint16_t count, const std::uint8_t* vertices,
+                 const GxFrame& frame, GxDraw& out) {
+    std::vector<GxDrawVertex> triangles = std::move(out.triangles);
+    triangles.clear();
+    readGxDrawState(gpu, out);
+    out.triangles = std::move(triangles);
+    GxVertexPipeline pipeline;
+    if (!pipeline.prepare(gpu, out, frame, kind, format)) return void(out.unsupported = pipeline.unsupported);
+    std::vector<GxDrawVertex> drawn(count);
+    std::vector<std::uint16_t> indices(GxVertexPipeline::maxIndices(count));
+    const std::size_t n = pipeline.run(vertices, count, drawn.data(), 0, indices.data());
+    for (std::size_t i = 0; i < n; ++i) out.triangles.push_back(drawn[indices[i]]);
 }
 } // namespace smg

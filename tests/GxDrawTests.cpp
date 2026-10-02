@@ -253,6 +253,51 @@ void channels() {
     c = d.triangles[0].color;
     check(!d.unsupported && c[0] == 0 && c[2] == 0 && c[3] == 0x44, "lit with no lights and a black ambient, the colour is black; alpha stays the material's");
 }
+
+// One pipeline across primitives: it keeps each matrix slot's transform until XF changes, turns positions for the 3DS's
+// screen when asked, and numbers its indices from where the caller's buffer is. Only BP registers a draw reads count as changes.
+void pipelineAcrossPrimitives() {
+    auto owned = std::make_unique<smg::GxCommandProcessor>(host());
+    smg::GxCommandProcessor& gpu = *owned;
+    Stream s;
+    clearState(s);
+    quad(s, {0, 1, 3, 2});
+    drawn.clear();
+    gpu.put(s.bytes.data(), static_cast<std::uint32_t>(s.bytes.size()));
+    smg::GxDrawState state;
+    smg::readGxDrawState(gpu, state);
+    smg::GxVertexPipeline pipeline;
+    smg::GxDrawVertex v[4];
+    std::uint16_t indices[12];
+    check(pipeline.prepare(gpu, state, {}, drawn[0].kind, drawn[0].format), "the clear quad prepares");
+    std::size_t n = pipeline.run(drawn[0].data.data(), 4, v, 10, indices);
+    check(n == 6 && indices[0] == 10 && indices[5] == 13, "indices count from the first vertex's number");
+    check(near(v[0].position[0], -1) && near(v[0].position[1], 1), "the top left corner is (-1, 1)");
+
+    Stream moved;
+    moved.xff(0x000, {1, 0, 0, 320, 0, 1, 0, 0, 0, 0, 1, 0});  // half the EFB to the right
+    gpu.put(moved.bytes.data(), static_cast<std::uint32_t>(moved.bytes.size()));
+    pipeline.prepare(gpu, state, {}, drawn[0].kind, drawn[0].format);
+    pipeline.run(drawn[0].data.data(), 4, v, 0, indices);
+    check(near(v[0].position[0], 0) && near(v[0].position[1], 1), "a matrix loaded between primitives moves the next one");
+
+    smg::GxFrame turned;
+    turned.quarterTurn = true;
+    pipeline.prepare(gpu, state, turned, drawn[0].kind, drawn[0].format);
+    pipeline.run(drawn[0].data.data(), 4, v, 0, indices);
+    check(near(v[0].position[0], 1) && near(v[0].position[1], 0), "turned a quarter, x takes y and y takes minus x");
+
+    const std::uint32_t before = gpu.bpChanges;
+    Stream events;
+    events.bp(0x47000001), events.bp(0x45000002), events.bp(0x0F000000);  // a token, draw done, an indirect mask
+    events.bp(0xC008FFF2);                                                // stage 0's colour, as it already is
+    gpu.put(events.bytes.data(), static_cast<std::uint32_t>(events.bytes.size()));
+    check(gpu.bpChanges == before, "events and loads that change nothing a draw reads leave the count");
+    Stream changed;
+    changed.bp(0xC008FFF8);
+    gpu.put(changed.bytes.data(), static_cast<std::uint32_t>(changed.bytes.size()));
+    check(gpu.bpChanges == before + 1, "a TEV stage that changes counts");
+}
 } // namespace
 
 // nw4r's layout material: black (C0) to white (C1) by the texture, which is the texture itself. The material keeps
@@ -293,6 +338,7 @@ int runGxDrawTests() {
     texturedQuad();
     perspective();
     channels();
+    pipelineAcrossPrimitives();
     std::printf("%u GX draw checks passed\n", checks);
     return 0;
 }
