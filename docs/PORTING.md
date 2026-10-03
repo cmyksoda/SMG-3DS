@@ -517,6 +517,11 @@ and may drop the read or the loop around it. `tools/ub-scan.sh` recompiles every
 `J3DTevBlock4::patchTexNoAndTexCoordScale` loops over 8 texture numbers where the block has 4 (J3DMatBlock.cpp is
 NonMatching in Petari, and the class's own `patchTexNo` reads 4). `TVec3::setTrans` and `Swinger` read the
 same floats through `mtx[row][col]`. The scan reads 0 over 1,872 objects; run it after large source changes.
+It can't see every returned local: `SimpleEffectObj::getClippingCenterOffset` returns the address of a named local
+(`TVec3f vec; return &vec;`), which gcc compiles to `return 0` without a warning, so the first galaxy with such an
+effect (Gateway) crashed in `SimpleEffectObj::init`. A local static holds it now, as for the temporaries in
+`MorphItemObjNeo.hpp` and `EffectObjGravityDust`; a search of the decomp for `return &name;` after a local
+declaration finds no other.
 
 **The C library.** MSL's printf writes nothing for a null `%s`; newlib writes `(null)`. The game builds archive
 paths that way (`LayoutHolder`, `ResourceHolder`: four sites adapted). Other calls may lean on it; a general fix
@@ -929,7 +934,9 @@ use; each clock read costs Azahar 150 cycles, so it slows what it measures, by u
 vertices of refused lists by reason (the perf line names new draw states whose TEV program is approximated, by reason,
 without it); `dev.gx_check=1` checks each new mesh against the CPU path; `dev.gx_inline=1` draws on the game's thread
 instead of the render thread; `dev.start=GALAXY N` starts that galaxy at its start point N (StartInfo's `MarioNo`), to
-reach a stage's later parts without walking there. The heartbeat (every 300th frame) logs where Mario is, for planning
+reach a stage's later parts without walking there (a start point inside a switch area fires it while the scene is still
+starting, which isn't how the story meets it); `dev.galaxy=GALAXY N` makes the first galaxy after the file select that
+galaxy's scenario N (`GameSequenceProgress`, as the move is requested, so the stage's sounds load for it). The heartbeat (every 300th frame) logs where Mario is, for planning
 a run's route. Azahar runs the 3DS CPU at its base 268 MHz although the port switches a New 3DS to 804
 MHz (`osSetSpeedupEnable`), so every millisecond figure here is a slow-clock one; how much faster hardware is can only
 be measured on hardware.
@@ -1173,11 +1180,11 @@ generator written the way Dolphin's format notes describe it. `disc_tool --rvz` 
 (files where the table puts them, zeros between, no hashes, ticket or junk): of the USA disc, a 3.15 GB file, every
 file read back identical.
 
-The 3DS build reads `3ds/SMG-3DS/game.rvz` when it is on the SD card (`DiscImage.cpp`): the disc drive's file table and
-reads, main.dol's tables and the game code for the NAND's home all come from it, and the extracted files are the
-fallback. The file is read through `FSFILE_Read`, whose offsets are 64 bits (newlib's `off_t` is 32, and an image runs
-past 2 GB); the reader's buffers come from the free store. ISO and WBFS images aren't opened on the 3DS: they need
-the common key, and where that comes from is Jaxi's call. FAT32 caps a file at 4 GB, so the 4.4 GB ISO can't sit on a
+The 3DS build reads `3ds/SMG-3DS/game.rvz`, `game.wbfs` or `game.iso`, the first it finds on the SD card
+(`DiscImage.cpp`): the disc drive's file table and reads, main.dol's tables and the game code for the NAND's home all
+come from it, and the extracted files are the fallback. The file is read through `FSFILE_Read`, whose offsets are 64 bits (newlib's `off_t` is 32, and an image runs
+past 2 GB); the reader's buffers come from the free store. A WBFS or ISO needs the Wii's common key, the same in
+every console, which the port carries as Dolphin does (Jaxi's call). FAT32 caps a file at 4 GB, so the 4.4 GB ISO can't sit on a
 3DS SD card; the scrubbed WBFS and an RVZ can.
 
 The portable math tests check tolerances and conventions, not bit-identical Gekko rounding.
