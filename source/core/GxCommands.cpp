@@ -380,37 +380,28 @@ void GxCommandProcessor::put(unsigned stream, const std::uint8_t* bytes, std::ui
     if (stream >= Streams) return host_.unsupported("a FIFO stream past the processor's", stream);
     std::uint8_t* pending = pending_[stream];
     std::uint32_t& size = pendingSize_[stream];
-    if (!size && count > 8) {
-        // A buffer of whole commands (a flushed write buffer): read where it is, keeping only an unfinished tail.
-        std::uint32_t read = 0;
-        while (read < count) {
-            const std::uint32_t used = command(bytes + read, count - read);
-            if (!used) break;
-            read += used;
-        }
-        bytes += read, count -= read;
-        if (!count) return void(needed_[stream] = 0);
+    // A command the last piece left unfinished takes only the bytes it still needs from this one (immediate-mode
+    // vertices arrive a word at a time); the rest is read where it is.
+    while (size && count) {
+        const std::uint32_t need = length(pending, size);
+        if (need > sizeof pending_[stream]) return host_.unsupported("a command longer than the FIFO's staging", need);
+        const std::uint32_t take = std::min(count, need - size);
+        std::memcpy(pending + size, bytes, take);
+        size += take, bytes += take, count -= take;
+        if (size < length(pending, size)) continue;
+        const std::uint32_t used = command(pending, size);
+        if (!used) return host_.unsupported("a whole command the processor could not read", size);
+        size -= used;
     }
-    if (size + count > sizeof pending_[stream]) {
-        host_.unsupported("a command longer than the FIFO's staging", size + count);
-        return;
-    }
-    std::memcpy(pending + size, bytes, count);
-    size += count;
-    // A command still short of the length its header gave waits without being read again (immediate-mode vertices
-    // arrive a word at a time); a CP load in between may have changed a vertex's size, so that counts too.
-    if (size < needed_[stream] && cpChanges == neededCp_[stream]) return;
+    if (size) return;
     std::uint32_t read = 0;
-    while (read < size) {
-        const std::uint32_t used = command(pending + read, size - read);
+    while (read < count) {
+        const std::uint32_t used = command(bytes + read, count - read);
         if (!used) break;
         read += used;
     }
-    if (read) {
-        std::memmove(pending, pending + read, size - read);
-        size -= read;
-    }
-    needed_[stream] = size ? length(pending, size) : 0, neededCp_[stream] = cpChanges;
+    std::memcpy(pending, bytes + read, count - read);
+    size = count - read;
 }
 
 std::uint32_t GxCommandProcessor::length(const std::uint8_t* at, std::uint32_t available) const {

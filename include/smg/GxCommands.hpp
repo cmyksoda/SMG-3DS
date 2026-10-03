@@ -123,6 +123,6 @@ private:
     // The whole length of the command a stream has begun, from its header (at least the header itself).
     std::uint32_t length(const std::uint8_t* at, std::uint32_t available) const;
     std::uint8_t pending_[Streams][0x10000];
-    std::uint32_t pendingSize_[Streams] = {}, needed_[Streams] = {}, neededCp_[Streams] = {};
+    std::uint32_t pendingSize_[Streams] = {};
 };
 } // namespace smg

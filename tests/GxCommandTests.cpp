@@ -50,6 +50,17 @@ void registerLoads() {
     check(gpu->cp[0x50] == 0xCAFE0001, "a CP load keeps its word");
     check(gpu->xf[0x1008] == 1 && gpu->xf[0x1009] == 2 && gpu->xf[0x100A] == 3, "an XF load of three fills three registers");
     check(gpu->pending() == 0 && unsupported.empty(), "every command taken, nothing left waiting");
+    // A piece that ends inside a command: the next finishes it, and the rest of that piece is read where it is.
+    stream.clear();
+    stream.push_back(0x10); put32(stream, (2 << 16) | 0x1008);
+    put32(stream, 4); put32(stream, 5); put32(stream, 6);
+    stream.push_back(0x61); put32(stream, 0x2A654321);
+    stream.push_back(0x61); put32(stream, 0x2B111111);
+    gpu->put(stream.data(), 7);
+    check(gpu->xf[0x1008] == 1 && gpu->pending() == 7, "half an XF load waits");
+    gpu->put(stream.data() + 7, static_cast<std::uint32_t>(stream.size() - 7));
+    check(gpu->xf[0x1008] == 4 && gpu->xf[0x100A] == 6 && gpu->bp[0x2A] == 0x654321 && gpu->bp[0x2B] == 0x111111 && gpu->pending() == 0,
+          "the next piece finishes it and the commands after it");
     delete gpu;
 }
 
