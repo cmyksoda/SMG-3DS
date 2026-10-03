@@ -1135,6 +1135,22 @@ All 1,758 BMD/BDL models load under ASan and UBSan (5,053,844 triangles), and 6,
 7,780 materials translate to the combiner exactly. Good Egg scenario 1 places 296 objects
 across 12 zones; the preview draws 56 rigid models in 172 placements.
 
+### Disc images
+
+`WiiDisc` reads a disc image the way the game reads its disc: an ISO, or a WBFS through its block map (blocks a
+scrubbed dump left out read as zeros). It finds the data partition in the partition tables, takes the title key from
+the partition's ticket (decrypted under the common key the caller gives, or given already decrypted), and decrypts
+the partition a cluster at a time: 0x8000 bytes stored, 0x7C00 of them data, AES-128-CBC with the cluster's stored
+hash bytes at 0x3D0 as IV (`Aes128`, table-driven, about twenty instructions a byte on the ARM11). A wrong key is
+caught by boot.bin's Wii magic. `wii_disc_tests` builds a small disc encrypted the same way and reads it back as an
+ISO and as a WBFS; on the USA disc, `disc_tool` (a host tool, given wit's decrypted title key) read all 2,371 files,
+3,228.2 MB, from the ISO and from wit's scrubbed WBFS, each identical to wit's extraction.
+
+The 3DS build doesn't use it yet: it still reads the extracted files under `3ds/SMG-3DS/game`. Open before it can:
+where the key comes from (Jaxi's call), and 64-bit file offsets (a 3.68 GB WBFS needs `FSFILE_Read`, since newlib's
+`off_t` is 32 bits). FAT32 caps a file at 4 GB, so the 4.4 GB ISO can't sit on a 3DS SD card; the scrubbed WBFS can.
+RVZ (Dolphin's format) stores partitions decrypted and needs no key, but compressed (zstd): not read yet.
+
 The portable math tests check tolerances and conventions, not bit-identical Gekko rounding.
 The native validation app passes 1,069 math, 37 WPad, 190 BCSV, 1,043 J3D model/texture,
 8,810 TEV combiner, 27 original gravity, 27 NameObj, 89 scene and gravity creator, 48 collision, 21 J3D animation, 13 original actor, 6 J3D transform, 6 J3D skeleton, 14 GX command processor, 19 BMG text, 9 colour, TEV and display list word, 7 ETC1 and 8 GPU texture checks on emulated ARM
