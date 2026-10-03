@@ -78,6 +78,13 @@ int smgDevMarioStart(const char* galaxy) {
     const smg::Settings& s = input().settings();
     return s.devStartMario >= 0 && galaxy && s.devStartGalaxy == galaxy ? s.devStartMario : -1;
 }
+// dev.galaxy: the stage and scenario the game's first stage gives way to, or null for the game's own.
+const char* smgDevGalaxy(int* scenario) {
+    const smg::Settings& s = input().settings();
+    if (s.devGalaxyScenario <= 0) return nullptr;
+    *scenario = s.devGalaxyScenario;
+    return s.devGalaxy.c_str();
+}
 // GameSystem::frameLoop (adapted): logic steps per drawn frame. The Wii drew each one; the port draws every second one,
 // 30 frames a second with the game at full speed, unless dev.draw_every=1.
 int smgRenderInterval() { return input().settings().devDrawEvery ? 1 : 2; }

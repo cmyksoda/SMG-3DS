@@ -93,7 +93,8 @@ bool operator==(const Settings& a, const Settings& b) {
            a.previewGalaxy == b.previewGalaxy && a.previewScenario == b.previewScenario && a.devSkipStory == b.devSkipStory &&
            a.devGxDump == b.devGxDump && a.devGxNull == b.devGxNull && a.devGxTiming == b.devGxTiming &&
            a.devGxCheck == b.devGxCheck && a.devGxInline == b.devGxInline && a.devDrawEvery == b.devDrawEvery && a.devGxNoRaw == b.devGxNoRaw &&
-           a.devAvSync == b.devAvSync && a.devStartGalaxy == b.devStartGalaxy && a.devStartMario == b.devStartMario;
+           a.devAvSync == b.devAvSync && a.devStartGalaxy == b.devStartGalaxy && a.devStartMario == b.devStartMario &&
+           a.devGalaxy == b.devGalaxy && a.devGalaxyScenario == b.devGalaxyScenario;
 }
 
 Settings parseSettings(const std::string& text, Settings base) {
@@ -118,6 +119,8 @@ Settings parseSettings(const std::string& text, Settings base) {
             parseGalaxyNumber(value, 1, settings.previewGalaxy, settings.previewScenario);
         } else if (key == "dev.start") {
             parseGalaxyNumber(value, 0, settings.devStartGalaxy, settings.devStartMario);
+        } else if (key == "dev.galaxy") {
+            parseGalaxyNumber(value, 1, settings.devGalaxy, settings.devGalaxyScenario);
         } else if (key == "dev.skip_story" || key == "dev.gx_dump" || key == "dev.gx_null" || key == "dev.gx_timing" || key == "dev.gx_check" ||
                    key == "dev.gx_inline" || key == "dev.draw_every" || key == "dev.gx_noraw" || key == "dev.av_sync") {
             if (value == "0" || value == "1")
@@ -159,6 +162,7 @@ std::string formatSettings(const Settings& settings) {
     if (settings.devAvSync) text += "dev.av_sync=1\n";
     if (settings.devGxNoRaw) text += "dev.gx_noraw=1\n";
     if (settings.devStartMario >= 0) text += "dev.start=" + settings.devStartGalaxy + " " + std::to_string(settings.devStartMario) + "\n";
+    if (settings.devGalaxyScenario > 0) text += "dev.galaxy=" + settings.devGalaxy + " " + std::to_string(settings.devGalaxyScenario) + "\n";
     return text;
 }
 

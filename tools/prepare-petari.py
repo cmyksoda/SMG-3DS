@@ -1405,6 +1405,18 @@ adapt("src/Game/System/GameSystem.cpp", "Game/System/GameSystem.cpp", [
      "    smgFramePhase(4);\n    MainLoopFramework::sManager->waitForRetrace();\n}", 1),
 ])
 
+# For development (settings.ini dev.galaxy=GALAXY N, off unless set): the first galaxy played after the file select is
+# that one, scenario N.
+adapt("src/Game/System/GameSequenceProgress.cpp", "Game/System/GameSequenceProgress.cpp", [
+    ('#include "Game/System/GameSequenceProgress.hpp"\n',
+     '#include "Game/System/GameSequenceProgress.hpp"\n\nextern "C" const char* smgDevGalaxy(int* scenario);  // source/compat/Kpad.cpp\n', 1),
+    ("    mGalaxyCometScheduler->syncWithFlags();\n\n    updateGameDataBeforeChangeScene();\n",
+     "    mGalaxyCometScheduler->syncWithFlags();\n\n    static bool sDevGalaxyTaken = false;\n    int devScenario = 0;\n"
+     "    if (const char* devGalaxy = smgDevGalaxy(&devScenario); devGalaxy && !sDevGalaxyTaken && !MR::isEqualString(moveArg.mStageName, \"FileSelect\")) {\n"
+     "        sDevGalaxyTaken = true;\n        moveArg.mStageName = devGalaxy;\n        moveArg.mScenarioNo = moveArg._C = devScenario;\n    }\n\n"
+     "    updateGameDataBeforeChangeScene();\n", 1),
+])
+
 # For development (settings.ini dev.start=GALAXY N, off unless set): Mario starts that galaxy at its start point N.
 adapt("src/Game/Scene/StageDataHolder.cpp", "Game/Scene/StageDataHolder.cpp", [
     ('#include "Game/Scene/StageDataHolder.hpp"\n',

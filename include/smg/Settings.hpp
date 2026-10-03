@@ -56,6 +56,10 @@ struct Settings {
     // to reach a stage's later parts without walking there.
     std::string devStartGalaxy;
     int devStartMario = -1;
+    // For development only (dev.galaxy=GALAXY N): the game's first stage is that galaxy's scenario N instead, to reach
+    // later scenes without playing up to them.
+    std::string devGalaxy;
+    int devGalaxyScenario = 0;
     static constexpr int MinSpeed = 25, MaxSpeed = 300, SpeedStep = 25;
 };
 bool operator==(const Settings& a, const Settings& b);
