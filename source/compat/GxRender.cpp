@@ -146,7 +146,8 @@ struct Renderer {
     GxFrame stateFrame;
     // The target's colour and depth read back (both four bytes a pixel, the screen's way round), until drawn on again.
     u32* readback[2] = {};
-    bool fresh[2] = {};
+    bool fresh[3] = {};  // [2]: the depth tile last read back (freshTile) still holds
+    unsigned freshTile = 0;
     // A texture by where and how GX fetches it.
     using Key = std::tuple<u32, u16, u16, u8, u8, u8, u8, u8>;
     std::map<Key, C3D_Tex> textures;
@@ -211,6 +212,8 @@ struct Renderer {
         u32 steps[12] = {};
         u32 stateHits = 0, stateMisses = 0, stateClears = 0;
         u32 cpuCopies = 0, gpuCopies = 0;
+        u32 peeks = 0;
+        u64 peekTicks = 0;  // depth peeks: the frame paused, the GPU waited for, one tile read back
         u32 meshesChecked = 0, meshesDiffering = 0;  // dev.gx_check
         std::pair<const char*, u32> approximated[8] = {};  // new draw states whose combiner program is approximated, by reason
         u32 listVertices = 0;
@@ -285,7 +288,7 @@ struct Renderer {
         perf.syncTicks += svcGetSystemTick() - start;
         C3D_FrameDrawOn(target);
         if (clearPending) C3D_RenderTargetClear(target, C3D_CLEAR_ALL, clearColor, clearDepth);
-        fresh[0] = fresh[1] = false;
+        fresh[0] = fresh[1] = fresh[2] = false;
         clearPending = false;
         startBuffers();
         inFrame = true;
@@ -1309,7 +1312,7 @@ struct Renderer {
         GPUCMD_GetBuffer(&buffer, &size, &offset);
         if (size - offset < 0x40) stop("a mesh's draws filling the GPU's command list");  // a raw write past its room
         cpuBound = false;
-        fresh[0] = fresh[1] = false;
+        fresh[0] = fresh[1] = fresh[2] = false;
         ++perf.meshDraws, perf.meshTriangles += mesh.indexCount / 3;
         stepEnd(10, drawing);
     }
@@ -1352,7 +1355,7 @@ struct Renderer {
         pending = false;
         ++perf.draws, perf.triangles += (indexUsed - batchStart) / 3;
         batchStart = indexUsed;
-        fresh[0] = fresh[1] = false;
+        fresh[0] = fresh[1] = fresh[2] = false;
         if (wholeScreen) dumpEfbAverage("after it");
     }
 
@@ -1411,13 +1414,14 @@ struct Renderer {
         std::fprintf(stderr, "gx perf: t=%.0f, %lu frames, %.1f ms/frame (%.1f fps, %.2f logic steps each); per logic step: game thread draw %.1f, "
                      "logic %.1f, animation %.1f, waiting for the GPU %.1f, retrace wait %.1f; per frame: GX stream read %s %.1f ms (%.1f of it waiting "
                      "for the PICA), game waiting for room %.1f ms, %.0f KB; DSP %.1f ms; %.0f primitives (%.0f same state, %.0f with only C0 new), %.0f "
-                     "vertices, %.0f triangles, %.0f draws\n",
+                     "vertices, %.0f triangles, %.0f draws; depth peeks %.1f (%.2f ms)\n",
                      double(now) / SYSCLOCK_ARM11, static_cast<unsigned long>(perf.frames), ms / n, n * 1000.0 / ms, phaseFrames / n, phases[0], phases[1],
                      phases[2], phases[3], phases[4],
                      clock.core == 2 ? "on core 2" : clock.core == 1 ? "on core 1" : "on the game's thread", clock.busy.exchange(0) * tick,
                      perf.syncTicks * tick, clock.gameWaits.exchange(0) * tick, clock.bytes.exchange(0) / 1024.0 / n,
                      smgDspTicks.exchange(0, std::memory_order_relaxed) * tick, perf.primitives / n,
-                     perf.sameState / n, perf.color0Rides / n, perf.vertices / n, perf.triangles / n, perf.draws / n);
+                     perf.sameState / n, perf.color0Rides / n, perf.vertices / n, perf.triangles / n, perf.draws / n, perf.peeks / n,
+                     perf.peekTicks * tick);
         // The registers behind most state changes, so batching can be aimed at them.
         std::string top;
         for (int k = 0; k < 6; ++k) {
@@ -1560,7 +1564,7 @@ struct Renderer {
         forget(copy.address, textureCopySize(copy));
         stateValid = applied = false;  // its textures may be gone
         forgetSent();
-        if (copy.clear) C3D_RenderTargetClear(target, C3D_CLEAR_ALL, copyClearColor(gpu), copyClearDepth(gpu)), fresh[0] = fresh[1] = false;
+        if (copy.clear) C3D_RenderTargetClear(target, C3D_CLEAR_ALL, copyClearColor(gpu), copyClearDepth(gpu)), fresh[0] = fresh[1] = fresh[2] = false;
     }
 
     Efb efbView(const GxCommandProcessor& gpu) {
@@ -1820,7 +1824,7 @@ struct Renderer {
         C3D_DrawArrays(GPU_TRIANGLES, static_cast<int>(used), static_cast<int>(n));
         used += n;
         applied = false;
-        fresh[0] = fresh[1] = false;
+        fresh[0] = fresh[1] = fresh[2] = false;
     }
 
     // What has been drawn so far, read back from the target once the GPU has finished it; depth (D24S8) moves as raw
@@ -1856,14 +1860,19 @@ struct Renderer {
     // whole readback lays them out): a 256-byte copy instead of the whole buffer.
     u32* depthTile = nullptr;
     u32 depthFromTile(unsigned row, unsigned column) {
+        const u64 start = svcGetSystemTick();
+        ++perf.peeks;
         if (!depthTile) depthTile = static_cast<u32*>(linearAlloc(256));
         if (!depthTile) stop("reading a depth tile back with no memory to read it into");
         const unsigned tile = (row / 8) * 30 + column / 8;
+        if (fresh[2] && tile == freshTile) return depthTile[morton(column & 7, row & 7)];  // nothing drawn since
         if (inFrame) pause();
         C3D_SyncTextureCopy(static_cast<u32*>(target->frameBuf.depthBuf) + tile * 64, GX_BUFFER_DIM(256 / 16, 0), depthTile, GX_BUFFER_DIM(256 / 16, 0), 256,
                             GX_TRANSFER_RAW_COPY(1));
         GSPGPU_InvalidateDataCache(depthTile, 256);
         if (inFrame) resume();
+        perf.peekTicks += svcGetSystemTick() - start;
+        fresh[2] = true, freshTile = tile;
         return depthTile[morton(column & 7, row & 7)];
     }
 
