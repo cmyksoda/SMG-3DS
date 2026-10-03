@@ -54,15 +54,21 @@ struct GxDrawState {
     // The program reads TEV register C0 as the vertex colour, which then holds C0: a primitive whose C0 alone differs
     // (a particle's fading colour) joins the same draw instead of starting another.
     bool color0InVertex = false;
+    // With C0 riding, the program reads C1 from a palette texel on unit paletteUnit (the CPU path's draws only): a
+    // particle's other colour no longer starts a draw either.
+    bool color1InTexture = false;
+    std::uint8_t paletteUnit = 0;
     const char* unsupported = nullptr;
 };
-void readGxDrawState(const GxCommandProcessor& gpu, GxDrawState& out);
+// palette: C1 may come from a palette unit (color1InTexture), for draws on the CPU path.
+void readGxDrawState(const GxCommandProcessor& gpu, GxDrawState& out, bool palette = false);
 // The registers readGxDrawState reads for the stages and texture maps in use, in a fixed order, as a cache key: two
 // processors with the same key read the same state (a map no stage uses may differ in it). At most MaxDrawStateKey words.
 constexpr std::size_t MaxDrawStateKey = 128;
 std::size_t gxDrawStateKey(const GxCommandProcessor& gpu, std::uint32_t* out);
 // C0 as four bytes, false when a component is outside 0-255 (then it can't be a vertex colour).
 bool gxColor0Bytes(const GxCommandProcessor& gpu, std::uint8_t out[4]);
+bool gxColor1Bytes(const GxCommandProcessor& gpu, std::uint8_t out[4]);
 // TEV programs compiled so far (readGxDrawState keeps each by what compileTev reads): how often its cache missed.
 std::uint32_t gxTevCompiles();
 
@@ -156,6 +162,8 @@ public:
     static constexpr std::size_t maxIndices(std::size_t count) { return 3 * count; }
     // The state passed to prepare was read again: the next prepare reads everything.
     void stateChanged() { prepared_ = false; }
+    // Where the palette unit samples for the next primitives (GX texture coordinates).
+    void setPaletteTexel(float s, float t) { palette_[0] = s, palette_[1] = t; }
     // After prepare: whether display lists under this state can take the GPU path (unlit or riding colour, folded
     // texgens with a matrix for the whole primitive, no depth texture), and the mesh a list decodes to (false when it
     // holds anything but primitives, or a matrix index that doesn't name a whole slot of the ten).
@@ -181,6 +189,7 @@ private:
     struct TexGen {
         std::uint8_t source = 0, coord = 0, rows = 2;
         bool threeInputs = false, perVertexMatrix = false, dual = false, normalize = false;
+        bool palette = false;  // the unit samples the C1 palette (setPaletteTexel), not a texgen
         std::uint32_t matrix = 0, post = 0;
         // With one matrix for the whole primitive and no normalizing, the texgen is one affine map: the matrix and the
         // dual transform folded together (the input's fourth component is always one).
@@ -207,6 +216,7 @@ private:
     std::uint8_t kind_ = 0, reject_ = 0, units_ = 0;
     bool perVertexMatrix_ = false, channel_ = false, lit_ = false, fixedDepth_ = false, color0InVertex_ = false;
     std::uint8_t color0_[4] = {};
+    float palette_[2] = {};
     std::uint32_t defaultMatrix_ = 0;
     float depth01_ = 0;
     TexGen texgens_[CombinerProgram::MaxUnits];

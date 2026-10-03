@@ -375,6 +375,43 @@ void color0Rides() {
     check(!state.color0InVertex, "a program that reads the rasterized colour keeps C0 a constant");
 }
 
+// With C0 riding, a program that also reads C1 takes it from a palette unit when the CPU path asks, so primitives whose
+// C1 alone differs share one program too; the GPU path's state keeps C1 a constant.
+void color1Rides() {
+    auto owned = std::make_unique<smg::GxCommandProcessor>(host());
+    smg::GxCommandProcessor& gpu = *owned;
+    Stream s;
+    clearState(s);
+    s.bp(0xF6000004), s.bp(0xF700000E);  // swap table 0: R, G, B, A
+    s.bp(0xC008428F);                    // colour lerp(C1, C0, TEXC)
+    s.bp(0xE4000033), s.bp(0xE5022011);  // C1 (0x33, 0x22, 0x11, 0)
+    quad(s, {0, 1, 3, 2});
+    drawn.clear();
+    gpu.put(s.bytes.data(), static_cast<std::uint32_t>(s.bytes.size()));
+    smg::GxDrawState state;
+    smg::readGxDrawState(gpu, state, true);
+    check(state.color0InVertex && state.color1InTexture && state.program.unitCount == 2 &&
+              state.program.units[state.paletteUnit].texture == smg::CombinerProgram::Palette && state.program.exact,
+          "C1 is read from a palette unit, beside the stage's own texture");
+    smg::GxVertexPipeline pipeline;
+    smg::GxDrawVertex v[4];
+    std::uint16_t indices[12];
+    pipeline.prepare(gpu, state, {}, drawn[0].kind, drawn[0].format);
+    pipeline.setPaletteTexel(0.3125f, 0.6875f);
+    pipeline.run(drawn[0].data.data(), 4, v, 0, indices);
+    check(v[2].texcoord[state.paletteUnit][0] == 0.3125f && v[2].texcoord[state.paletteUnit][1] == 0.6875f,
+          "every vertex carries the palette texel's coordinates");
+    check(pipeline.meshEligible() != smg::GxVertexPipeline::MeshOk, "and such a state is the CPU path's alone");
+    smg::GxDrawState constant;
+    smg::readGxDrawState(gpu, constant);
+    check(constant.color0InVertex && !constant.color1InTexture && constant.program.unitCount == 1, "the GPU path's state keeps C1 a constant");
+    Stream writes;
+    writes.bp(0xC088428F);  // the same stage, its result into C1
+    gpu.put(writes.bytes.data(), static_cast<std::uint32_t>(writes.bytes.size()));
+    smg::readGxDrawState(gpu, state, true);
+    check(!state.color1InTexture, "a program that writes C1 keeps it where the combiner leaves it");
+}
+
 // The GPU path: a display list of primitives decodes once into model-space vertices and triangles; its uniforms move a
 // vertex where the CPU path would, and a list with anything but primitives stays the CPU's.
 void meshFromDisplayList() {
@@ -627,6 +664,7 @@ int runGxDrawTests() {
     pipelineAcrossPrimitives();
     dualTexgen();
     color0Rides();
+    color1Rides();
     meshFromDisplayList();
     litMesh();
     litMeshGroups();

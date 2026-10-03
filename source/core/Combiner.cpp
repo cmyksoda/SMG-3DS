@@ -119,9 +119,11 @@ struct Compiler {
     Range ranges[4][2];
 
     bool knownConstants;
+    bool color1FromUnit;
+    int paletteUnit = -1;
 
-    Compiler(const ModelMaterial& material, bool leadingStage, bool known)
-        : m(material), leading(leadingStage), knownConstants(known) {
+    Compiler(const ModelMaterial& material, bool leadingStage, bool known, bool color1)
+        : m(material), leading(leadingStage), knownConstants(known), color1FromUnit(color1) {
         registers[0] = m.tevColors[3];
         for (int i = 0; i < 3; ++i) registers[i + 1] = m.tevColors[i];
         for (int i = 0; i < 4; ++i) {
@@ -130,10 +132,12 @@ struct Compiler {
             ranges[i][1] = {r[3], r[3]};
         }
         for (auto& row : unitFor) for (int& unit : row) unit = -1;
+        if (color1FromUnit) ranges[2][0] = ranges[2][1] = {0, 1};
     }
 
     Arg reg(int index, bool alphaPart, bool colorInput, bool d) {
         const int part = alphaPart ? 1 : 0;
+        if (index == 2 && color1FromUnit && !written[2][part]) return palette(alphaPart, colorInput);
         const CombineOperand operand = alphaPart ? CombineOperand::Alpha : CombineOperand::Color;
         if (!written[index][part]) {
             const auto& r = registers[index];
@@ -149,6 +153,20 @@ struct Compiler {
         if (!known.inUnit()) approximate("unclamped value");
         if (live[part] != index) approximate("overwritten register read");
         return kind(Arg::Prev, operand);
+    }
+
+    Arg palette(bool alphaPart, bool colorInput) {
+        if (paletteUnit < 0) {
+            if (program.unitCount == CombinerProgram::MaxUnits) {
+                approximate("no unit left for C1");
+                return kind(Arg::Zero);
+            }
+            paletteUnit = static_cast<int>(program.unitCount++);
+            program.units[paletteUnit] = {CombinerProgram::Palette, 0};
+        }
+        Arg a = kind(Arg::Texture, alphaPart || !colorInput ? CombineOperand::Alpha : CombineOperand::Color);
+        a.unit = static_cast<std::uint8_t>(paletteUnit);
+        return a;
     }
 
     Arg texture(const TevStage& s, bool alphaPart, bool colorInput) {
@@ -584,22 +602,22 @@ struct Compiler {
 } // namespace
 
 namespace {
-CombinerProgram compile(const ModelMaterial& material, bool known) {
-    Compiler direct(material, false, known);
+CombinerProgram compile(const ModelMaterial& material, bool known, bool color1) {
+    Compiler direct(material, false, known, color1);
     const auto program = direct.run();
     if (program.exact || !direct.wantsLeading) return program;
     // Stage 0 cannot read the buffer color; spending a stage lets stage 1 read it instead.
     // A clamp between ops is a smaller error than a wrong constant.
-    const auto shifted = Compiler(material, true, known).run();
+    const auto shifted = Compiler(material, true, known, color1).run();
     return shifted.exact || std::strcmp(shifted.approximation, "more than two constants") ? shifted : program;
 }
 } // namespace
 
-CombinerProgram compileTev(const ModelMaterial& material) {
+CombinerProgram compileTev(const ModelMaterial& material, bool color1FromUnit) {
     // A register of known value read as a constant frees the previous value but takes a constant slot.
-    const auto previous = compile(material, false);
+    const auto previous = compile(material, false, color1FromUnit);
     if (previous.exact) return previous;
-    const auto constants = compile(material, true);
+    const auto constants = compile(material, true, color1FromUnit);
     return constants.exact ? constants : previous;
 }
 } // namespace smg

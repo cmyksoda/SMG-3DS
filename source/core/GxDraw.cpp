@@ -294,15 +294,17 @@ struct TevKey {
     std::array<float, 4> tevColors[4], konstColors[4];
     int textures[8];
     std::uint8_t swapTables[4][4];
+    std::uint8_t color1FromUnit;
     std::uint8_t count;
     TevStage stages[16];
 };
 
 std::uint32_t tevCompiles = 0;
 
-const CombinerProgram& cachedTev(const ModelMaterial& m) {
+const CombinerProgram& cachedTev(const ModelMaterial& m, bool color1FromUnit = false) {
     TevKey key;
     std::memset(static_cast<void*>(&key), 0, sizeof key);
+    key.color1FromUnit = color1FromUnit;
     key.count = std::min<std::uint8_t>(m.tevStageCount, 16);
     std::copy(m.stages, m.stages + key.count, key.stages);
     std::copy(m.tevColors, m.tevColors + 4, key.tevColors);
@@ -327,16 +329,17 @@ const CombinerProgram& cachedTev(const ModelMaterial& m) {
     ++tevCompiles;
     Entry& entry = cache[hash];
     entry.key = key;
-    entry.program = compileTev(m);
+    entry.program = compileTev(m, color1FromUnit);
     return entry.program;
 }
 } // namespace
 
 std::uint32_t gxTevCompiles() { return tevCompiles; }
 
-bool gxColor0Bytes(const GxCommandProcessor& gpu, std::uint8_t out[4]) {
-    // BP 0xE2/0xE3 as the material keeps them (C0 is tevColors[0]): eleven-bit two's complement components.
-    const std::uint32_t ra = gpu.tevColor[2], bg = gpu.tevColor[3];
+namespace {
+// TEV register `reg` (1 C0, 2 C1) as four bytes: BP 0xE0 + 2 reg and the next, eleven-bit two's complement components.
+bool tevColorBytes(const GxCommandProcessor& gpu, unsigned reg, std::uint8_t out[4]) {
+    const std::uint32_t ra = gpu.tevColor[2 * reg], bg = gpu.tevColor[2 * reg + 1];
     const std::int32_t c[4] = {static_cast<std::int32_t>(TEV_REGISTERL_GET_R(ra) << 21) >> 21, static_cast<std::int32_t>(TEV_REGISTERH_GET_G(bg) << 21) >> 21,
                                static_cast<std::int32_t>(TEV_REGISTERH_GET_B(bg) << 21) >> 21, static_cast<std::int32_t>(TEV_REGISTERL_GET_A(ra) << 21) >> 21};
     for (int i = 0; i < 4; ++i) {
@@ -345,6 +348,10 @@ bool gxColor0Bytes(const GxCommandProcessor& gpu, std::uint8_t out[4]) {
     }
     return true;
 }
+} // namespace
+
+bool gxColor0Bytes(const GxCommandProcessor& gpu, std::uint8_t out[4]) { return tevColorBytes(gpu, 1, out); }
+bool gxColor1Bytes(const GxCommandProcessor& gpu, std::uint8_t out[4]) { return tevColorBytes(gpu, 2, out); }
 
 namespace {
 // C0 can ride in the vertex colour when the program reads it and never writes it, never reads the rasterized colour
@@ -366,6 +373,18 @@ bool color0CanRide(const GxCommandProcessor& gpu, const ModelMaterial& m, std::u
         if (table[0] == 0 && table[1] == 1 && table[2] == 2 && table[3] == 3) return identitySwap = t, true;
     }
     return false;
+}
+
+// C1 can come from a palette texel when the program reads it, no stage writes it and it fits in bytes.
+bool color1CanRide(const GxCommandProcessor& gpu, const ModelMaterial& m) {
+    bool reads = false;
+    for (int i = 0; i < m.tevStageCount; ++i) {
+        const TevStage& s = m.stages[i];
+        for (int k = 0; k < 4; ++k) reads |= s.colorIn[k] == 4 || s.colorIn[k] == 5 || s.alphaIn[k] == 2;  // C1, A1
+        if (s.colorReg == 2 || s.alphaReg == 2) return false;                                               // GX_TEVREG1
+    }
+    std::uint8_t bytes[4];
+    return reads && gxColor1Bytes(gpu, bytes);
 }
 } // namespace
 
@@ -393,7 +412,7 @@ std::size_t gxDrawStateKey(const GxCommandProcessor& gpu, std::uint32_t* out) {
     return std::size_t(at - out);
 }
 
-void readGxDrawState(const GxCommandProcessor& gpu, GxDrawState& out) {
+void readGxDrawState(const GxCommandProcessor& gpu, GxDrawState& out, bool palette) {
     out = GxDrawState{};
     readTev(gpu, out);
     readPixel(gpu, out);
@@ -418,6 +437,12 @@ void readGxDrawState(const GxCommandProcessor& gpu, GxDrawState& out) {
     if (!program.exact && cachedTev(out.material).exact) return void(out.program = cachedTev(out.material));
     out.program = program;
     out.color0InVertex = true;
+    if (!palette || !color1CanRide(gpu, riding)) return;
+    riding.tevColors[1] = {0, 0, 0, 0};
+    const CombinerProgram both = cachedTev(riding, true);
+    if (!both.exact && program.exact) return;
+    for (unsigned u = 0; u < both.unitCount; ++u)
+        if (both.units[u].texture == CombinerProgram::Palette) out.program = both, out.color1InTexture = true, out.paletteUnit = static_cast<std::uint8_t>(u);
 }
 
 float GxVertexPipeline::matrix(std::uint32_t row, int column) const { return asFloat(gpu_->xf[(row * 4 + column) & 0xFFF]); }
@@ -447,6 +472,8 @@ bool GxVertexPipeline::prepare(const GxCommandProcessor& gpu, const GxDrawState&
     units_ = static_cast<std::uint8_t>(state.program.unitCount);
     for (unsigned u = 0; u < units_; ++u) {
         TexGen& t = texgens_[u];
+        t.palette = state.program.units[u].texture == CombinerProgram::Palette;
+        if (t.palette) continue;
         const std::uint8_t coord = state.program.units[u].texCoord;
         const std::uint32_t ctrl = gpu.xf[XfTexGen + coord];
         const std::uint32_t row = XF_TEX_GET_SOURCE_ROW(ctrl);
@@ -625,7 +652,10 @@ std::size_t GxVertexPipeline::run(const std::uint8_t* data, std::uint16_t count,
             }
             lighting_.apply(view, normal, v.color[0], d.color);
         }
-        for (unsigned u = 0; u < units_; ++u) texgen(texgens_[u], v, d.texcoord[u]);
+        for (unsigned u = 0; u < units_; ++u) {
+            if (texgens_[u].palette) d.texcoord[u][0] = palette_[0], d.texcoord[u][1] = palette_[1];
+            else texgen(texgens_[u], v, d.texcoord[u]);
+        }
     }
 
     // Culling in EFB space, by the sign of each triangle's area there: with every w positive that is the sign of the
@@ -692,6 +722,8 @@ bool GxVertexPipeline::meshColorFromVertex() const {
 
 unsigned GxVertexPipeline::meshEligible() const {
     if (unsupported) return MeshUnsupported;
+    for (unsigned u = 0; u < units_; ++u)
+        if (texgens_[u].palette) return MeshUnsupported;  // the palette's texel moves per primitive
     if (fixedDepth_) return MeshDepthTexture;
     if (lit_) {
         // The shader runs up to four light entries, each a light under one part's settings (an actor lights its colour

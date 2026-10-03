@@ -23,6 +23,8 @@ struct CombineStage {
 
 struct CombinerProgram {
     static constexpr unsigned MaxStages = 6, MaxUnits = 3;
+    // A unit's texture when it samples the CPU path's palette of C1 values (compileTev's color1FromUnit).
+    static constexpr int Palette = -2;
     unsigned stageCount = 0;
     CombineStage stages[MaxStages];
     // The buffer reads as zero in stage 0 and as bufferColor after; a stage whose bit is set in
@@ -35,5 +37,6 @@ struct CombinerProgram {
     const char* approximation = nullptr; // the first reason, for audits
 };
 
-CombinerProgram compileTev(const ModelMaterial& material);
+// color1FromUnit: C1 is read from a unit of its own (a texel per primitive) instead of as a constant.
+CombinerProgram compileTev(const ModelMaterial& material, bool color1FromUnit = false);
 } // namespace smg
