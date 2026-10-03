@@ -69,6 +69,8 @@ target_compile_options(petari_core PUBLIC "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-incl
 target_compile_options(petari_core PUBLIC -fno-strict-aliasing)
 # Plain char is unsigned on the Wii and the 3DS; hashes of Shift-JIS names depend on it, so hosts match.
 target_compile_options(petari_core PUBLIC -funsigned-char)
+# The disc names things in Shift-JIS and Metrowerks compiled the game's literals so; Petari's are UTF-8 source.
+target_compile_options(petari_core PUBLIC -finput-charset=UTF-8 -fexec-charset=CP932)
 
 set(GRAVITY_SHAPES PlanetGravity PointGravity ParallelGravity CubeGravity DiskGravity DiskTorusGravity
   ConeGravity SegmentGravity WireGravity)

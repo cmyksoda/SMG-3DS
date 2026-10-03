@@ -162,9 +162,9 @@ completion does not make those interfaces portable to ARM11/PICA200.
   placed from `LightCtrlCube` and `LightCtrlCylinder` rows as `NameObjFactory` makes them; each
   placement takes the light of the area around its origin, as `ActorLightCtrl::init` finds it. In Good
   Egg the planets' sets barely differ between areas (the areas change the player and enemy sets), so
-  the look changes little until actors draw. Petari's string literals are UTF-8 in this build and the disc's
-  names Shift-JIS, so `LightDataHolder`'s "デフォルト" never matches a row by name; its fallback, the
-  first row, is the one the disc names that anyway. Skinned placed models are still skipped: which
+  the look changes little until actors draw. Petari's sources are UTF-8 and the disc's names Shift-JIS; the
+  build compiles the game's string literals as Shift-JIS (CP932, `-fexec-charset`), as Metrowerks did, so
+  `LightDataHolder`'s "デフォルト" matches its row by name (the first row, its old fallback, anyway). Skinned placed models are still skipped: which
   animation each plays comes with its actor. This is a stage preview with a free camera, not gameplay:
   no actor or camera code from the game runs yet, and its gravity and collision answer only the
   readouts, the probe and where Mario's model stands.
@@ -529,6 +529,12 @@ the end of its highest. That held on the Wii, where each zone's tables sat toget
 spans can overlap (a galaxy's tables come from more than one archive, which load in the port's own order, and a
 repacked table lives in a block of its own; which of the two did it wasn't pinned down): Gateway's rails were then looked up by ID in the galaxy's own path table, found nothing, and
 `BezierRail` read the row past its end. The holder is now the one that has the row's table among its own.
+
+**Japanese names.** Petari's sources are UTF-8, and the game's 5,081 non-ASCII string literals (demo, part, position,
+joint and object names) compiled as UTF-8 bytes, while the disc spells the same names in Shift-JIS: every lookup by such
+a name missed. Gateway's runaway Luma asks for its cutscene "チコガイドデモ" by name, found none, and crashed. The
+Petari libraries now compile with `-finput-charset=UTF-8 -fexec-charset=CP932` (on `petari_core`, public), as
+Metrowerks compiled them from Shift-JIS source; every one of the literals has a CP932 spelling.
 
 **The C library.** MSL's printf writes nothing for a null `%s`; newlib writes `(null)`. The game builds archive
 paths that way (`LayoutHolder`, `ResourceHolder`: four sites adapted). Other calls may lean on it; a general fix
