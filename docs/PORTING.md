@@ -777,6 +777,33 @@ green: read back as IA8, alpha byte first); `GxCopyTests` checks both. A copy ke
 for these, as the PICA's copy pass has no two-channel packing. Still left: depth copies, real TEV compares (the bloom's
 threshold), and the second colour channel, which the PICA's combiner has no second vertex colour for.
 
+### Particles: the title and file select
+
+The plaza ran at 30 frames a second while the title screen and file select ran at 7 to 15: the galaxy's dust stream is
+about a thousand JPA particles a frame, and each cost the renderer two draws. What each particle sends: its prim and
+env colours (`GXSetTevColor` for C0 and C1, each four BP loads, the BG half written three times as the SDK does), its
+position matrix (and a texture matrix for some), then `GXCallDisplayList` of a quad from `jpa_dl` (one 32-byte block).
+Four changes took the title from 97 ms a frame to 31 to 46:
+
+- **No flush primitive.** Before a list call or `GXBegin` after matrix loads, the SDK's `__GXSendFlushPrim` sends a
+  triangle strip of one repeated vertex (all-zero indexes) for the Wii GPU's vertex cache. It covers no pixels and the
+  port's GPU path has no such cache; the adapted SDK keeps its bookkeeping (`bpSentNot`) and sends nothing.
+- **Small lists join the batch.** A display list in one 32-byte block is read on the CPU path (`MeshSmall`) instead of
+  drawn as a mesh of its own, so consecutive particles share a draw.
+- **C0 and C1 ride.** C0 already rode in the vertex colour. JPA's TEV blends env to prim by the texture
+  (lerp(C1, C0, TEXC)), and the PICA has one vertex colour, so every new C1 still started a draw (about 400 a frame).
+  On the CPU path a state may now read C1 from a unit of its own (`compileTev(material, color1FromUnit)`,
+  `CombinerProgram::Palette`): each primitive's C1 is one texel of an 8x8 RGBA8 palette texture, taken in order through
+  a command list (`startBuffers` starts over), so a recorded draw's texels never change; the vertices carry the
+  texel's coordinates. A mesh's state keeps C1 a constant (states are keyed by the kind of draw too), so models drawn
+  from meshes are unchanged. Title draws went from about 416 a frame to 25 to 32.
+- **Cheaper checks per particle.** `GxCommandProcessor` counts changes beside C0 and C1 and C1's apart, so the ride
+  check is two compares; and it counts changes to each four-word row of XF matrix memory, so a texgen's folded texture
+  matrix is reused across a particle's position matrix load (`foldStillHolds`).
+
+A depth peek (the star pointer's `GXPeekZ` at a draw sync each frame) pauses the frame, waits for the GPU and copies the
+depth buffer back: about 1.2 ms a frame in Azahar.
+
 **Development settings.** Keys in `settings.ini` for development only, written back only when on: `dev.skip_story=1`
 skips the prologue's storybook and movies; `dev.gx_dump=1` dumps a frame's draws to the log once a minute;
 `dev.gx_null=1` draws nothing, to measure the game's own work; `dev.gx_timing=1` adds the renderer's parts to the perf
