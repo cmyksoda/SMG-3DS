@@ -1,0 +1,144 @@
+// AES-128 against FIPS-197's example, and a small Wii disc made here (encrypted as Nintendo's are) read back as an ISO
+// and as a WBFS.
+#include <smg/Aes.hpp>
+#include <smg/WiiDisc.hpp>
+#include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <string>
+#include <vector>
+
+namespace {
+unsigned checks = 0;
+void check(bool pass, const char* message) {
+    if (!pass) {
+        std::fprintf(stderr, "FAIL: %s\n", message);
+        std::exit(1);
+    }
+    ++checks;
+}
+void put32(std::vector<std::uint8_t>& b, std::size_t at, std::uint32_t v) {
+    b[at] = std::uint8_t(v >> 24), b[at + 1] = std::uint8_t(v >> 16), b[at + 2] = std::uint8_t(v >> 8), b[at + 3] = std::uint8_t(v);
+}
+
+void fipsExample() {
+    std::uint8_t key[16], plain[16], cipher[16], back[16];
+    for (int i = 0; i < 16; ++i) key[i] = std::uint8_t(i), plain[i] = std::uint8_t(i * 0x11);
+    const std::uint8_t expected[16] = {0x69, 0xC4, 0xE0, 0xD8, 0x6A, 0x7B, 0x04, 0x30, 0xD8, 0xCD, 0xB7, 0x80, 0x70, 0xB4, 0xC5, 0x5A};
+    const std::uint8_t zero[16] = {};
+    smg::Aes128 aes(key);
+    aes.encryptCbc(zero, plain, cipher, 16);  // one block with a zero IV is the bare cipher
+    check(!std::memcmp(cipher, expected, 16), "AES-128 encrypts FIPS-197's example");
+    aes.decryptCbc(zero, cipher, back, 16);
+    check(!std::memcmp(back, plain, 16), "and decrypts it back");
+}
+
+// The partition's data as the game sees it: boot.bin, a file table with one file, the file's bytes past one cluster.
+constexpr std::uint32_t FileAt = 0x9000, FileSize = 0x5000;
+std::vector<std::uint8_t> partitionData() {
+    std::vector<std::uint8_t> data(0x7C00 * 3, 0);
+    std::memcpy(data.data(), "RMGE01", 6);
+    put32(data, 0x18, 0x5D1C9EA3);
+    const std::uint32_t tableAt = 0x2000;
+    put32(data, 0x424, tableAt >> 2), put32(data, 0x428, 0x40 >> 2);
+    data[tableAt] = 1, put32(data, tableAt + 8, 2);              // the root directory: two entries
+    put32(data, tableAt + 12, 0), put32(data, tableAt + 16, FileAt >> 2), put32(data, tableAt + 20, FileSize);  // a file named ""
+    for (std::uint32_t i = 0; i < FileSize; ++i) data[FileAt + i] = std::uint8_t(i * 7 + 3);
+    return data;
+}
+
+// The image: header, one partition table, the partition (ticket and encrypted data clusters).
+constexpr std::uint64_t Partition = 0x50000, DataOffset = 0x20000;
+std::vector<std::uint8_t> discImage(const std::uint8_t common[16], const std::uint8_t title[16]) {
+    const std::vector<std::uint8_t> plain = partitionData();
+    const std::size_t clusters = plain.size() / 0x7C00;
+    std::vector<std::uint8_t> disc(Partition + DataOffset + clusters * 0x8000, 0);
+    std::memcpy(disc.data(), "RMGE01", 6);
+    put32(disc, 0x18, 0x5D1C9EA3);
+    put32(disc, 0x40000, 1), put32(disc, 0x40004, 0x40020 >> 2);  // table 0: one entry at 0x40020
+    put32(disc, 0x40020, std::uint32_t(Partition >> 2)), put32(disc, 0x40024, 0);
+    std::uint8_t* ticket = disc.data() + Partition;
+    const std::uint8_t titleId[8] = {0, 1, 0, 0, 'R', 'M', 'G', 'E'};
+    std::memcpy(ticket + 0x1DC, titleId, 8);
+    std::uint8_t iv[16] = {};
+    std::memcpy(iv, titleId, 8);
+    smg::Aes128(common).encryptCbc(iv, title, ticket + 0x1BF, 16);
+    put32(disc, Partition + 0x2B8, std::uint32_t(DataOffset >> 2)), put32(disc, Partition + 0x2BC, std::uint32_t(clusters * 0x8000 >> 2));
+    const smg::Aes128 aes(title);
+    for (std::size_t c = 0; c < clusters; ++c) {
+        std::uint8_t* cluster = disc.data() + Partition + DataOffset + c * 0x8000;
+        std::uint8_t hashes[0x400];
+        for (int i = 0; i < 0x400; ++i) hashes[i] = std::uint8_t(c * 31 + i);
+        const std::uint8_t zero[16] = {};
+        aes.encryptCbc(zero, hashes, cluster, 0x400);
+        aes.encryptCbc(cluster + 0x3D0, plain.data() + c * 0x7C00, cluster + 0x400, 0x7C00);
+    }
+    return disc;
+}
+
+// The same disc in a WBFS: 512-byte sectors, 32 KiB blocks, block i of the disc stored at block `first + i` when it
+// holds anything.
+std::vector<std::uint8_t> wbfsImage(const std::vector<std::uint8_t>& disc) {
+    constexpr unsigned SectorShift = 9, BlockShift = 15;
+    const std::size_t perDisc = std::size_t((std::uint64_t(0x8000) * 143432 * 2) >> BlockShift);
+    const std::size_t infoBytes = (0x100 + perDisc * 2 + 511) / 512 * 512;
+    const std::size_t first = (512 + infoBytes + (1u << BlockShift) - 1) >> BlockShift;
+    const std::size_t blocks = (disc.size() + (1u << BlockShift) - 1) >> BlockShift;
+    std::vector<std::uint8_t> wbfs((first + blocks) << BlockShift, 0);
+    std::memcpy(wbfs.data(), "WBFS", 4);
+    wbfs[8] = SectorShift, wbfs[9] = BlockShift, wbfs[12] = 1;  // slot 0 used
+    std::memcpy(wbfs.data() + 512, disc.data(), 0x100);
+    std::size_t stored = first;
+    for (std::size_t b = 0; b < blocks; ++b) {
+        const std::size_t from = b << BlockShift, size = std::min<std::size_t>(1u << BlockShift, disc.size() - from);
+        bool empty = true;
+        for (std::size_t i = 0; i < size && empty; ++i) empty = disc[from + i] == 0;
+        if (empty) continue;  // left out, as a scrubbed dump does
+        wbfs[512 + 0x100 + 2 * b] = std::uint8_t(stored >> 8), wbfs[512 + 0x100 + 2 * b + 1] = std::uint8_t(stored);
+        std::memcpy(wbfs.data() + (stored << BlockShift), disc.data() + from, size);
+        ++stored;
+    }
+    wbfs.resize(stored << BlockShift);
+    return wbfs;
+}
+
+smg::WiiDisc::Reader readerOf(const std::vector<std::uint8_t>& image) {
+    return [&image](std::uint64_t offset, void* out, std::uint32_t size) {
+        if (offset + size > image.size()) return false;
+        std::memcpy(out, image.data() + offset, size);
+        return true;
+    };
+}
+
+void readBack(const std::vector<std::uint8_t>& image, const std::uint8_t common[16], const char* kind) {
+    smg::WiiDisc disc;
+    std::string error;
+    check(disc.open(readerOf(image), common, nullptr, error), (std::string(kind) + " opens: " + error).c_str());
+    check(disc.gameId() == "RMGE01" && disc.fileTable().size() == 0x40, "its game ID and file table");
+    std::vector<std::uint8_t> file(FileSize);
+    check(disc.read(FileAt, file.data(), FileSize), "a file across a cluster's edge reads");
+    bool same = true;
+    for (std::uint32_t i = 0; i < FileSize; ++i) same &= file[i] == std::uint8_t(i * 7 + 3);
+    check(same, "and holds what was written");
+}
+
+void discs() {
+    std::uint8_t common[16], title[16], wrong[16];
+    for (int i = 0; i < 16; ++i) common[i] = std::uint8_t(0xA0 + i), title[i] = std::uint8_t(0x30 + 3 * i), wrong[i] = std::uint8_t(i);
+    const std::vector<std::uint8_t> iso = discImage(common, title);
+    readBack(iso, common, "an ISO");
+    readBack(wbfsImage(iso), common, "a WBFS");
+    smg::WiiDisc disc;
+    std::string error;
+    check(!disc.open(readerOf(iso), wrong, nullptr, error) && error.find("did not decrypt") != std::string::npos, "a wrong common key is told");
+    check(disc.open(readerOf(iso), nullptr, title, error), "a title key given directly opens it too");
+}
+} // namespace
+
+int main() {
+    fipsExample();
+    discs();
+    std::printf("%u Wii disc checks passed\n", checks);
+    return 0;
+}

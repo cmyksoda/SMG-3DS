@@ -238,7 +238,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
 add_library(smg_platform STATIC
   source/core/Input.cpp source/core/Motion.cpp source/core/Settings.cpp source/core/Session.cpp
   source/core/Archive.cpp source/core/Bcsv.cpp source/core/Model.cpp source/core/Texture.cpp source/core/Combiner.cpp
-  source/core/Stage.cpp source/core/StageGravity.cpp source/core/Mesh.cpp source/core/Etc1.cpp source/core/Kcl.cpp source/core/StageCollision.cpp source/core/StageLight.cpp source/core/Animation.cpp source/core/Actors.cpp source/core/J3DImage.cpp source/core/Dol.cpp source/core/GxCommands.cpp source/core/Bmg.cpp source/core/Kpad.cpp source/core/Layout.cpp source/core/GxDraw.cpp source/core/GxCopy.cpp source/core/Jpa.cpp source/core/WiiDsp.cpp source/core/AudioData.cpp source/core/Thp.cpp source/core/CameraAnim.cpp)
+  source/core/Stage.cpp source/core/StageGravity.cpp source/core/Mesh.cpp source/core/Etc1.cpp source/core/Kcl.cpp source/core/StageCollision.cpp source/core/StageLight.cpp source/core/Animation.cpp source/core/Actors.cpp source/core/J3DImage.cpp source/core/Dol.cpp source/core/GxCommands.cpp source/core/Bmg.cpp source/core/Kpad.cpp source/core/Layout.cpp source/core/GxDraw.cpp source/core/GxCopy.cpp source/core/Jpa.cpp source/core/WiiDsp.cpp source/core/AudioData.cpp source/core/Thp.cpp source/core/CameraAnim.cpp source/core/Aes.cpp source/core/WiiDisc.cpp)
 target_include_directories(smg_platform PUBLIC include)
 target_link_libraries(smg_platform PUBLIC petari_scene petari_anim)
 target_compile_options(smg_platform PRIVATE -Wall -Wextra -Werror)
@@ -471,6 +471,10 @@ else()
   target_link_libraries(gx_command_tests PRIVATE smg_native_scene smg_platform)
   target_compile_options(gx_command_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME gx_commands COMMAND gx_command_tests)
+  add_executable(wii_disc_tests tests/WiiDiscTests.cpp)
+  target_link_libraries(wii_disc_tests PRIVATE smg_platform)
+  target_compile_options(wii_disc_tests PRIVATE -Wall -Wextra -Werror)
+  add_test(NAME wii_disc_images COMMAND wii_disc_tests)
   add_executable(bmg_tests tests/BmgTests.cpp)
   target_link_libraries(bmg_tests PRIVATE smg_native_scene smg_platform)
   target_compile_options(bmg_tests PRIVATE -Wall -Wextra -Werror)
