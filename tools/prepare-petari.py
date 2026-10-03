@@ -1405,6 +1405,15 @@ adapt("src/Game/System/GameSystem.cpp", "Game/System/GameSystem.cpp", [
      "    smgFramePhase(4);\n    MainLoopFramework::sManager->waitForRetrace();\n}", 1),
 ])
 
+# For development (settings.ini dev.start=GALAXY N, off unless set): Mario starts that galaxy at its start point N.
+adapt("src/Game/Scene/StageDataHolder.cpp", "Game/Scene/StageDataHolder.cpp", [
+    ('#include "Game/Scene/StageDataHolder.hpp"\n',
+     '#include "Game/Scene/StageDataHolder.hpp"\n#include "Game/Util/SceneUtil.hpp"\n\nextern "C" int smgDevMarioStart(const char* galaxy);  // source/compat/Kpad.cpp\n', 1),
+    ("    JMapIdInfo startID = MR::getCurrentMarioStartIdInfo();\n    JMapInfoIter iter = makeMarioJMapInfoIter(startID);",
+     "    JMapIdInfo startID = MR::getCurrentMarioStartIdInfo();\n    if (const s32 start = smgDevMarioStart(MR::getCurrentStageName()); start >= 0) {\n"
+     "        startID._0 = start;\n    }\n    JMapInfoIter iter = makeMarioJMapInfoIter(startID);", 1),
+])
+
 # A model's view matrices (J3DModel::viewCalc) are only drawn with: a step whose next step draws nothing has them
 # computed again by that next step before anything draws them, so the frame loop leaves them out of its calcAnim
 # (smgViewNeeded false only there). Their data reaches the GPU when drawn, so J3D's swap needs no fixed rhythm.

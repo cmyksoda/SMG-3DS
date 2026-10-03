@@ -52,6 +52,10 @@ struct Settings {
     // For development only (dev.av_sync=1): every 90th drawn frame gets a white square and the audio a click at the
     // same moment, to measure the port's sound against its picture in a recording.
     bool devAvSync = false;
+    // For development only (dev.start=GALAXY N): Mario starts that galaxy at its start point N (StartInfo's MarioNo),
+    // to reach a stage's later parts without walking there.
+    std::string devStartGalaxy;
+    int devStartMario = -1;
     static constexpr int MinSpeed = 25, MaxSpeed = 300, SpeedStep = 25;
 };
 bool operator==(const Settings& a, const Settings& b);

@@ -54,18 +54,18 @@ void parseSpeed(const std::string& value, int& speed) {
     if (!value.empty() && !*end && parsed >= Settings::MinSpeed && parsed <= Settings::MaxSpeed)
         speed = static_cast<int>(parsed);
 }
-// "EggStarGalaxy 1": the name becomes part of a path, so only letters and digits pass.
-void parsePreview(const std::string& value, Settings& settings) {
+// "EggStarGalaxy 1": a galaxy name of letters and digits (it becomes part of a path) and a number from `lowest` to 16.
+bool parseGalaxyNumber(const std::string& value, long lowest, std::string& galaxy, int& number) {
     const auto space = value.find(' ');
-    if (space == std::string::npos || space == 0 || space > 64) return;
-    const std::string galaxy = value.substr(0, space);
-    for (char c : galaxy) if (!std::isalnum(static_cast<unsigned char>(c))) return;
+    if (space == std::string::npos || space == 0 || space > 64) return false;
+    const std::string name = value.substr(0, space);
+    for (char c : name) if (!std::isalnum(static_cast<unsigned char>(c))) return false;
     char* end = nullptr;
-    const std::string number = trim(value.substr(space + 1));
-    const long scenario = std::strtol(number.c_str(), &end, 10);
-    if (number.empty() || *end || scenario < 1 || scenario > 16) return;
-    settings.previewGalaxy = galaxy;
-    settings.previewScenario = static_cast<int>(scenario);
+    const std::string digits = trim(value.substr(space + 1));
+    const long parsed = std::strtol(digits.c_str(), &end, 10);
+    if (digits.empty() || *end || parsed < lowest || parsed > 16) return false;
+    galaxy = name, number = static_cast<int>(parsed);
+    return true;
 }
 } // namespace
 
@@ -93,7 +93,7 @@ bool operator==(const Settings& a, const Settings& b) {
            a.previewGalaxy == b.previewGalaxy && a.previewScenario == b.previewScenario && a.devSkipStory == b.devSkipStory &&
            a.devGxDump == b.devGxDump && a.devGxNull == b.devGxNull && a.devGxTiming == b.devGxTiming &&
            a.devGxCheck == b.devGxCheck && a.devGxInline == b.devGxInline && a.devDrawEvery == b.devDrawEvery && a.devGxNoRaw == b.devGxNoRaw &&
-           a.devAvSync == b.devAvSync;
+           a.devAvSync == b.devAvSync && a.devStartGalaxy == b.devStartGalaxy && a.devStartMario == b.devStartMario;
 }
 
 Settings parseSettings(const std::string& text, Settings base) {
@@ -115,7 +115,9 @@ Settings parseSettings(const std::string& text, Settings base) {
         } else if (key == "invert_x" || key == "invert_y") {
             if (value == "0" || value == "1") (key == "invert_x" ? settings.invertX : settings.invertY) = value == "1";
         } else if (key == "preview") {
-            parsePreview(value, settings);
+            parseGalaxyNumber(value, 1, settings.previewGalaxy, settings.previewScenario);
+        } else if (key == "dev.start") {
+            parseGalaxyNumber(value, 0, settings.devStartGalaxy, settings.devStartMario);
         } else if (key == "dev.skip_story" || key == "dev.gx_dump" || key == "dev.gx_null" || key == "dev.gx_timing" || key == "dev.gx_check" ||
                    key == "dev.gx_inline" || key == "dev.draw_every" || key == "dev.gx_noraw" || key == "dev.av_sync") {
             if (value == "0" || value == "1")
@@ -156,6 +158,7 @@ std::string formatSettings(const Settings& settings) {
     if (settings.devDrawEvery) text += "dev.draw_every=1\n";
     if (settings.devAvSync) text += "dev.av_sync=1\n";
     if (settings.devGxNoRaw) text += "dev.gx_noraw=1\n";
+    if (settings.devStartMario >= 0) text += "dev.start=" + settings.devStartGalaxy + " " + std::to_string(settings.devStartMario) + "\n";
     return text;
 }
 

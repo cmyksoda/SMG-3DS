@@ -73,6 +73,11 @@ BOOL smgDevGxCheck() { return input().settings().devGxCheck; }
 BOOL smgDevGxInline() { return input().settings().devGxInline; }
 BOOL smgDevGxNoRaw() { return input().settings().devGxNoRaw; }
 BOOL smgDevAvSync() { return input().settings().devAvSync; }
+// dev.start: the start point Mario takes in `galaxy`, or -1 for the game's own.
+int smgDevMarioStart(const char* galaxy) {
+    const smg::Settings& s = input().settings();
+    return s.devStartMario >= 0 && galaxy && s.devStartGalaxy == galaxy ? s.devStartMario : -1;
+}
 // GameSystem::frameLoop (adapted): logic steps per drawn frame. The Wii drew each one; the port draws every second one,
 // 30 frames a second with the game at full speed, unless dev.draw_every=1.
 int smgRenderInterval() { return input().settings().devDrawEvery ? 1 : 2; }

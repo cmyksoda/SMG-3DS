@@ -300,11 +300,14 @@ void settingsFiles() {
     check(smg::parseSettings(smg::formatSettings(settings)) == settings, "settings round trip");
     smg::Settings developer;
     developer.devSkipStory = developer.devGxDump = developer.devGxNull = developer.devGxTiming = developer.devGxCheck = developer.devGxInline = developer.devDrawEvery = developer.devGxNoRaw = true;
+    developer.devStartGalaxy = "PeachCastleGardenGalaxy", developer.devStartMario = 1;
     check(!smg::Settings{}.devSkipStory && smg::formatSettings(smg::Settings{}).find("dev.") == std::string::npos &&
           smg::parseSettings(smg::formatSettings(developer)) == developer, "the story skip is off unless set, and written only when on");
     check(smg::parseSettings("preview=../../sys 1\n").previewGalaxy == "EggStarGalaxy" &&
           smg::parseSettings("preview=EggStarGalaxy 0\n").previewScenario == 1 &&
           smg::parseSettings("preview=HeavenlyBeachGalaxy 3\n").previewScenario == 3, "only a plain galaxy name and scenario");
+    check(smg::parseSettings("dev.start=PeachCastleGardenGalaxy 0\n").devStartMario == 0 && smg::parseSettings("dev.start=../x 1\n").devStartMario == -1,
+          "a start point by galaxy and number");
     const auto parsed = smg::parseSettings(
         "pointer=teleport\nmotion_speed=9000\nstick_speed=50\ninvert_x=yes\nbind.jump=A+Q\nbind.spin = Y \nnonsense\n");
     check(parsed.pointer == smg::PointerMode::Motion && parsed.motionSpeed == 100 && parsed.stickSpeed == 50,
