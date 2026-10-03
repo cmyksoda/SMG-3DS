@@ -1,8 +1,9 @@
-// The Wii's disc drive, over the game files on the SD card. Entry numbers are the disc's own, from its file
-// table (sys/fst.bin); reads come from the extracted files, and asynchronous ones finish on a worker thread,
-// which calls the game back as the drive's interrupt did.
+// The Wii's disc drive, over the game on the SD card: a disc image (DiscImage.cpp) or the files extracted from it.
+// Entry numbers are the disc's own, from its file table (the image's, or sys/fst.bin); asynchronous reads finish on
+// a worker thread, which calls the game back as the drive's interrupt did.
 #include <3ds.h>
 #include <revolution/dvd.h>
+#include <smg/DiscImage.hpp>
 #include <smg/FreeStore.hpp>
 #include <smg/Interrupts.hpp>
 #include <cctype>
@@ -26,6 +27,7 @@ struct Entry {
     bool directory;
     smg::FreeString name, path;
     u32 size;       // a file's length
+    u64 offset;     // a file's place in the disc's data partition
     u32 parent;     // a directory's parent
     u32 next;       // a directory's first entry past its contents
 };
@@ -34,14 +36,21 @@ smg::FreeVector<Entry> sEntries;
 u32 bigEndian(const u8* bytes) { return u32(bytes[0]) << 24 | u32(bytes[1]) << 16 | u32(bytes[2]) << 8 | bytes[3]; }
 
 void readFileTable() {
-    FILE* file = std::fopen(sFileTable, "rb");
-    if (!file) stop("sys/fst.bin, the disc's file table, is not on the SD card (3ds/SMG-3DS/sys)");
-    std::fseek(file, 0, SEEK_END);
-    smg::FreeVector<u8> table(std::ftell(file));
-    std::fseek(file, 0, SEEK_SET);
-    const bool read = std::fread(table.data(), 1, table.size(), file) == table.size();
-    std::fclose(file);
-    if (!read || table.size() < 12) stop("sys/fst.bin could not be read");
+    smg::FreeVector<u8> table;
+    if (smg::disc::fromImage()) {
+        const auto& fromImage = smg::disc::fileTable();
+        table.assign(fromImage.begin(), fromImage.end());
+    } else {
+        FILE* file = std::fopen(sFileTable, "rb");
+        if (!file) stop("neither a disc image (3ds/SMG-3DS/game.rvz) nor sys/fst.bin, the disc's file table, is on the SD card");
+        std::fseek(file, 0, SEEK_END);
+        table.resize(std::ftell(file));
+        std::fseek(file, 0, SEEK_SET);
+        const bool read = std::fread(table.data(), 1, table.size(), file) == table.size();
+        std::fclose(file);
+        if (!read) stop("sys/fst.bin could not be read");
+    }
+    if (table.size() < 12) stop("the disc's file table is too short");
     const u32 count = bigEndian(&table[8]);
     const u8* names = &table[12 * count];
     sEntries.resize(count);
@@ -53,6 +62,7 @@ void readFileTable() {
         entry.parent = entry.directory ? bigEndian(raw + 4) : 0;
         entry.next = entry.directory ? bigEndian(raw + 8) : i + 1;
         entry.size = entry.directory ? 0 : bigEndian(raw + 8);
+        entry.offset = entry.directory ? 0 : u64(bigEndian(raw + 4)) << 2;
     }
     // Each entry's path, from the directory that holds it.
     for (u32 i = 0; i < count; ++i) {
@@ -101,6 +111,7 @@ s32 readEntry(u32 entry, void* address, s32 length, s32 offset) {
     const Entry& file = sEntries[entry];
     if (offset < 0 || static_cast<u32>(offset) > file.size) return sFatalError;
     const u32 count = std::min<u32>(length, file.size - offset);
+    if (smg::disc::fromImage()) return smg::disc::read(file.offset + offset, address, count) ? static_cast<s32>(count) : sFatalError;
     FILE* handle = std::fopen((sDiscRoot + file.path).c_str(), "rb");
     if (!handle) return sFatalError;
     std::fseek(handle, offset, SEEK_SET);

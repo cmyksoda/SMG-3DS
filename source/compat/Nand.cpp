@@ -1,8 +1,9 @@
 // The Wii's NAND (its flash, through IOS's file system) as files on the SD card: sdmc:/3ds/SMG-3DS/nand mirrors the
 // NAND's tree, and the game's home directory is its title's data folder there, named from the disc's game code
-// (sys/boot.bin). Paths without a leading slash are the home directory's, as NANDInit leaves the current directory.
+// (boot.bin, in the disc image or sys). Paths without a leading slash are the home directory's, as NANDInit leaves the current directory.
 #include <3ds.h>
 #include <revolution/nand.h>
+#include <smg/DiscImage.hpp>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
@@ -28,9 +29,13 @@ const char* home() {
     static char path[NAND_MAX_PATH] = {};
     if (!path[0]) {
         char code[4];
-        std::FILE* boot = std::fopen(sBootBin, "rb");
-        if (!boot || std::fread(code, 1, 4, boot) != 4) stop("sys/boot.bin is missing, so the game's title isn't known");
-        std::fclose(boot);
+        if (smg::disc::fromImage()) {
+            std::memcpy(code, smg::disc::bootBin(), 4);
+        } else {
+            std::FILE* boot = std::fopen(sBootBin, "rb");
+            if (!boot || std::fread(code, 1, 4, boot) != 4) stop("sys/boot.bin is missing, so the game's title isn't known");
+            std::fclose(boot);
+        }
         std::snprintf(path, sizeof path, "/title/00010000/%02x%02x%02x%02x/data", static_cast<unsigned char>(code[0]),
                       static_cast<unsigned char>(code[1]), static_cast<unsigned char>(code[2]), static_cast<unsigned char>(code[3]));
     }

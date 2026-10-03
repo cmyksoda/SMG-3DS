@@ -303,7 +303,7 @@ if(NINTENDO_3DS)
       list(APPEND PETARI_BUILT_ELSEWHERE "${source}")
     endforeach()
   endforeach()
-  set(PETARI_GAME_SOURCES source/compat/Sdk.cpp source/compat/Nand.cpp source/compat/Rfl.cpp source/compat/GameScene.cpp source/compat/HomeButtonMenu.cpp source/compat/OsThreads.cpp source/compat/OsMemory.cpp source/compat/GameHeap.cpp source/compat/Dvd.cpp source/compat/Video.cpp source/compat/OsReset.cpp source/compat/GxRender.cpp source/compat/SystemConfig.cpp source/compat/Wpad.cpp source/compat/NativeResources.cpp source/compat/GxFifo.cpp source/compat/Nwc24.cpp source/compat/WiiAudio.cpp source/compat/Nw4rDb.cpp source/compat/DolTables.cpp source/compat/Kpad.cpp source/compat/Thp.cpp
+  set(PETARI_GAME_SOURCES source/compat/Sdk.cpp source/compat/Nand.cpp source/compat/Rfl.cpp source/compat/GameScene.cpp source/compat/HomeButtonMenu.cpp source/compat/OsThreads.cpp source/compat/OsMemory.cpp source/compat/GameHeap.cpp source/compat/Dvd.cpp source/compat/DiscImage.cpp source/compat/Video.cpp source/compat/OsReset.cpp source/compat/GxRender.cpp source/compat/SystemConfig.cpp source/compat/Wpad.cpp source/compat/NativeResources.cpp source/compat/GxFifo.cpp source/compat/Nwc24.cpp source/compat/WiiAudio.cpp source/compat/Nw4rDb.cpp source/compat/DolTables.cpp source/compat/Kpad.cpp source/compat/Thp.cpp
     "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/LiveActor/RailRiderCamera.cpp"
     "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/LiveActor/LiveActorSound.cpp")
   foreach(source ${PETARI_GAME_CANDIDATES})
@@ -355,6 +355,9 @@ if(NINTENDO_3DS)
   list(REMOVE_ITEM PETARI_GAME_SOURCES ${PETARI_OVERWRITES})
   add_library(petari_overwrites OBJECT ${PETARI_OVERWRITES})
   add_library(petari_game STATIC ${PETARI_GAME_SOURCES})
+  # Zstandard for RVZ disc images, from devkitPro's portlibs; its headers only where it's used.
+  set_source_files_properties(source/compat/DiscImage.cpp PROPERTIES INCLUDE_DIRECTORIES "${DEVKITPRO}/portlibs/3ds/include")
+  target_link_libraries(petari_game PRIVATE "${DEVKITPRO}/portlibs/3ds/lib/libzstd.a")
   foreach(library petari_game petari_overwrites)
     target_link_libraries(${library} PUBLIC petari_scene petari_anim smg_pica)
     target_include_directories(${library} PRIVATE include "${CMAKE_CURRENT_BINARY_DIR}")
