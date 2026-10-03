@@ -943,7 +943,8 @@ without it); `dev.gx_check=1` checks each new mesh against the CPU path; `dev.gx
 instead of the render thread; `dev.start=GALAXY N` starts that galaxy at its start point N (StartInfo's `MarioNo`), to
 reach a stage's later parts without walking there (a start point inside a switch area fires it while the scene is still
 starting, which isn't how the story meets it); `dev.galaxy=GALAXY N` makes the first galaxy after the file select that
-galaxy's scenario N (`GameSequenceProgress`, as the move is requested, so the stage's sounds load for it). The heartbeat (every 300th frame) logs where Mario is, for planning
+galaxy's scenario N (`GameSequenceProgress::requestGalaxyMove`, once the story has named the stage: a new file's first
+move names it only in `moveGalaxy`, which also queues the castle's prologue, so the story is stopped there). The heartbeat (every 300th frame) logs where Mario is, for planning
 a run's route. Azahar runs the 3DS CPU at its base 268 MHz although the port switches a New 3DS to 804
 MHz (`osSetSpeedupEnable`), so every millisecond figure here is a slow-clock one; how much faster hardware is can only
 be measured on hardware.

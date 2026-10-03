@@ -1410,10 +1410,15 @@ adapt("src/Game/System/GameSystem.cpp", "Game/System/GameSystem.cpp", [
 adapt("src/Game/System/GameSequenceProgress.cpp", "Game/System/GameSequenceProgress.cpp", [
     ('#include "Game/System/GameSequenceProgress.hpp"\n',
      '#include "Game/System/GameSequenceProgress.hpp"\n\nextern "C" const char* smgDevGalaxy(int* scenario);  // source/compat/Kpad.cpp\n', 1),
+    # A new file's first move names its stage only in moveGalaxy, which also queues the prologue's demos: the stage is
+    # taken after it, and the story stopped, as leaving the story stops it.
     ("    mGalaxyCometScheduler->syncWithFlags();\n\n    updateGameDataBeforeChangeScene();\n",
      "    mGalaxyCometScheduler->syncWithFlags();\n\n    static bool sDevGalaxyTaken = false;\n    int devScenario = 0;\n"
-     "    if (const char* devGalaxy = smgDevGalaxy(&devScenario); devGalaxy && !sDevGalaxyTaken && !MR::isEqualString(moveArg.mStageName, \"FileSelect\")) {\n"
-     "        sDevGalaxyTaken = true;\n        moveArg.mStageName = devGalaxy;\n        moveArg.mScenarioNo = moveArg._C = devScenario;\n    }\n\n"
+     "    if (const char* devGalaxy = smgDevGalaxy(&devScenario); devGalaxy && !sDevGalaxyTaken && moveArg.mStageName != nullptr &&\n"
+     "        !MR::isEqualString(moveArg.mStageName, \"FileSelect\")) {\n"
+     "        OSReport(\"dev.galaxy: %s %ld instead of %s %ld\\n\", devGalaxy, (long)devScenario, moveArg.mStageName, (long)moveArg.mScenarioNo);\n"
+     "        sDevGalaxyTaken = true;\n        moveArg.mStageName = devGalaxy;\n        moveArg.mScenarioNo = moveArg._C = devScenario;\n"
+     "        mStorySequenceExecutor->forceStop();\n    }\n\n"
      "    updateGameDataBeforeChangeScene();\n", 1),
 ])
 
