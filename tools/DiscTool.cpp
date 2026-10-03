@@ -34,7 +34,7 @@ int main(int argc, char** argv) {
     if (!disc.open(reader, title ? nullptr : key, title ? key : nullptr, error)) return std::fprintf(stderr, "%s\n", error.c_str()), 1;
     const std::vector<std::uint8_t>& table = disc.fileTable();
     const std::uint32_t count = big32(&table[8]);
-    std::printf("%s: %s, game %s, %u file table entries\n", argv[1], disc.isWbfs() ? "WBFS" : "ISO", disc.gameId().c_str(), count);
+    std::printf("%s: %s, game %s, %u file table entries\n", argv[1], disc.format(), disc.gameId().c_str(), count);
     if (argc < 4) return 0;
     // Each entry's path from the directories holding it, then each file read from the image and from the folder.
     std::vector<std::string> paths(count);
