@@ -850,6 +850,15 @@ second: the ETC1 encoder tries the three tables around a half-block's widest off
 (output identical); `tile()` maps columns once instead of two software divides a pixel; and a new mesh's pages are
 marked by a span pass (`meshSpan`) so it is built once, not twice.
 
+**Textures across scenes.** Converted textures are kept by Wii address, size, format and sampler. Until one was copied
+over, nothing let them go: a new scene's files read over an old scene's memory left a texture of the same size and
+format at the same address showing the old picture, and the map only grew. `JKRDvdRipper` calls `DCInvalidateRange`
+over each file it reads and `DCStoreRange` after decompressing, which reach `gxRenderMemoryChanged`, so textures mark
+their pages as meshes do and a change over one drops it (the frame so far is ended first, as for a mesh). The perf
+line counts textures kept and dropped, and how much of the free store is taken. Converting a model's textures ahead
+on core 1 was tried and taken out: 837 textures are loaded by the title (resident particles, layouts and objects) and
+the free store has about 12 MB beside the Wii arenas, so results held for later were evicted before their first draw
+(14 of 994 used), and a larger budget starved mesh building.
 
 **Development settings.** Keys in `settings.ini` for development only, written back only when on: `dev.skip_story=1`
 skips the prologue's storybook and movies; `dev.gx_dump=1` dumps a frame's draws to the log once a minute;

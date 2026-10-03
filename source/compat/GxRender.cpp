@@ -190,7 +190,7 @@ struct Renderer {
         std::uintptr_t range[2][2] = {};  // the memory it was made from, [lo, hi): the display list, the array elements
     };
     std::unordered_map<std::uint64_t, CachedMesh> meshes;
-    std::unordered_set<std::uintptr_t> meshPages;  // 4 KiB pages some mesh was made from
+    std::unordered_set<std::uintptr_t> meshPages, texturePages;  // 4 KiB pages some mesh or texture was made from
     std::size_t meshBytes = 0;
     bool dumping = false;
     std::uint32_t gpuXf[5] = {};  // channels, colour/alpha control, material, ambient as the state was built
@@ -201,7 +201,7 @@ struct Renderer {
         u64 since = 0, syncTicks = 0;
         u32 frames = 0, primitives = 0, vertices = 0, triangles = 0, draws = 0, sameState = 0, color0Rides = 0;
         u32 meshDraws = 0, meshTriangles = 0, meshesMade = 0, citroDraws = 0;
-        u32 meshInvalidated = 0, meshOverflows = 0, meshBudgetDrops = 0, meshMismatches = 0, flushesQueued = 0;
+        u32 meshInvalidated = 0, meshOverflows = 0, meshBudgetDrops = 0, meshMismatches = 0, flushesQueued = 0, texturesInvalidated = 0;
         u64 timed[6] = {};  // dev.gx_timing: CPU-path primitives (immediate, in lists), display lists (mesh draws), texture copies, movie, frame ends
         u64 cpuCopyTicks = 0;  // of the texture copies, those read back and encoded on the CPU
         // dev.gx_timing: building the draw state, applying it, preparing the vertex pipeline; of the first, reading GX's
@@ -522,6 +522,8 @@ struct Renderer {
         }
         C3D_Tex& texture = textures[key];
         if (!upload(texture, tile(source))) stop("a texture the PICA takes no memory for");
+        const auto [lo, hi] = textureRange(key);
+        markPages(lo, hi, texturePages);
         return texture;
     }
 
@@ -863,6 +865,13 @@ struct Renderer {
         decodedLists.clear();  // its page marks go too
         meshPages.clear();
         for (auto& bits : sMeshPageBits) bits.store(0, std::memory_order_relaxed);
+        for (std::uintptr_t page : texturePages) sMeshPageBits[page >> 5].fetch_or(1u << (page & 31), std::memory_order_relaxed);
+    }
+
+    // Where a texture's texels lie in the game's memory, [lo, hi).
+    static std::pair<std::uintptr_t, std::uintptr_t> textureRange(const Key& key) {
+        const auto lo = reinterpret_cast<std::uintptr_t>(OSPhysicalToCached(std::get<0>(key)));
+        return {lo, lo + gxImageSize(static_cast<GxFormat>(std::get<3>(key)), std::get<1>(key), std::get<2>(key))};
     }
 
     // The CPU wrote memory the GPU will read (the game's cache flushes, noted in sChanged): meshes made from it go.
@@ -879,12 +888,23 @@ struct Renderer {
         sChanged.pending.store(false, std::memory_order_relaxed);
         LightLock_Unlock(&sChanged.lock);
         perf.flushesQueued += count;
-        if (meshes.empty() && decodedLists.empty()) return;
-        if (overflowed) return ++perf.meshOverflows, dropAllMeshes();
+        if (meshes.empty() && decodedLists.empty() && textures.empty()) return;
+        if (overflowed) return ++perf.meshOverflows, dropAllMeshes(), dropAllTextures();
         bool paused = false;
         for (unsigned i = 0; i < count; ++i) {
-            bool touched = false;
-            for (std::uintptr_t page = start[i] >> 12; page <= (end[i] - 1) >> 12 && !touched; ++page) touched = meshPages.count(page);
+            bool touched = false, textureTouched = false;
+            for (std::uintptr_t page = start[i] >> 12; page <= (end[i] - 1) >> 12; ++page)
+                touched |= meshPages.count(page) != 0, textureTouched |= texturePages.count(page) != 0;
+            // A new scene's files read over an old one's textures: what they now hold is drawn fresh.
+            for (auto it = textures.begin(); textureTouched && it != textures.end();) {
+                const auto [lo, hi] = textureRange(it->first);
+                if (lo >= end[i] || start[i] >= hi) { ++it; continue; }
+                if (inFrame && !paused) pause(), resume(), paused = true;  // the GPU may still read it
+                C3D_TexDelete(&it->second), ++perf.texturesInvalidated;
+                it = textures.erase(it);
+                stateValid = applied = false;  // its textures may be gone
+                forgetSent();
+            }
             if (!touched) continue;
             for (auto it = meshes.begin(); it != meshes.end();) {
                 auto next = std::next(it);
@@ -1092,10 +1112,11 @@ struct Renderer {
         return GxVertexPipeline::MeshOk;
     }
 
-    void markPages(std::uintptr_t lo, std::uintptr_t hi) {
+    void markPages(std::uintptr_t lo, std::uintptr_t hi) { markPages(lo, hi, meshPages); }
+    void markPages(std::uintptr_t lo, std::uintptr_t hi, std::unordered_set<std::uintptr_t>& pages) {
         if (hi <= lo) return;
         for (std::uintptr_t page = lo >> 12; page <= (hi - 1) >> 12; ++page) {
-            meshPages.insert(page);
+            pages.insert(page);
             sMeshPageBits[page >> 5].fetch_or(1u << (page & 31), std::memory_order_relaxed);
         }
     }
@@ -1443,10 +1464,20 @@ struct Renderer {
         if (perf.meshesChecked) std::fprintf(stderr, "gx perf: meshes checked %lu, differing %lu\n", static_cast<unsigned long>(perf.meshesChecked),
                                              static_cast<unsigned long>(perf.meshesDiffering));
         std::fprintf(stderr, "gx perf: display lists refused by reason (per frame):%s; meshes invalidated %.1f, overflows %.1f, over budget %.1f, "
-                     "key mismatches %.1f, flushes queued %.1f; GX FIFO writes %.0f per frame\n", refusals.c_str(), perf.meshInvalidated / n,
-                     perf.meshOverflows / n, perf.meshBudgetDrops / n, perf.meshMismatches / n, perf.flushesQueued / n, (smgFifoWrites - perf.writesBefore) / n);
+                     "key mismatches %.1f, flushes queued %.1f; GX FIFO writes %.0f per frame; textures %zu, %lu invalidated\n", refusals.c_str(),
+                     perf.meshInvalidated / n, perf.meshOverflows / n, perf.meshBudgetDrops / n, perf.meshMismatches / n, perf.flushesQueued / n,
+                     (smgFifoWrites - perf.writesBefore) / n, textures.size(), static_cast<unsigned long>(perf.texturesInvalidated));
         perf = Perf{};
         perf.since = now, perf.listsBefore = lastGpu->displayListCalls, perf.listBytesBefore = lastGpu->displayListBytes;
+    }
+
+    void dropAllTextures() {
+        if (inFrame) pause(), resume();
+        for (auto& [key, texture] : textures) C3D_TexDelete(&texture);
+        perf.texturesInvalidated += textures.size();
+        textures.clear(), texturePages.clear();
+        stateValid = applied = false;
+        forgetSent();
     }
 
     // Textures made from memory a copy has just written are stale.
