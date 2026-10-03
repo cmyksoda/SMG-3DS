@@ -905,6 +905,21 @@ port had them as calls; inside the namespace they must be called by their full n
 finds the SDK's global `PSVEC*` and the call is ambiguous). An inline matrix load is written into the stream in one
 pass rather than a word at a time.
 
+**Particles that take turns between textures.** Walking around the castle view, Mario's running dust was ~180 CPU-path
+draws a frame, each its own batch: every puff picks one of three textures at random, and a texture change ended the
+batch. A CPU-path state with one map on one unit now also gets a base, the hash of its key without that map's size and
+address (its GX format stays in, so only textures of one format meet); two states in a row with the same base and
+different textures are a turn. Once a base's textures have taken 24 turns within 8 frames, they're packed into an atlas
+(at most 8 members, power-of-two sizes, shelves within 256x256, each bordered by the texels its wrap mode samples past
+its edges), in the PICA format they share, or LA8 for grey ones, or RGBA8; a later window with new textures rebuilds it
+with them while they fit. A state whose texture is in the batch's atlas then joins the batch: the vertex pipeline maps
+that unit's coordinates into the texture's place (`setAtlas`). A vertex outside [0, 1] would sample a neighbour: the
+atlas is given up for good and the primitive drawn again from its own texture. A base that fails to build three times,
+or rebuilds more than six, is left alone; a member's memory changing drops every atlas. Two traps on the way: units
+sampling no texture had counted as a second map, and a base was first refused for good after one crowded window (many
+effects share the dust's state, some with textures of other formats). At the castle view, 80-110 dust draws a frame join a batch; the walk measured 13 of 19 windows at
+29-30 fps (lowest 26.4), against 12 of 19 (lowest 23.7) without.
+
 **Development settings.** Keys in `settings.ini` for development only, written back only when on: `dev.skip_story=1`
 skips the prologue's storybook and movies; `dev.gx_dump=1` dumps a frame's draws to the log once a minute;
 `dev.gx_null=1` draws nothing, to measure the game's own work; `dev.gx_timing=1` adds the renderer's parts to the perf
