@@ -177,6 +177,29 @@ adapt("libs/JSystem/include/JSystem/JMath/JMath.hpp", "include/JSystem/JMath/JMa
     ("            psq_st z, 16(dest), 0, 0\n        }\n#endif", "            psq_st z, 16(dest), 0, 0\n        }\n#else\n        std::memmove(dest, src, 6*sizeof(f32));\n#endif", 1),
     ("                psq_st    f_5, 0x28(pDest), 0, 0\n        }\n        ;\n#endif", "                psq_st    f_5, 0x28(pDest), 0, 0\n        }\n        ;\n#else\n        std::memmove(pDest, pSrc, 12*sizeof(f32));\n#endif", 1),
     ("                psq_st    f_7, 0x38(pDest), 0, 0\n        }\n        ;\n#endif", "                psq_st    f_7, 0x38(pDest), 0, 0\n        }\n        ;\n#else\n        std::memmove(pDest, pSrc, 16*sizeof(f32));\n#endif", 1),
+    # The game's vector arithmetic, inline as Metrowerks had it (a call each was a few percent of the game's thread).
+    ("""#else
+    void PSVECCopy(const Vec*, Vec*);
+    void PSVECAdd(const Vec*, const Vec*, Vec*);
+    void PSVECSubtract(const Vec*, const Vec*, Vec*);
+    f32 PSVECDotProduct(const Vec*, const Vec*);
+    f32 PSVECSquareMag(const Vec*);
+    void PSVECNegate(const Vec*, Vec*);
+    f32 PSVECSquareDistance(const Vec*, const Vec*);
+    void PSVECMultiply(const Vec*, const Vec*, Vec*);
+#endif""", """#else
+    inline void PSVECCopy(const Vec* a, Vec* out) { *out = *a; }
+    inline void PSVECAdd(const Vec* a, const Vec* b, Vec* out) { *out = {a->x + b->x, a->y + b->y, a->z + b->z}; }
+    inline void PSVECSubtract(const Vec* a, const Vec* b, Vec* out) { *out = {a->x - b->x, a->y - b->y, a->z - b->z}; }
+    inline void PSVECMultiply(const Vec* a, const Vec* b, Vec* out) { *out = {a->x * b->x, a->y * b->y, a->z * b->z}; }
+    inline f32 PSVECDotProduct(const Vec* a, const Vec* b) { return a->x * b->x + a->y * b->y + a->z * b->z; }
+    inline f32 PSVECSquareMag(const Vec* a) { return JMathInlineVEC::PSVECDotProduct(a, a); }
+    inline void PSVECNegate(const Vec* a, Vec* out) { *out = {-a->x, -a->y, -a->z}; }
+    inline f32 PSVECSquareDistance(const Vec* a, const Vec* b) {
+        const Vec delta{a->x - b->x, a->y - b->y, a->z - b->z};
+        return JMathInlineVEC::PSVECSquareMag(&delta);
+    }
+#endif""", 1),
 ])
 
 adapt("include/math_types.hpp", "include/math_types.hpp", [

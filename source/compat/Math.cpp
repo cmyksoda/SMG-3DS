@@ -4,21 +4,8 @@
 #include <cmath>
 #include <cstring>
 
-// Scalar replacements for Gekko paired-single instructions. Outputs may alias inputs.
-namespace JMathInlineVEC {
-void PSVECCopy(const Vec* a, Vec* out) { *out = *a; }
-void PSVECAdd(const Vec* a, const Vec* b, Vec* out) { *out = {a->x+b->x, a->y+b->y, a->z+b->z}; }
-void PSVECSubtract(const Vec* a, const Vec* b, Vec* out) { *out = {a->x-b->x, a->y-b->y, a->z-b->z}; }
-void PSVECMultiply(const Vec* a, const Vec* b, Vec* out) { *out = {a->x*b->x, a->y*b->y, a->z*b->z}; }
-f32 PSVECDotProduct(const Vec* a, const Vec* b) { return a->x*b->x + a->y*b->y + a->z*b->z; }
-f32 PSVECSquareMag(const Vec* a) { return JMathInlineVEC::PSVECDotProduct(a, a); }
-void PSVECNegate(const Vec* a, Vec* out) { *out = {-a->x, -a->y, -a->z}; }
-f32 PSVECSquareDistance(const Vec* a, const Vec* b) {
-    const Vec delta{a->x-b->x, a->y-b->y, a->z-b->z};
-    return PSVECSquareMag(&delta);
-}
-}
-
+// Scalar replacements for Gekko paired-single instructions (JMathInlineVEC's are inline in JMath.hpp). Outputs may
+// alias inputs.
 extern "C" {
 f32 PSQUATDotProduct(const Quaternion* a, const Quaternion* b) {
     return a->x*b->x + a->y*b->y + a->z*b->z + a->w*b->w;
