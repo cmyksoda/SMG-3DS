@@ -12,6 +12,7 @@
 #include <cstring>
 
 extern "C" void smgRaiseInterrupt(__OSInterrupt interrupt);
+extern "C" void smgDrawSyncRead();
 extern "C" int smgDevGxInline();  // source/compat/Kpad.cpp
 // GX words written so far, for the renderer's perf line (source/compat/GxRender.cpp).
 extern "C" {
@@ -28,7 +29,7 @@ smg::GxCommandProcessor& processor() {
         [] { smgRaiseInterrupt(__OS_INTERRUPT_PI_PE_FINISH); },
         [](std::uint16_t token, bool interrupt) {
             reinterpret_cast<volatile u16*>(sRegisters[2])[7] = token;  // PE_TOKEN, which GXReadDrawSync reads
-            if (interrupt) smgRaiseInterrupt(__OS_INTERRUPT_PI_PE_TOKEN);
+            if (interrupt) smgRaiseInterrupt(__OS_INTERRUPT_PI_PE_TOKEN), smgDrawSyncRead();
         },
         [](const char* what, std::uint32_t detail) {
             std::fprintf(stderr, "The Wii GPU's command processor: %s (0x%lx)\n", what, static_cast<unsigned long>(detail));
@@ -310,6 +311,26 @@ volatile void* smgUnportedRegisters(const char* block) {
 }
 
 void smgGXFifoFlush() { flushIfBuffering(); }
+
+// Draw syncs the game set and those the render thread has read: the logic step after a drawn frame waits for that
+// frame's, then takes any of their interrupts still waiting for the CPU, so every callback has run before the step,
+// as on the Wii (a late one would read a scene the step had already torn down). Handlers are not waited on: one may
+// wait for a message queue itself.
+namespace {
+std::atomic<s32> sDrawSyncsIssued{0}, sDrawSyncsRead{0};
+}
+extern "C" void smgDrawSyncIssued() { sDrawSyncsIssued.fetch_add(1, std::memory_order_relaxed); }
+void smgDrawSyncRead() {
+    sDrawSyncsRead.fetch_add(1, std::memory_order_release);
+    syncArbitrateAddress(reinterpret_cast<s32*>(&sDrawSyncsRead), ARBITRATION_SIGNAL, -1);
+}
+extern "C" void smgWaitDrawSyncs() {
+    const s32 issued = sDrawSyncsIssued.load(std::memory_order_relaxed);
+    flushIfBuffering();
+    while (sDrawSyncsRead.load(std::memory_order_acquire) - issued < 0)
+        syncArbitrateAddress(reinterpret_cast<s32*>(&sDrawSyncsRead), ARBITRATION_WAIT_IF_LESS_THAN, issued);
+    OSRestoreInterrupts(OSDisableInterrupts());
+}
 
 void smgGXFifoSlow(unsigned value, unsigned bytes) {
     void* const self = getThreadLocalStorage();

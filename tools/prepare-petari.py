@@ -1299,10 +1299,12 @@ adapt("src/Game/Ride/SurfRay.cpp", "Game/Ride/SurfRay.cpp", [], cases=["    case
 # (update), animation, the wait for the GPU's draw done (endFrame), then the wait for the retrace. The framework's own
 # render interval draws every second logic step (smgRenderInterval): the frame is drawn only when it says so. Then the
 # GPU's draw done is waited for in the next step, after its logic and before its calcAnim rewrites the matrices the
-# drawn frame's commands read (J3D's are double-buffered by calcAnim), so the GPU draws through two logic steps.
+# drawn frame's commands read (J3D's are double-buffered by calcAnim), so the GPU draws through two logic steps. That
+# next step's logic waits only for the drawn frame's draw-sync callbacks, which the Wii's had all run by then: a late
+# one would read a scene the logic step had already torn down.
 adapt("src/Game/System/GameSystem.cpp", "Game/System/GameSystem.cpp", [
     ("void main(void) {\n    OSInitFastCast();", "void smgGameMain() {\n    OSInitFastCast();", 1),
-    ('#include "Game/System/GameSystem.hpp"\n', '#include "Game/System/GameSystem.hpp"\n\nextern "C" void smgFramePhase(int phase);\nextern "C" int smgRenderInterval();\n', 1),
+    ('#include "Game/System/GameSystem.hpp"\n', '#include "Game/System/GameSystem.hpp"\n\nextern "C" void smgFramePhase(int phase);\nextern "C" int smgRenderInterval();\nextern "C" void smgWaitDrawSyncs();\n', 1),
     ("void GameSystem::frameLoop() {\n    MainLoopFramework::sManager->beginRender();\n    draw();\n    MainLoopFramework::sManager->endRender();\n"
      "    update();\n    calcAnim();\n    mObjHolder->captureIfAllowForScreenPreserver();\n    MainLoopFramework::sManager->endFrame();\n"
      "    MainLoopFramework::sManager->waitForRetrace();\n}",
@@ -1310,6 +1312,7 @@ adapt("src/Game/System/GameSystem.cpp", "Game/System/GameSystem.cpp", [
      "    MainLoopFramework::sManager->mRenderInterval = smgRenderInterval();\n"
      "    MainLoopFramework::sManager->beginRender();\n    if (MainLoopFramework::sManager->mDoRenderFrame) {\n        draw();\n    }\n"
      "    MainLoopFramework::sManager->endRender();\n"
+     "    if (drawnFrameOut) {\n        smgFramePhase(3);\n        smgWaitDrawSyncs();\n    }\n"
      "    smgFramePhase(1);\n    update();\n"
      "    if (drawnFrameOut) {\n        smgFramePhase(3);\n        GXDrawDone();\n        drawnFrameOut = false;\n    }\n"
      "    smgFramePhase(2);\n    calcAnim();\n    mObjHolder->captureIfAllowForScreenPreserver();\n"
@@ -2143,6 +2146,8 @@ adapt("src/RVL_SDK/gx/GXMisc.c", "RVL_SDK/gx/GXMisc.c", [
     ("void GXPeekZ(u16 x, u16 y, u32* z)  {\n    u32 addr = (u32) OSPhysicalToUncached(0x8000000);\n    SC_PE_PI_EFB_ADDR_SET_X(addr, x);\n"
      "    SC_PE_PI_EFB_ADDR_SET_Y(addr, y);\n    SC_PE_PI_EFB_ADDR_SET_TYPE(addr,  1);\n    *z = *(u32*)addr;\n}",
      "void GXPeekZ(u16 x, u16 y, u32* z)  {\n    *z = smgPeekEfb(x, y, 1);\n}", 1),
+    # Draw syncs set are counted, for the frame loop's wait before the next logic step (smgWaitDrawSyncs).
+    ("    en = OSDisableInterrupts();\n    reg = PE_TOKEN_INT(token, 0x48);", "    en = OSDisableInterrupts();\n    smgDrawSyncIssued();\n    reg = PE_TOKEN_INT(token, 0x48);", 1),
 ])
 
 # The Wii's hardware registers: the GX library's processor interface and memory interface blocks are the port's
