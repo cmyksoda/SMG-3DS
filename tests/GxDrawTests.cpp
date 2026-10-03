@@ -700,6 +700,40 @@ void drawStateKey() {
     stage.bp(0x94000100), stage.bp(0xC008FFF3);  // back to the first map; stage 0's colour inputs changed
     gpu.put(stage.bytes.data(), static_cast<std::uint32_t>(stage.bytes.size()));
     check(!same(), "a used stage changes the key");
+    Stream readsC1;
+    readsC1.bp(0xC008FFF4);  // stage 0's colour is C1 alone
+    gpu.put(readsC1.bytes.data(), static_cast<std::uint32_t>(readsC1.bytes.size()));
+    const std::size_t c1Count = smg::gxDrawStateKey(gpu, base);
+    const auto sameAsC1 = [&] {
+        const std::size_t count = smg::gxDrawStateKey(gpu, key);
+        return count == c1Count && !std::memcmp(key, base, count * 4);
+    };
+    Stream others;
+    others.bp(0xE6012345), others.bp(0xE7054321), others.bp(0xE0800123);  // C2, and K0's red: no stage reads them
+    gpu.put(others.bytes.data(), static_cast<std::uint32_t>(others.bytes.size()));
+    check(sameAsC1(), "a TEV register or konst no stage reads leaves the key as it was");
+    Stream c1;
+    c1.bp(0xE4000077);  // C1's red
+    gpu.put(c1.bytes.data(), static_cast<std::uint32_t>(c1.bytes.size()));
+    check(!sameAsC1(), "a register a stage reads changes it");
+    const auto keyOf = [&](std::uint32_t* out, bool palette, unsigned* markers) { return smg::gxDrawStateKey(gpu, out, palette, markers); };
+    const auto put = [&](std::initializer_list<std::uint32_t> loads) {
+        Stream w;
+        for (std::uint32_t load : loads) w.bp(load);
+        gpu.put(w.bytes.data(), static_cast<std::uint32_t>(w.bytes.size()));
+    };
+    put({0xF6000004, 0xF700000E});  // swap table 0 is the identity
+    unsigned markers = 0;
+    std::size_t before = keyOf(base, true, &markers);
+    put({0xE4000033});  // another C1
+    check((markers & 2) && keyOf(key, true, nullptr) == before && !std::memcmp(key, base, before * 4), "with the palette, a C1 that rides leaves the key as it was");
+    put({0xC008FFF2});  // stage 0's colour is C0 alone
+    before = keyOf(base, false, &markers);
+    put({0xE2000044});  // another C0
+    check((markers & 1) && keyOf(key, false, nullptr) == before && !std::memcmp(key, base, before * 4), "so does a C0 that rides in the vertex colour");
+    put({0xE2000600});  // C0's red below zero: no vertex colour holds it
+    const std::size_t after = keyOf(key, false, &markers);
+    check(!(markers & 1) && (after != before || std::memcmp(key, base, after * 4)), "and one that can't changes it");
 }
 
 int runGxDrawTests() {

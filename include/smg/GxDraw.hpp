@@ -63,9 +63,12 @@ struct GxDrawState {
 // palette: C1 may come from a palette unit (color1InTexture), for draws on the CPU path.
 void readGxDrawState(const GxCommandProcessor& gpu, GxDrawState& out, bool palette = false);
 // The registers readGxDrawState reads for the stages and texture maps in use, in a fixed order, as a cache key: two
-// processors with the same key read the same state (a map no stage uses may differ in it). At most MaxDrawStateKey words.
+// processors with the same key read the same state (a map no stage uses may differ in it). A C0 that can ride in the
+// vertex colour, or with the palette a C1 in its texel, is a marker instead (bits 1 and 2 of `markers`): the same state
+// holds for every value unless readGxDrawState kept the value in its program, which the caller checks.
+// At most MaxDrawStateKey words.
 constexpr std::size_t MaxDrawStateKey = 128;
-std::size_t gxDrawStateKey(const GxCommandProcessor& gpu, std::uint32_t* out);
+std::size_t gxDrawStateKey(const GxCommandProcessor& gpu, std::uint32_t* out, bool palette = false, unsigned* markers = nullptr);
 // C0 as four bytes, false when a component is outside 0-255 (then it can't be a vertex colour).
 bool gxColor0Bytes(const GxCommandProcessor& gpu, std::uint8_t out[4]);
 bool gxColor1Bytes(const GxCommandProcessor& gpu, std::uint8_t out[4]);

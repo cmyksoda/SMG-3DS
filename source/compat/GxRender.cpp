@@ -209,7 +209,7 @@ struct Renderer {
         // a texture's first use, decoded and converted for the PICA.
         u64 stepTicks[12] = {};
         u32 steps[12] = {};
-        u32 stateHits = 0, stateMisses = 0;
+        u32 stateHits = 0, stateMisses = 0, stateClears = 0;
         u32 cpuCopies = 0, gpuCopies = 0;
         u32 meshesChecked = 0, meshesDiffering = 0;  // dev.gx_check
         std::pair<const char*, u32> approximated[8] = {};  // new draw states whose combiner program is approximated, by reason
@@ -622,6 +622,7 @@ struct Renderer {
         u32 words[MaxStateWords];
         std::size_t count = 0;
         GxDrawState state;
+        u32 colors[4];  // C0 and C1 as read, for a marked key whose state kept them
         PicaPixel pixel;  // preparePixel's, of the state's material and program
         bool pixelReady = false;
     };
@@ -638,22 +639,31 @@ struct Renderer {
     }
 
     void readState(const GxCommandProcessor& gpu, bool palette) {
-        std::size_t count = gxDrawStateKey(gpu, stateWords);
+        unsigned markers = 0;
+        std::size_t count = gxDrawStateKey(gpu, stateWords, palette, &markers);
         stateWords[count++] = palette;
         const u32* word = stateWords + count;
         const std::size_t bytes = std::size_t(word - stateWords) * sizeof(u32);
         u32 hash = 0x811C9DC5u;
         for (const u32* w = stateWords; w != word; ++w) hash = (hash ^ *w) * 0x01000193u;
-        if (auto found = states.find(hash); found != states.end() && found->second.count == count && !std::memcmp(found->second.words, stateWords, bytes)) {
+        // A marked colour holds for every value only if the state rides it; one whose program kept the value (exact only
+        // that way) holds for that value.
+        const auto holds = [&](const CachedState& c) {
+            return (!(markers & 1) || c.state.color0InVertex || (c.colors[0] == gpu.tevColor[2] && c.colors[1] == gpu.tevColor[3])) &&
+                   (!(markers & 2) || c.state.color1InTexture || (c.colors[2] == gpu.tevColor[4] && c.colors[3] == gpu.tevColor[5]));
+        };
+        if (auto found = states.find(hash); found != states.end() && found->second.count == count && !std::memcmp(found->second.words, stateWords, bytes) &&
+                                            holds(found->second)) {
             ++perf.stateHits;
             stateEntry = &found->second, state_ = &found->second.state;
             return;
         }
         ++perf.stateMisses;
-        if (states.size() >= 512) states.clear();
+        if (states.size() >= 512) states.clear(), ++perf.stateClears;
         CachedState& entry = states[hash];  // a key that collides takes the entry over
         std::memcpy(entry.words, stateWords, bytes), entry.count = count;
         readGxDrawState(gpu, entry.state, palette);
+        std::memcpy(entry.colors, gpu.tevColor + 2, sizeof entry.colors);
         if (!entry.state.program.exact) countApproximation(entry.state.program.approximation);
         entry.pixelReady = false;
         stateEntry = &entry, state_ = &entry.state;
@@ -1415,10 +1425,11 @@ struct Renderer {
             top += item;
             perf.changed[most - perf.changed] = 0;
         }
-        std::fprintf(stderr, "gx perf: GPU path %.0f draws (%.0f groups through citro3d), %.0f triangles, %.1f meshes made per frame (%zu kept, %.1f MB); TEV programs compiled %.1f, "
+        std::fprintf(stderr, "gx perf: GPU path %.0f draws (%.0f groups through citro3d), %.0f triangles, %.1f meshes made per frame (%zu kept, %.1f MB); draw states %zu kept, %lu clears; TEV programs compiled %.1f, "
                      "movie frames decoded %.1f, display lists %.0f (%.0f bytes) per frame; %.1f MB linear free, %.1f MB of %.1f in the free store taken; state changes by BP register "
                      "(per frame):%s\n",
-                     perf.meshDraws / n, perf.citroDraws / n, perf.meshTriangles / n, perf.meshesMade / n, meshes.size(), meshBytes / 1048576.0, (gxTevCompiles() - perf.compilesBefore) / n,
+                     perf.meshDraws / n, perf.citroDraws / n, perf.meshTriangles / n, perf.meshesMade / n, meshes.size(), meshBytes / 1048576.0, states.size(),
+                     static_cast<unsigned long>(perf.stateClears), (gxTevCompiles() - perf.compilesBefore) / n,
                      (smgMovieDecodes() - perf.moviesBefore) / n, (lastGpu->displayListCalls - perf.listsBefore) / n,
                      (lastGpu->displayListBytes - perf.listBytesBefore) / n, linearSpaceFree() / 1048576.0, mallinfo().uordblks / 1048576.0,
                      __ctru_heap_size / 1048576.0, top.c_str());

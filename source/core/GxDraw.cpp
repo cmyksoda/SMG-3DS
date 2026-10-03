@@ -388,15 +388,48 @@ bool color1CanRide(const GxCommandProcessor& gpu, const ModelMaterial& m) {
 }
 } // namespace
 
-std::size_t gxDrawStateKey(const GxCommandProcessor& gpu, std::uint32_t* out) {
+std::size_t gxDrawStateKey(const GxCommandProcessor& gpu, std::uint32_t* out, bool palette, unsigned* markers) {
     std::uint32_t* at = out;
     const std::uint32_t gen = gpu.bp[0x00];
     *at++ = gen;
     for (std::uint32_t a : {0x20u, 0x21u, 0x40u, 0x41u, 0x42u, 0xF3u, 0xF4u, 0xF5u}) *at++ = gpu.bp[a];
+    at[-5] &= ~std::uint32_t(PE_CMODE0_DITHER_ENABLE_MASK);  // the blend mode's dither, which the PICA has no switch for
     for (std::uint32_t a = 0xF6; a <= 0xFD; ++a) *at++ = gpu.bp[a];  // konst selects and swap tables
-    for (int i = 0; i < 8; ++i) *at++ = gpu.tevColor[i], *at++ = gpu.tevKonst[i];
     for (std::uint32_t x : {0x1009u, 0x100Au, 0x100Cu, 0x100Eu, 0x1010u, 0x103Fu}) *at++ = gpu.xf[x];
     const unsigned stages = GEN_MODE_GET_NTEV(gen) + 1;
+    // Only the registers the stages read: values earlier draws left in the others would split one state into many.
+    unsigned registers = 0, written = 0;
+    bool konst = false, raster = false;
+    for (unsigned i = 0; i < stages; ++i) {
+        const std::uint32_t color = gpu.bp[0xC0 + 2 * i], alpha = gpu.bp[0xC1 + 2 * i];
+        for (std::uint32_t in : {TEV_COLOR_ENV_GET_SELA(color), TEV_COLOR_ENV_GET_SELB(color), TEV_COLOR_ENV_GET_SELC(color), TEV_COLOR_ENV_GET_SELD(color)}) {
+            if (in < 8) registers |= 1u << (in / 2);
+            konst |= in == 14, raster |= in == 10 || in == 11;
+        }
+        for (std::uint32_t in : {TEV_ALPHA_ENV_GET_SELA(alpha), TEV_ALPHA_ENV_GET_SELB(alpha), TEV_ALPHA_ENV_GET_SELC(alpha), TEV_ALPHA_ENV_GET_SELD(alpha)}) {
+            if (in < 4) registers |= 1u << in;
+            konst |= in == 6, raster |= in == 5;
+        }
+        written |= 1u << TEV_COLOR_ENV_GET_DEST(color) | 1u << TEV_ALPHA_ENV_GET_DEST(alpha);
+    }
+    // A C0 riding in the vertex colour (color0CanRide), or a C1 in the palette (color1CanRide), is read where it is drawn:
+    // the state is the same whatever its value, so a marker stands for it.
+    std::uint8_t bytes[4];
+    bool identity = false;
+    for (unsigned t = 0; t < 4; ++t) {
+        const std::uint32_t rb = gpu.bp[0xF6 + 2 * t], ga = gpu.bp[0xF7 + 2 * t];
+        identity |= TEV_KSEL_GET_XRB(rb) == 0 && TEV_KSEL_GET_XGA(rb) == 1 && TEV_KSEL_GET_XRB(ga) == 2 && TEV_KSEL_GET_XGA(ga) == 3;
+    }
+    const bool c0Rides = (registers & 2) && !raster && !(written & 2) && identity && gxColor0Bytes(gpu, bytes);
+    const bool c1Rides = palette && (registers & 4) && !(written & 4) && gxColor1Bytes(gpu, bytes);
+    if (markers) *markers = (c0Rides ? 1 : 0) | (c1Rides ? 2 : 0);
+    for (unsigned r = 0; r < 4; ++r) {
+        if (!(registers >> r & 1)) continue;
+        if ((r == 1 && c0Rides) || (r == 2 && c1Rides)) *at++ = 0xC0C0C0C0u;
+        else *at++ = gpu.tevColor[2 * r], *at++ = gpu.tevColor[2 * r + 1];
+    }
+    if (konst)
+        for (int i = 0; i < 8; ++i) *at++ = gpu.tevKonst[i];
     std::uint8_t maps = 0;
     for (unsigned i = 0; i < stages; ++i) {
         *at++ = gpu.bp[0xC0 + 2 * i], *at++ = gpu.bp[0xC1 + 2 * i], *at++ = gpu.bp[0x10 + i];

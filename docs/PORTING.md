@@ -731,6 +731,17 @@ a load now looks up in a 256-entry table whether a draw reads its register and w
 stored (most don't), and BP is the first opcode it checks. The state cache's key now holds only what the state reads for
 the TEV stages in use and the texture maps they sample (`gxDrawStateKey`, about 50 words instead of 127).
 
+**States that differed only in what isn't drawn.** The key still held all eight TEV colour words, the konst words and
+the blend register whole. Values earlier draws left in registers no stage reads, a C0 riding in the vertex colour
+(read where it is drawn), a C1 in its palette texel and the blend mode's dither bit (the PICA has none) split one state
+into many: the cache passed 500 entries at the file select, and in the climb to the castle refilled 1,024 entries
+every few seconds, so dozens of states a frame were read again. The key now holds only the colour registers the active
+stages read, the konst words only when a stage reads KONST, and a marker for a C0 or C1 that can ride; where
+`readGxDrawState` kept the value after all (the riding program would be approximated and the folded one exact), the
+entry keeps the register words and holds for that value only. The file select keeps 73 states instead of about 500;
+in the climb the cache misses 0 to 4 times a frame instead of 26 to 60, and reading GX per state build halves (12 to 7
+µs). The cache is back to 512 entries, and the perf line counts what it keeps and how often it is cleared.
+
 **Fewer, leaner mesh draws.** A lit matrix slot took ten uniform rows (its whole clip transform, modelview and normal
 rows), so only four fit and Mario's skinned lists drew in 21 to 34 groups. Lit slots now take six rows (modelview,
 normal) after four rows from view to clip space that every slot shares, and the shader goes through view space, which it
