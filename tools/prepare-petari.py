@@ -792,6 +792,19 @@ adapt("libs/JSystem/include/JSystem/J3DGraphBase/J3DFifo.hpp", "include/JSystem/
     ("    GXCmd1u8(0x28);\n    GXCmd1u16(index);\n    GXCmd1u16(((9 - 1) << 12) | (u16)((addr * 3) + 0x400));",
      "    smgGXLoadIndexedNow(0x28, index, ((9 - 1) << 12) | (u16)((addr * 3) + 0x400));", 1),
 ])
+# J3D's deformed vertices are double-buffered by calcAnim, and the render thread may still read the last drawn frame's:
+# they swap only when a frame has been drawn since (smgSwapSinceDrawn, source/compat/GxFifo.cpp).
+adapt("src/JSystem/J3DGraphAnimator/J3DCluster.cpp", "JSystem/J3DGraphAnimator/J3DCluster.cpp", [
+    ('#include "JSystem/JMath/JMATrigonometric.hpp"\n',
+     '#include "JSystem/JMath/JMATrigonometric.hpp"\n\nextern "C" int smgSwapSinceDrawn(const void* owner);\n', 1),
+    ("    buffer->swapVtxPosArrayPointer();\n    buffer->swapVtxNrmArrayPointer();\n",
+     "    if (smgSwapSinceDrawn(buffer)) {\n        buffer->swapVtxPosArrayPointer();\n        buffer->swapVtxNrmArrayPointer();\n    }\n", 1),
+])
+adapt("src/Game/Util/FurShader.cpp", "Game/Util/FurShader.cpp", [
+    ('#include "Game/Util/FurShader.hpp"\n', '#include "Game/Util/FurShader.hpp"\n\nextern "C" int smgSwapSinceDrawn(const void* owner);\n', 1),
+    ("    pModel->mVertexBuffer.swapTransformedVtxPos();\n",
+     "    if (smgSwapSinceDrawn(&pModel->mVertexBuffer)) {\n        pModel->mVertexBuffer.swapTransformedVtxPos();\n    }\n", 1),
+])
 # Material and packet display lists are double-buffered by calcAnim as well: their commands go into the FIFO when called.
 adapt("src/JSystem/J3DGraphBase/J3DPacket.cpp", "JSystem/J3DGraphBase/J3DPacket.cpp", [
     ("#include <mem.h>\n", "#include <mem.h>\n#include <smg/GxPrivate.h>\n", 1),
@@ -1324,28 +1337,38 @@ adapt("src/Game/Ride/SurfRay.cpp", "Game/Ride/SurfRay.cpp", [], cases=["    case
 # The Wii's entry point, kept whole under a name the port's own main can call (source/probe/MarioProbe.cpp).
 # Each frame's phases are timed for the renderer's perf line (source/compat/GxRender.cpp): drawing, the logic step
 # (update), animation, the wait for the GPU's draw done (endFrame), then the wait for the retrace. The framework's own
-# render interval draws every second logic step (smgRenderInterval): the frame is drawn only when it says so. Then the
-# GPU's draw done is waited for in the next step, after its logic and before its calcAnim rewrites the matrices the
-# drawn frame's commands read (J3D's are double-buffered by calcAnim), so the GPU draws through two logic steps. That
-# next step's logic waits only for the drawn frame's draw-sync callbacks, which the Wii's had all run by then: a late
-# one would read a scene the logic step had already torn down.
+# render interval draws every second logic step (smgRenderInterval): the frame is drawn only when it says so. A drawn
+# step first waits until the frame before it is out (smgWaitFramesOut), so the render thread draws a frame through
+# the next two logic steps, its draw-sync callbacks running beside them as the Wii's interrupts ran beside its logic.
+# A scene is destroyed only once they have all run (GameSystemSceneController, below).
 adapt("src/Game/System/GameSystem.cpp", "Game/System/GameSystem.cpp", [
     ("void main(void) {\n    OSInitFastCast();", "void smgGameMain() {\n    OSInitFastCast();", 1),
-    ('#include "Game/System/GameSystem.hpp"\n', '#include "Game/System/GameSystem.hpp"\n\nextern "C" void smgFramePhase(int phase);\nextern "C" int smgRenderInterval();\nextern "C" void smgWaitDrawSyncs();\nextern "C" void smgAvSyncFrame();\n', 1),
+    ('#include "Game/System/GameSystem.hpp"\n', '#include "Game/System/GameSystem.hpp"\n\nextern "C" void smgFramePhase(int phase);\nextern "C" int smgRenderInterval();\nextern "C" void smgAvSyncFrame();\nextern "C" void smgWaitFramesOut();\nextern "C" void smgFrameDrawn();\n', 1),
     ("void GameSystem::frameLoop() {\n    MainLoopFramework::sManager->beginRender();\n    draw();\n    MainLoopFramework::sManager->endRender();\n"
      "    update();\n    calcAnim();\n    mObjHolder->captureIfAllowForScreenPreserver();\n    MainLoopFramework::sManager->endFrame();\n"
      "    MainLoopFramework::sManager->waitForRetrace();\n}",
-     "void GameSystem::frameLoop() {\n    static bool drawnFrameOut = false;\n    smgFramePhase(0);\n"
+     "void GameSystem::frameLoop() {\n"
      "    MainLoopFramework::sManager->mRenderInterval = smgRenderInterval();\n"
-     "    MainLoopFramework::sManager->beginRender();\n    if (MainLoopFramework::sManager->mDoRenderFrame) {\n        draw();\n        smgAvSyncFrame();\n    }\n"
+     "    if (MainLoopFramework::sManager->mRenderCounter + 1 >= MainLoopFramework::sManager->mRenderInterval) {\n"
+     "        smgFramePhase(3);\n        smgWaitFramesOut();\n    }\n"
+     "    smgFramePhase(0);\n"
+     "    MainLoopFramework::sManager->beginRender();\n    if (MainLoopFramework::sManager->mDoRenderFrame) {\n        draw();\n        smgAvSyncFrame();\n"
+     "        smgFrameDrawn();\n    }\n"
      "    MainLoopFramework::sManager->endRender();\n"
-     "    if (drawnFrameOut) {\n        smgFramePhase(3);\n        smgWaitDrawSyncs();\n    }\n"
      "    smgFramePhase(1);\n    update();\n"
-     "    if (drawnFrameOut) {\n        smgFramePhase(3);\n        GXDrawDone();\n        drawnFrameOut = false;\n    }\n"
      "    smgFramePhase(2);\n    calcAnim();\n    mObjHolder->captureIfAllowForScreenPreserver();\n"
      "    smgFramePhase(3);\n    MainLoopFramework::sManager->endFrame();\n"
-     "    drawnFrameOut = MainLoopFramework::sManager->mDoRenderFrame && MainLoopFramework::sManager->mRenderInterval > 1;\n"
      "    smgFramePhase(4);\n    MainLoopFramework::sManager->waitForRetrace();\n}", 1),
+])
+
+# A scene is destroyed (on another thread) once the GPU is done with it: the Wii's frame loop had waited for each frame
+# by then, but the render thread may still be drawing the last one, from the scene's own display lists and textures.
+adapt("src/Game/System/GameSystemSceneController.cpp", "Game/System/GameSystemSceneController.cpp", [
+    ('#include "Game/System/GameSystemSceneController.hpp"\n',
+     '#include "Game/System/GameSystemSceneController.hpp"\n#include <revolution/gx.h>\n\nextern "C" void smgWaitDrawSyncs();\n', 1),
+    ('        mIntermissionScene->setCurrentSceneControllerState("[destroy Scene: %s]", mCurrSceneControlInfo.mScene);\n',
+     '        mIntermissionScene->setCurrentSceneControllerState("[destroy Scene: %s]", mCurrSceneControlInfo.mScene);\n'
+     '        GXDrawDone();\n        smgWaitDrawSyncs();\n', 1),
 ])
 
 # Metrowerks formed a pointer to member from the bare or unqualified name.
@@ -2154,6 +2177,10 @@ adapt("src/RVL_SDK/gx/GXInit.c", "RVL_SDK/gx/GXInit.c", [
      "    __peReg = (void*)OSPhysicalToUncached(0x0c001000);\n    __memReg = (void*)OSPhysicalToUncached(0x0c004000);",
      "    __piReg = smgGXRegisters(0);\n    __cpReg = smgGXRegisters(1);\n    __peReg = smgGXRegisters(2);\n    __memReg = smgGXRegisters(3);", 1),
 ])
+adapt("src/RVL_SDK/gx/GXFrameBuf.c", "RVL_SDK/gx/GXFrameBuf.c", [
+    ('#include "revolution/gx/GXRegs.h"\n', '#include "revolution/gx/GXRegs.h"\n#include <smg/GxPrivate.h>\n', 1),
+    ("    GX_WRITE_RA_REG(gx->cpDisp);\n", "    GX_WRITE_RA_REG(gx->cpDisp);\n    smgDisplayCopyIssued();\n", 1),
+])
 adapt("src/RVL_SDK/gx/GXDisplayList.c", "RVL_SDK/gx/GXDisplayList.c", [
     ('#include "revolution/gx.h"\n', '#include "revolution/gx.h"\n#include <smg/GxPrivate.h>\n', 1),
     ("    GX_WRITE_U8(0x40);\n    GX_WRITE_U32((u32)list);\n    GX_WRITE_U32((u32)nbytes);\n}\n",
@@ -2192,7 +2219,7 @@ adapt("src/RVL_SDK/gx/GXMisc.c", "RVL_SDK/gx/GXMisc.c", [
     ("void GXPeekZ(u16 x, u16 y, u32* z)  {\n    u32 addr = (u32) OSPhysicalToUncached(0x8000000);\n    SC_PE_PI_EFB_ADDR_SET_X(addr, x);\n"
      "    SC_PE_PI_EFB_ADDR_SET_Y(addr, y);\n    SC_PE_PI_EFB_ADDR_SET_TYPE(addr,  1);\n    *z = *(u32*)addr;\n}",
      "void GXPeekZ(u16 x, u16 y, u32* z)  {\n    *z = smgPeekEfb(x, y, 1);\n}", 1),
-    # Draw syncs set are counted, for the frame loop's wait before the next logic step (smgWaitDrawSyncs).
+    # Draw syncs set are counted, for the wait before a scene is destroyed (smgWaitDrawSyncs).
     ("    en = OSDisableInterrupts();\n    reg = PE_TOKEN_INT(token, 0x48);", "    en = OSDisableInterrupts();\n    smgDrawSyncIssued();\n    reg = PE_TOKEN_INT(token, 0x48);", 1),
 ])
 

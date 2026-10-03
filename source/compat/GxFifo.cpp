@@ -11,9 +11,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <unordered_map>
 
 extern "C" void smgRaiseInterrupt(__OSInterrupt interrupt);
 extern "C" void smgDrawSyncRead();
+extern "C" void smgDisplayCopyRead();
 extern "C" int smgDevGxInline();  // source/compat/Kpad.cpp
 // GX words written so far, for the renderer's perf line (source/compat/GxRender.cpp).
 extern "C" {
@@ -39,7 +41,10 @@ smg::GxCommandProcessor& processor() {
         [](std::uint8_t kind, std::uint8_t format, std::uint16_t count, const std::uint8_t* vertices) {
             smg::gxRenderPrimitive(processor(), kind, format, count, vertices);
         },
-        [](std::uint32_t command) { smg::gxRenderCopy(processor(), command); },
+        [](std::uint32_t command) {
+            smg::gxRenderCopy(processor(), command);
+            if (command >> 14 & 1) smgDisplayCopyRead();
+        },
         [](std::uint32_t physical, std::uint32_t size) { return smg::gxRenderDisplayList(processor(), physical, size); },
         [](bool stay) { smg::gxRenderKeepCopiesOnGpu(stay); },
     });
@@ -353,10 +358,9 @@ void smgGXLoadIndexedNow(unsigned command, unsigned index, unsigned target) {
     }
 }
 
-// Draw syncs the game set and those the render thread has read: the logic step after a drawn frame waits for that
-// frame's, then takes any of their interrupts still waiting for the CPU, so every callback has run before the step,
-// as on the Wii (a late one would read a scene the step had already torn down). Handlers are not waited on: one may
-// wait for a message queue itself.
+// Draw syncs the game set and those the render thread has read: before a scene is destroyed the game waits for them
+// all, then takes any of their interrupts still waiting for the CPU, so no callback reads a scene that is gone (as the
+// Wii's had all run by then). Handlers are not waited on: one may wait for a message queue itself.
 namespace {
 std::atomic<s32> sDrawSyncsIssued{0}, sDrawSyncsRead{0};
 }
@@ -371,6 +375,41 @@ extern "C" void smgWaitDrawSyncs() {
     while (sDrawSyncsRead.load(std::memory_order_acquire) - issued < 0)
         syncArbitrateAddress(reinterpret_cast<s32*>(&sDrawSyncsRead), ARBITRATION_WAIT_IF_LESS_THAN, issued);
     OSRestoreInterrupts(OSDisableInterrupts());
+}
+
+// Display copies (a frame's last command) the game has sent and the render thread has read. A drawn step waits until
+// every frame before it is out, so the render thread is at most a frame behind and draws it while the game runs the
+// next two logic steps; what those steps rewrite that a frame reads goes into the FIFO when sent (J3D's matrices and
+// display lists) or is double-buffered by drawn frame (smgSwapSinceDrawn).
+namespace {
+std::atomic<s32> sCopiesIssued{0}, sCopiesRead{0};
+u32 sDrawnFrames = 0;
+LightLock sStampLock = 1;
+std::unordered_map<const void*, u32> sStamps;
+}
+void smgDisplayCopyIssued() { sCopiesIssued.fetch_add(1, std::memory_order_relaxed); }
+void smgDisplayCopyRead() {
+    sCopiesRead.fetch_add(1, std::memory_order_release);
+    syncArbitrateAddress(reinterpret_cast<s32*>(&sCopiesRead), ARBITRATION_SIGNAL, -1);
+}
+void smgWaitFramesOut() {
+    const s32 issued = sCopiesIssued.load(std::memory_order_relaxed);
+    flushIfBuffering();
+    const u64 start = svcGetSystemTick();
+    while (sCopiesRead.load(std::memory_order_acquire) - issued < 0)
+        syncArbitrateAddress(reinterpret_cast<s32*>(&sCopiesRead), ARBITRATION_WAIT_IF_LESS_THAN, issued);
+    sClock.gameWaits.fetch_add(static_cast<u32>(svcGetSystemTick() - start), std::memory_order_relaxed);
+}
+void smgFrameDrawn() { ++sDrawnFrames; }
+// A double buffer the game swaps at every write (J3D's deformed vertices): swapped only when a frame has been drawn
+// since its owner last wrote, so the buffer a frame in flight reads is never the one written.
+int smgSwapSinceDrawn(const void* owner) {
+    LightLock_Lock(&sStampLock);
+    u32& stamp = sStamps.try_emplace(owner, sDrawnFrames - 1).first->second;
+    const bool swap = stamp != sDrawnFrames;
+    stamp = sDrawnFrames;
+    LightLock_Unlock(&sStampLock);
+    return swap;
 }
 
 void smgGXFifoSlow(unsigned value, unsigned bytes) {

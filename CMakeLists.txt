@@ -86,7 +86,7 @@ target_link_libraries(petari_gravity PUBLIC petari_core)
 # JSystem's J3D: the model loader, joints, matrices and materials, as the game builds its models.
 set(J3D "${PETARI}/src/JSystem")
 add_library(petari_j3d STATIC
-  "${J3D}/J3DGraphAnimator/J3DCluster.cpp" "${J3D}/J3DGraphAnimator/J3DJoint.cpp" "${J3D}/J3DGraphAnimator/J3DJointTree.cpp"
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/JSystem/J3DGraphAnimator/J3DCluster.cpp" "${J3D}/J3DGraphAnimator/J3DJoint.cpp" "${J3D}/J3DGraphAnimator/J3DJointTree.cpp"
   "${J3D}/J3DGraphAnimator/J3DMaterialAnm.cpp" "${J3D}/J3DGraphAnimator/J3DMaterialAttach.cpp" "${J3D}/J3DGraphAnimator/J3DModel.cpp"
   "${J3D}/J3DGraphAnimator/J3DModelData.cpp" "${CMAKE_CURRENT_BINARY_DIR}/petari/JSystem/J3DGraphAnimator/J3DMtxBuffer.cpp"
   "${J3D}/J3DGraphAnimator/J3DShapeTable.cpp" "${J3D}/J3DGraphAnimator/J3DSkinDeform.cpp"

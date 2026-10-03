@@ -17,4 +17,6 @@ void* smgFifoThread = nullptr;
 void smgGXFifoSlow(unsigned, unsigned) { unported(); }
 void smgGXLoadIndexedNow(unsigned, unsigned, unsigned) { unported(); }
 void smgGXCallDisplayListNow(const void*, u32) { unported(); }
+// No frames in flight without the whole game: every write swaps, as on the Wii.
+int smgSwapSinceDrawn(const void*) { return 1; }
 }

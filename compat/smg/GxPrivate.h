@@ -27,6 +27,8 @@ void smgGXFifoBytes(const void* bytes, unsigned size);
 // GXCallDisplayList with the list's commands copied into the FIFO now (GXDisplayList.c): for lists the game rewrites
 // every frame, which the render thread would otherwise read a frame late.
 void smgGXCallDisplayListNow(const void* list, u32 nbytes);
+// GXCopyDisp sent: a frame's end, which smgWaitFramesOut waits for the render thread to read.
+void smgDisplayCopyIssued(void);
 // Any other Wii hardware block: touching it stops the program by name.
 volatile void* smgUnportedRegisters(const char* block);
 #ifdef __cplusplus
