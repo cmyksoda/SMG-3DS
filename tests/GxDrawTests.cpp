@@ -412,6 +412,30 @@ void color1Rides() {
     check(!state.color1InTexture, "a program that writes C1 keeps it where the combiner leaves it");
 }
 
+// Vertices decoded once (a small display list's) go through exactly the work its bytes would.
+void decodedVertices() {
+    auto owned = std::make_unique<smg::GxCommandProcessor>(host());
+    smg::GxCommandProcessor& gpu = *owned;
+    Stream s;
+    clearState(s);
+    s.bp(0xC008FFF8);  // colour (0, 0, 0, TEXC): texture 0 through the identity texgen
+    quad(s, {0, 1, 3, 2});
+    drawn.clear();
+    gpu.put(s.bytes.data(), static_cast<std::uint32_t>(s.bytes.size()));
+    smg::GxDrawState state;
+    smg::readGxDrawState(gpu, state);
+    smg::GxVertexPipeline pipeline;
+    pipeline.prepare(gpu, state, {}, drawn[0].kind, drawn[0].format);
+    smg::GxDrawVertex bytes[4] = {}, decoded[4] = {};
+    std::uint16_t fromBytes[12] = {}, fromDecoded[12] = {};
+    const std::size_t n = pipeline.run(drawn[0].data.data(), 4, bytes, 0, fromBytes);
+    smg::GxVertex read[4];
+    for (int i = 0; i < 4; ++i) read[i] = gpu.readVertex(drawn[0].data.data() + i * gpu.vertexSize(drawn[0].format), drawn[0].format);
+    check(pipeline.runDecoded(read, 4, decoded, 0, fromDecoded) == n && n == 6 && !std::memcmp(bytes, decoded, sizeof bytes) &&
+              !std::memcmp(fromBytes, fromDecoded, sizeof fromBytes),
+          "decoded vertices come out as the bytes do");
+}
+
 // The GPU path: a display list of primitives decodes once into model-space vertices and triangles; its uniforms move a
 // vertex where the CPU path would, and a list with anything but primitives stays the CPU's.
 void meshFromDisplayList() {
@@ -665,6 +689,7 @@ int runGxDrawTests() {
     dualTexgen();
     color0Rides();
     color1Rides();
+    decodedVertices();
     meshFromDisplayList();
     litMesh();
     litMeshGroups();

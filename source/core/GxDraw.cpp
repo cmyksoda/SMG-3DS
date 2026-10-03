@@ -646,40 +646,51 @@ void GxVertexPipeline::texgen(const TexGen& t, const GxVertex& v, float st[2]) c
 }
 
 std::size_t GxVertexPipeline::run(const std::uint8_t* data, std::uint16_t count, GxDrawVertex* vertices, std::uint16_t first, std::uint16_t* indices) {
-    const GxCommandProcessor& gpu = *gpu_;
     const std::uint32_t size = layout_->size;
     GxVertex v;  // attributes the format lacks stay zero for every vertex
     for (std::uint16_t i = 0; i < count; ++i) {
         layout_->read(data + i * size, v);
-        const std::uint32_t index = perVertexMatrix_ ? v.matrixIndex : defaultMatrix_;
-        const float* m = clipMatrix(index);
-        GxDrawVertex& d = vertices[i];
-        for (int r = 0; r < 4; ++r) d.position[r] = m[r * 4] * v.position[0] + m[r * 4 + 1] * v.position[1] + m[r * 4 + 2] * v.position[2] + m[r * 4 + 3];
-        if (fixedDepth_) d.position[2] = (depth01_ - 1) * d.position[3];
-        if (color0InVertex_) {
-            std::memcpy(d.color, color0_, 4);
-        } else if (!channel_) {
-            std::memset(d.color, 0, 4);
-        } else {
-            float view[3] = {0, 0, 0}, normal[3] = {0, 0, 0};
-            if (lit_) {
-                for (int r = 0; r < 3; ++r)
-                    view[r] = matrix(index + r, 0) * v.position[0] + matrix(index + r, 1) * v.position[1] + matrix(index + r, 2) * v.position[2] + matrix(index + r, 3);
-                // Normal matrices: three rows of three from XF 0x400, at the position matrix's row.
-                const std::uint32_t base = 0x400 + (index & 31) * 3;
-                for (int r = 0; r < 3; ++r)
-                    normal[r] = asFloat(gpu.xf[base + r * 3]) * v.normal[0] + asFloat(gpu.xf[base + r * 3 + 1]) * v.normal[1] +
-                                asFloat(gpu.xf[base + r * 3 + 2]) * v.normal[2];
-                normalize(normal);
-            }
-            lighting_.apply(view, normal, v.color[0], d.color);
-        }
-        for (unsigned u = 0; u < units_; ++u) {
-            if (texgens_[u].palette) d.texcoord[u][0] = palette_[0], d.texcoord[u][1] = palette_[1];
-            else texgen(texgens_[u], v, d.texcoord[u]);
-        }
+        vertex(v, vertices[i]);
     }
+    return triangles(vertices, count, first, indices);
+}
 
+std::size_t GxVertexPipeline::runDecoded(const GxVertex* decoded, std::uint16_t count, GxDrawVertex* vertices, std::uint16_t first, std::uint16_t* indices) {
+    for (std::uint16_t i = 0; i < count; ++i) vertex(decoded[i], vertices[i]);
+    return triangles(vertices, count, first, indices);
+}
+
+inline void GxVertexPipeline::vertex(const GxVertex& v, GxDrawVertex& d) {
+    const GxCommandProcessor& gpu = *gpu_;
+    const std::uint32_t index = perVertexMatrix_ ? v.matrixIndex : defaultMatrix_;
+    const float* m = clipMatrix(index);
+    for (int r = 0; r < 4; ++r) d.position[r] = m[r * 4] * v.position[0] + m[r * 4 + 1] * v.position[1] + m[r * 4 + 2] * v.position[2] + m[r * 4 + 3];
+    if (fixedDepth_) d.position[2] = (depth01_ - 1) * d.position[3];
+    if (color0InVertex_) {
+        std::memcpy(d.color, color0_, 4);
+    } else if (!channel_) {
+        std::memset(d.color, 0, 4);
+    } else {
+        float view[3] = {0, 0, 0}, normal[3] = {0, 0, 0};
+        if (lit_) {
+            for (int r = 0; r < 3; ++r)
+                view[r] = matrix(index + r, 0) * v.position[0] + matrix(index + r, 1) * v.position[1] + matrix(index + r, 2) * v.position[2] + matrix(index + r, 3);
+            // Normal matrices: three rows of three from XF 0x400, at the position matrix's row.
+            const std::uint32_t base = 0x400 + (index & 31) * 3;
+            for (int r = 0; r < 3; ++r)
+                normal[r] = asFloat(gpu.xf[base + r * 3]) * v.normal[0] + asFloat(gpu.xf[base + r * 3 + 1]) * v.normal[1] +
+                            asFloat(gpu.xf[base + r * 3 + 2]) * v.normal[2];
+            normalize(normal);
+        }
+        lighting_.apply(view, normal, v.color[0], d.color);
+    }
+    for (unsigned u = 0; u < units_; ++u) {
+        if (texgens_[u].palette) d.texcoord[u][0] = palette_[0], d.texcoord[u][1] = palette_[1];
+        else texgen(texgens_[u], v, d.texcoord[u]);
+    }
+}
+
+std::size_t GxVertexPipeline::triangles(GxDrawVertex* vertices, std::uint16_t count, std::uint16_t first, std::uint16_t* indices) const {
     // Culling in EFB space, by the sign of each triangle's area there: with every w positive that is the sign of the
     // determinant of its (x, y, w) rows, negated (the EFB's y runs down); the screen's quarter turn keeps it.
     std::size_t n = 0;

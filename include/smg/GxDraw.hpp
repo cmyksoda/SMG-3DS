@@ -159,6 +159,8 @@ public:
     // The prepared primitive's `count` vertices into `vertices`, and its triangles appended to `indices` as vertex numbers
     // from `first`: how many indices that wrote, at most maxIndices(count).
     std::size_t run(const std::uint8_t* data, std::uint16_t count, GxDrawVertex* vertices, std::uint16_t first, std::uint16_t* indices);
+    // The same from vertices read already (a small display list decoded once).
+    std::size_t runDecoded(const GxVertex* decoded, std::uint16_t count, GxDrawVertex* vertices, std::uint16_t first, std::uint16_t* indices);
     static constexpr std::size_t maxIndices(std::size_t count) { return 3 * count; }
     // The state passed to prepare was read again: the next prepare reads everything.
     void stateChanged() { prepared_ = false; }
@@ -204,6 +206,8 @@ private:
     const float* makeClipMatrix(std::uint32_t index);
     bool foldStillHolds(TexGen& t, std::uint32_t ctrl, std::uint32_t post) const;
     void refold(TexGen& t) const;
+    void vertex(const GxVertex& v, GxDrawVertex& d);
+    std::size_t triangles(GxDrawVertex* vertices, std::uint16_t count, std::uint16_t first, std::uint16_t* indices) const;
     void texgen(const TexGen& t, const GxVertex& v, float st[2]) const;
     float matrix(std::uint32_t row, int column) const;
 
