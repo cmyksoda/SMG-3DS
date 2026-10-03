@@ -91,7 +91,7 @@ add_library(petari_j3d STATIC
   "${J3D}/J3DGraphAnimator/J3DModelData.cpp" "${CMAKE_CURRENT_BINARY_DIR}/petari/JSystem/J3DGraphAnimator/J3DMtxBuffer.cpp"
   "${J3D}/J3DGraphAnimator/J3DShapeTable.cpp" "${J3D}/J3DGraphAnimator/J3DSkinDeform.cpp"
   "${J3D}/J3DGraphBase/J3DDrawBuffer.cpp" "${J3D}/J3DGraphBase/J3DGD.cpp" "${CMAKE_CURRENT_BINARY_DIR}/petari/JSystem/J3DGraphBase/J3DMatBlock.cpp"
-  "${J3D}/J3DGraphBase/J3DMaterial.cpp" "${J3D}/J3DGraphBase/J3DPacket.cpp" "${CMAKE_CURRENT_BINARY_DIR}/petari/JSystem/J3DGraphBase/J3DShape.cpp"
+  "${J3D}/J3DGraphBase/J3DMaterial.cpp" "${CMAKE_CURRENT_BINARY_DIR}/petari/JSystem/J3DGraphBase/J3DPacket.cpp" "${CMAKE_CURRENT_BINARY_DIR}/petari/JSystem/J3DGraphBase/J3DShape.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/JSystem/J3DGraphBase/J3DShapeDraw.cpp" "${J3D}/J3DGraphBase/J3DShapeMtx.cpp" "${J3D}/J3DGraphBase/J3DStruct.cpp"
   "${J3D}/J3DGraphBase/J3DSys.cpp" "${CMAKE_CURRENT_BINARY_DIR}/petari/JSystem/J3DGraphBase/J3DTevs.cpp" "${CMAKE_CURRENT_BINARY_DIR}/petari/JSystem/J3DGraphBase/J3DTransform.cpp"
   "${J3D}/J3DGraphBase/J3DVertex.cpp"

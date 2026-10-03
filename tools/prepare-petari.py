@@ -783,10 +783,19 @@ adapt("libs/RVL_SDK/include/revolution/gx/GXVert.h", "include/revolution/gx/GXVe
     ("    static void func(", "    static inline void func(", 4),
 ])
 
-# J3D's own index loads write the GPU pipe too, through the same single point.
+# J3D's own index loads name its double-buffered draw matrices, which calcAnim rewrites while the render thread is still
+# a frame behind: they go as immediate loads of what the index names when sent (source/compat/GxFifo.cpp).
 adapt("libs/JSystem/include/JSystem/J3DGraphBase/J3DFifo.hpp", "include/JSystem/J3DGraphBase/J3DFifo.hpp", [
-    ("    GXWGFifo.u8 = cmd;\n    GXWGFifo.u16 = indx;\n    GXWGFifo.u16 = addr;",
-     "    GXWGFIFO_PUT(u8, cmd);\n    GXWGFIFO_PUT(u16, indx);\n    GXWGFIFO_PUT(u16, addr);", 1),
+    ("#include <revolution/gx/GXVert.h>\n",
+     "#include <revolution/gx/GXVert.h>\n\nextern \"C\" void smgGXLoadIndexedNow(unsigned command, unsigned index, unsigned target);\n", 1),
+    ("    GXWGFifo.u8 = cmd;\n    GXWGFifo.u16 = indx;\n    GXWGFifo.u16 = addr;", "    smgGXLoadIndexedNow(cmd, indx, addr);", 1),
+    ("    GXCmd1u8(0x28);\n    GXCmd1u16(index);\n    GXCmd1u16(((9 - 1) << 12) | (u16)((addr * 3) + 0x400));",
+     "    smgGXLoadIndexedNow(0x28, index, ((9 - 1) << 12) | (u16)((addr * 3) + 0x400));", 1),
+])
+# Material and packet display lists are double-buffered by calcAnim as well: their commands go into the FIFO when called.
+adapt("src/JSystem/J3DGraphBase/J3DPacket.cpp", "JSystem/J3DGraphBase/J3DPacket.cpp", [
+    ("#include <mem.h>\n", "#include <mem.h>\n#include <smg/GxPrivate.h>\n", 1),
+    ("    GXCallDisplayList(mpDisplayList[0], mSize);", "    smgGXCallDisplayListNow(mpDisplayList[0], mSize);", 1),
 ])
 
 # Petari's own Inline.hpp brings NO_INLINE back as an attribute; for GCC it is empty, as types.h has it.
@@ -996,9 +1005,13 @@ void J3DPSMtxArrayConcat(Mtx mA, Mtx mB, Mtx mAB, u32 count) {
 ])
 # J3DModelX's draw flags are a bitfield read back as a word to pick extra display lists, list i when bit i is set.
 # Metrowerks packs a struct's first bitfield into the word's top bit, GCC into its bottom, so flag _1E (the shadow
-# capture's list 1) sits at bit 30 here: list i is the flag GCC keeps at bit 31 - i.
+# capture's list 1) sits at bit 30 here: list i is the flag GCC keeps at bit 31 - i. Mario's dynamic lists (his light
+# and alpha settings, rewritten by calcAnim in a ring of two) go into the FIFO when called, as J3D's own do.
 adapt("src/Game/Player/J3DModelX.cpp", "Game/Player/J3DModelX.cpp", [
     ("if (*reinterpret_cast< u32* >(&mFlags) & (1 << i)) {", "if (*reinterpret_cast< u32* >(&mFlags) & (1u << (31 - i))) {", 1),
+    ('#include <revolution/gd.h>\n', '#include <revolution/gd.h>\n#include <smg/GxPrivate.h>\n', 1),
+    ("        GXCallDisplayList(_1B4, _1BC);", "        smgGXCallDisplayListNow(_1B4, _1BC);", 1),
+    ("        GXCallDisplayList(_1C4[index], _1CC[index]);", "        smgGXCallDisplayListNow(_1C4[index], _1CC[index]);", 1),
 ])
 # Each weighted envelope is its joints' animated matrices times their inverse binds, weighted; its scale flag
 # holds only if every joint in the mix is unscaled.
@@ -2111,7 +2124,17 @@ adapt("src/RVL_SDK/gx/GXTev.c", "RVL_SDK/gx/GXTev.c", [
     ("    GX_WRITE_RA_REG(regBG);\n    GX_WRITE_RA_REG(regBG);\n    GX_WRITE_RA_REG(regBG);\n", "    GX_WRITE_RA_REG(regBG);\n", 2),
 ])
 adapt("src/RVL_SDK/gx/GXPixel.c", "RVL_SDK/gx/GXPixel.c", [inc, ("    rgba = *(u32*)(&color);", "    rgba = smgColorWord(color);", 1)])
-adapt("src/RVL_SDK/gx/GXTransform.c", "RVL_SDK/gx/GXTransform.c", [(gx_writers, gx_writers_c, 1), (gx_matrices, gx_matrices_c, 1)])
+adapt("src/RVL_SDK/gx/GXTransform.c", "RVL_SDK/gx/GXTransform.c", [
+    (gx_writers, gx_writers_c, 1), (gx_matrices, gx_matrices_c, 1), inc,
+    ("    GX_WRITE_U8(CP_OPCODE(0, CP_CMD_XF_IDXLDREG_C));\n    GX_WRITE_U32(reg);",
+     "    smgGXLoadIndexedNow(CP_OPCODE(0, CP_CMD_XF_IDXLDREG_C), reg >> 16, reg & 0xFFFF);", 1),
+])
+# GXSetArray's matrix and light arrays are where an indexed load reads (smgGXLoadIndexedNow).
+adapt("src/RVL_SDK/gx/GXAttr.c", "RVL_SDK/gx/GXAttr.c", [
+    ('#include "revolution/gx/GXRegs.h"\n', '#include "revolution/gx/GXRegs.h"\n#include <smg/GxPrivate.h>\n', 1),
+    ("    GX_WRITE_CP_STRM_REG(CP_ARRAY_STRIDE, cpAttr, (u32)stride);\n",
+     "    GX_WRITE_CP_STRM_REG(CP_ARRAY_STRIDE, cpAttr, (u32)stride);\n    if (cpAttr >= 12) smgGXMatrixArray(cpAttr - 12, base_ptr, stride);\n", 1),
+])
 adapt("src/RVL_SDK/gx/GXLight.c", "RVL_SDK/gx/GXLight.c", [
     inc,
     ("    obj->Color = *(u32*)(&color);", "    obj->Color = smgColorWord(color);", 1),
@@ -2131,7 +2154,13 @@ adapt("src/RVL_SDK/gx/GXInit.c", "RVL_SDK/gx/GXInit.c", [
      "    __peReg = (void*)OSPhysicalToUncached(0x0c001000);\n    __memReg = (void*)OSPhysicalToUncached(0x0c004000);",
      "    __piReg = smgGXRegisters(0);\n    __cpReg = smgGXRegisters(1);\n    __peReg = smgGXRegisters(2);\n    __memReg = smgGXRegisters(3);", 1),
 ])
-adapt("src/RVL_SDK/gx/GXDisplayList.c", "RVL_SDK/gx/GXDisplayList.c", [('#include "revolution/gx.h"\n', '#include "revolution/gx.h"\n#include <smg/GxPrivate.h>\n', 1)])
+adapt("src/RVL_SDK/gx/GXDisplayList.c", "RVL_SDK/gx/GXDisplayList.c", [
+    ('#include "revolution/gx.h"\n', '#include "revolution/gx.h"\n#include <smg/GxPrivate.h>\n', 1),
+    ("    GX_WRITE_U8(0x40);\n    GX_WRITE_U32((u32)list);\n    GX_WRITE_U32((u32)nbytes);\n}\n",
+     "    GX_WRITE_U8(0x40);\n    GX_WRITE_U32((u32)list);\n    GX_WRITE_U32((u32)nbytes);\n}\n\n"
+     "void smgGXCallDisplayListNow(const void* list, u32 nbytes) {\n    if (gx->dirtyState) {\n        __GXSetDirtyState();\n    }\n\n"
+     "    if (!(*(u32*)(&gx->vNumNot))) {\n        __GXSendFlushPrim();\n    }\n\n    smgGXFifoBytes(list, nbytes);\n}\n", 1),
+])
 # The flush primitive is a strip of one repeated vertex, for the Wii GPU's vertex cache after matrix loads: it covers no
 # pixels and the port's GPU path has no such cache, so none is sent (JPA would send one before every particle).
 adapt("src/RVL_SDK/gx/GXGeometry.c", "RVL_SDK/gx/GXGeometry.c", [

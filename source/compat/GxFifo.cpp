@@ -2,6 +2,7 @@
 // processor, whose pixel-engine events raise the Wii's interrupts; anything it cannot take yet stops by name.
 #include <3ds.h>
 #include <smg/GxCommands.hpp>
+#include <smg/GxFifoWrite.h>
 #include <smg/GxRender.hpp>
 #include <revolution/os.h>
 #include <revolution/os/OSInterrupt.h>
@@ -311,6 +312,46 @@ volatile void* smgUnportedRegisters(const char* block) {
 }
 
 void smgGXFifoFlush() { flushIfBuffering(); }
+
+void smgGXFifoBytes(const void* bytes, unsigned size) {
+    const u8* from = static_cast<const u8*>(bytes);
+    if (getThreadLocalStorage() != smgFifoThread || !sRenderThread) {
+        for (unsigned i = 0; i < size; ++i) smgGXFifoSlow(from[i], 1);
+        return;
+    }
+    while (size) {
+        if (smgFifoAt == smgFifoEnd) makeRoom(1);
+        const unsigned n = std::min<unsigned>(size, static_cast<unsigned>(smgFifoEnd - smgFifoAt));
+        std::memcpy(smgFifoAt, from, n);
+        smgFifoAt += n, from += n, size -= n;
+    }
+}
+
+// J3D's draw matrices are double-buffered by calcAnim and read by index (GX_LOAD_INDX_A-D) from arrays 12-15. The
+// render thread reads a frame behind the game, so a load names the data the game sees as it sends it.
+namespace {
+const u8* sMatrixArrays[4] = {};
+u32 sMatrixStrides[4] = {};
+}
+
+void smgGXMatrixArray(unsigned array, const void* base, unsigned stride) {
+    if (array < 4) sMatrixArrays[array] = static_cast<const u8*>(base), sMatrixStrides[array] = stride;
+}
+
+void smgGXLoadIndexedNow(unsigned command, unsigned index, unsigned target) {
+    const unsigned array = command >> 3 & 3, count = (target >> 12 & 0xF) + 1, address = target & 0xFFF;
+    if (!sMatrixArrays[array]) {  // an array set some other way: the GPU reads it, as it did
+        smgGXFifo_u8(static_cast<unsigned char>(command)), smgGXFifo_u16(static_cast<unsigned short>(index));
+        return smgGXFifo_u16(static_cast<unsigned short>(target));
+    }
+    const u8* from = sMatrixArrays[array] + index * sMatrixStrides[array];
+    smgGXFifo_u8(0x10), smgGXFifo_u16(static_cast<unsigned short>(count - 1)), smgGXFifo_u16(static_cast<unsigned short>(address));
+    for (unsigned i = 0; i < count; ++i) {
+        u32 word;
+        std::memcpy(&word, from + 4 * i, 4);  // the CPU's own order, as the processor reads an array
+        smgGXFifo_u32(word);
+    }
+}
 
 // Draw syncs the game set and those the render thread has read: the logic step after a drawn frame waits for that
 // frame's, then takes any of their interrupts still waiting for the CPU, so every callback has run before the step,

@@ -15,4 +15,6 @@ unsigned char* smgFifoAt = nullptr;  // nothing gathers: every write takes the s
 unsigned char* smgFifoEnd = nullptr;
 void* smgFifoThread = nullptr;
 void smgGXFifoSlow(unsigned, unsigned) { unported(); }
+void smgGXLoadIndexedNow(unsigned, unsigned, unsigned) { unported(); }
+void smgGXCallDisplayListNow(const void*, u32) { unported(); }
 }

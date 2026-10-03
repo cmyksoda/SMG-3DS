@@ -17,6 +17,16 @@ u32 smgPeekEfb(u16 x, u16 y, int depth);
 void smgGXFifoFlush(void);
 // GXSetDrawSync's token set (source/compat/GxFifo.cpp, smgWaitDrawSyncs).
 void smgDrawSyncIssued(void);
+// GXSetArray for the matrix and light arrays (12-15): where indexed XF loads read, for smgGXLoadIndexedNow.
+void smgGXMatrixArray(unsigned array, const void* base, unsigned stride);
+// An indexed XF load (GX_LOAD_INDX_A-D: command, index, count and address) sent as an immediate load of the data the
+// index names now, so the render thread never reads the array after the game has rewritten it (source/compat/GxFifo.cpp).
+void smgGXLoadIndexedNow(unsigned command, unsigned index, unsigned target);
+// Bytes into the FIFO as they are (a display list's commands sent inline).
+void smgGXFifoBytes(const void* bytes, unsigned size);
+// GXCallDisplayList with the list's commands copied into the FIFO now (GXDisplayList.c): for lists the game rewrites
+// every frame, which the render thread would otherwise read a frame late.
+void smgGXCallDisplayListNow(const void* list, u32 nbytes);
 // Any other Wii hardware block: touching it stops the program by name.
 volatile void* smgUnportedRegisters(const char* block);
 #ifdef __cplusplus
