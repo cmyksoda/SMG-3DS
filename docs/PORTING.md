@@ -815,8 +815,26 @@ Then three more, each measured on the title (Azahar, 268 MHz):
 
 The title then runs at 28 to 30 frames a second (33.4 to 35.8 ms), the file select 26 to 30.
 
-A depth peek (the star pointer's `GXPeekZ` at a draw sync each frame) pauses the frame, waits for the GPU and copies the
-depth buffer back: about 1.2 ms a frame in Azahar.
+A depth peek (the star pointer's `GXPeekZ` at a draw sync each frame) pauses the frame and waits for the GPU, then copies
+back only the 8x8 tile of the depth buffer that holds the pixel (256 bytes, `C3D_SyncTextureCopy`); it took 1.2 ms a frame
+copying the whole buffer. Checked against the whole readback at 188,700 points, none different.
+
+**Draw syncs before the next step.** Deferring the GPU wait to the next logic step (above) let that step's logic run
+before the drawn frame's draw-sync callbacks: with the render thread seconds behind (a scene's first textures), the
+storybook's hand-over to the plaza tore down the scene and then ran `TalkPeekZ::drawSyncCallback`, whose
+`TDDraw::invProject` read a camera that was gone. On the Wii every callback of a frame ran before the next step. Now
+`GXSetDrawSync` counts the tokens set, the render thread counts those it reads, and the step after a drawn frame waits
+until it has read them all and then takes any interrupt still waiting for the CPU (`smgWaitDrawSyncs`), so the
+callbacks run before the logic. Waiting for the handlers to finish instead froze the title: JAudio2's DSP handler can
+wait on a full message queue while holding the port's CPU, and the token's interrupt queued behind it. The plaza keeps
+30 frames a second (3 ms to spare).
+
+**A scene's first textures.** The game's textures are decoded and converted on first use, on the render thread; the
+plaza's, drawn first behind the storybook, cost about 4 seconds (2.2 Mpixel of CMPR). Three changes made it about a
+second: the ETC1 encoder tries the three tables around a half-block's widest offset and picks modifiers by midpoints
+(PSNR on the tests' gradient 37.03 to 37.09 dB), takes both splits' averages and errors from the four quadrants' sums
+(output identical); `tile()` maps columns once instead of two software divides a pixel; and a new mesh's pages are
+marked by a span pass (`meshSpan`) so it is built once, not twice.
 
 **Development settings.** Keys in `settings.ini` for development only, written back only when on: `dev.skip_story=1`
 skips the prologue's storybook and movies; `dev.gx_dump=1` dumps a frame's draws to the log once a minute;
