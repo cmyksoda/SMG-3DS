@@ -388,7 +388,7 @@ bool color1CanRide(const GxCommandProcessor& gpu, const ModelMaterial& m) {
 }
 } // namespace
 
-std::size_t gxDrawStateKey(const GxCommandProcessor& gpu, std::uint32_t* out, bool palette, unsigned* markers) {
+std::size_t gxDrawStateKey(const GxCommandProcessor& gpu, std::uint32_t* out, bool palette, unsigned* markers, std::size_t* mapsAt) {
     std::uint32_t* at = out;
     const std::uint32_t gen = gpu.bp[0x00];
     *at++ = gen;
@@ -437,6 +437,7 @@ std::size_t gxDrawStateKey(const GxCommandProcessor& gpu, std::uint32_t* out, bo
         if (i % 2 == 0) *at++ = order;
         if (i & 1 ? RAS1_TREF_GET_TE1(order) : RAS1_TREF_GET_TE0(order)) maps |= 1u << (i & 1 ? RAS1_TREF_GET_TI1(order) : RAS1_TREF_GET_TI0(order));
     }
+    if (mapsAt) *mapsAt = std::size_t(at - out);
     for (int map = 0; map < 8; ++map) {
         if (!(maps >> map & 1)) continue;
         const std::uint32_t bank = map < 4 ? 0x80 + map : 0xA0 + map - 4;
@@ -724,6 +725,12 @@ inline void GxVertexPipeline::vertex(const GxVertex& v, GxDrawVertex& d) {
     for (unsigned u = 0; u < units_; ++u) {
         if (texgens_[u].palette) d.texcoord[u][0] = palette_[0], d.texcoord[u][1] = palette_[1];
         else texgen(texgens_[u], v, d.texcoord[u]);
+    }
+    if (atlasUnit_ >= 0) {
+        float* st = d.texcoord[atlasUnit_];
+        constexpr float slack = 1.0f / 4096;
+        atlasOutside_ |= st[0] < -slack || st[0] > 1 + slack || st[1] < -slack || st[1] > 1 + slack;
+        st[0] = st[0] * atlasPlace_[0] + atlasPlace_[2], st[1] = st[1] * atlasPlace_[1] + atlasPlace_[3];
     }
 }
 

@@ -342,6 +342,41 @@ void dualTexgen() {
     check(near(v[2].texcoord[0][0], 1.5f) && near(v[2].texcoord[0][1], 1.5f), "and a post matrix loaded between them takes effect");
 }
 
+// A unit whose texture sits in an atlas: its coordinates move into the texture's place, and coordinates past the
+// texture, where the atlas would sample a neighbour, are told.
+void atlasPlace() {
+    auto owned = std::make_unique<smg::GxCommandProcessor>(host());
+    smg::GxCommandProcessor& gpu = *owned;
+    Stream s;
+    clearState(s);
+    s.bp(0xC008FFF8);                         // texture 0 takes a unit
+    s.xff(30 * 4, {1, 0, 0, 0, 0, 1, 0, 0});  // texture matrix at row 30: identity
+    s.xf(0x1018, {30 << 6});
+    quad(s, {0, 1, 3, 2});
+    drawn.clear();
+    gpu.put(s.bytes.data(), static_cast<std::uint32_t>(s.bytes.size()));
+    smg::GxDrawState state;
+    smg::readGxDrawState(gpu, state);
+    smg::GxVertexPipeline pipeline;
+    smg::GxDrawVertex plain[4], placed[4];
+    std::uint16_t indices[12];
+    pipeline.prepare(gpu, state, {}, drawn[0].kind, drawn[0].format);
+    pipeline.run(drawn[0].data.data(), 4, plain, 0, indices);
+    const float place[4] = {0.25f, 0.5f, 0.5f, 0.125f};
+    pipeline.setAtlas(0, place);
+    pipeline.run(drawn[0].data.data(), 4, placed, 0, indices);
+    bool mapped = true;
+    for (int i = 0; i < 4; ++i)
+        mapped &= near(placed[i].texcoord[0][0], plain[i].texcoord[0][0] * 0.25f + 0.5f) && near(placed[i].texcoord[0][1], plain[i].texcoord[0][1] * 0.5f + 0.125f);
+    check(mapped && !pipeline.takeAtlasOutside(), "an atlas member's coordinates go into its place");
+    Stream wide;
+    wide.xff(30 * 4, {2, 0, 0, 0, 0, 1, 0, 0});
+    gpu.put(wide.bytes.data(), static_cast<std::uint32_t>(wide.bytes.size()));
+    pipeline.prepare(gpu, state, {}, drawn[0].kind, drawn[0].format);
+    pipeline.run(drawn[0].data.data(), 4, placed, 0, indices);
+    check(pipeline.takeAtlasOutside() && !pipeline.takeAtlasOutside(), "coordinates past the texture are told, once");
+}
+
 // A program that reads C0 but not the rasterized colour takes C0 from the vertex colour, so primitives whose C0 alone
 // differs share one program; one that reads the rasterized colour keeps C0 a constant.
 void color0Rides() {
@@ -747,6 +782,7 @@ int runGxDrawTests() {
     channels();
     pipelineAcrossPrimitives();
     dualTexgen();
+    atlasPlace();
     color0Rides();
     color1Rides();
     decodedVertices();

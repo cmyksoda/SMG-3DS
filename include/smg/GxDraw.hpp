@@ -4,6 +4,7 @@
 #include <smg/Model.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <vector>
 
 namespace smg {
@@ -66,9 +67,11 @@ void readGxDrawState(const GxCommandProcessor& gpu, GxDrawState& out, bool palet
 // processors with the same key read the same state (a map no stage uses may differ in it). A C0 that can ride in the
 // vertex colour, or with the palette a C1 in its texel, is a marker instead (bits 1 and 2 of `markers`): the same state
 // holds for every value unless readGxDrawState kept the value in its program, which the caller checks.
-// At most MaxDrawStateKey words.
+// At most MaxDrawStateKey words; the texture maps' words come last, three a map (mode, image size, image address), from
+// `mapsAt` when given.
 constexpr std::size_t MaxDrawStateKey = 128;
-std::size_t gxDrawStateKey(const GxCommandProcessor& gpu, std::uint32_t* out, bool palette = false, unsigned* markers = nullptr);
+std::size_t gxDrawStateKey(const GxCommandProcessor& gpu, std::uint32_t* out, bool palette = false, unsigned* markers = nullptr,
+                           std::size_t* mapsAt = nullptr);
 // C0 as four bytes, false when a component is outside 0-255 (then it can't be a vertex colour).
 bool gxColor0Bytes(const GxCommandProcessor& gpu, std::uint8_t out[4]);
 bool gxColor1Bytes(const GxCommandProcessor& gpu, std::uint8_t out[4]);
@@ -169,6 +172,16 @@ public:
     void stateChanged() { prepared_ = false; }
     // Where the palette unit samples for the next primitives (GX texture coordinates).
     void setPaletteTexel(float s, float t) { palette_[0] = s, palette_[1] = t; }
+    // A unit whose texture sits in an atlas: its coordinates go into the texture's place (u and v scale, then offset).
+    // takeAtlasOutside says whether a vertex since the last call fell outside the texture, where the atlas would sample
+    // its neighbours instead of clamping.
+    void setAtlas(unsigned unit, const float place[4]) { atlasUnit_ = static_cast<int>(unit), std::memcpy(atlasPlace_, place, sizeof atlasPlace_); }
+    void clearAtlas() { atlasUnit_ = -1; }
+    bool takeAtlasOutside() {
+        const bool outside = atlasOutside_;
+        atlasOutside_ = false;
+        return outside;
+    }
     // After prepare: whether display lists under this state can take the GPU path (unlit or riding colour, folded
     // texgens with a matrix for the whole primitive, no depth texture), and the mesh a list decodes to (false when it
     // holds anything but primitives, or a matrix index that doesn't name a whole slot of the ten).
@@ -236,6 +249,9 @@ private:
     bool perVertexMatrix_ = false, channel_ = false, lit_ = false, fixedDepth_ = false, color0InVertex_ = false;
     std::uint8_t color0_[4] = {};
     float palette_[2] = {};
+    int atlasUnit_ = -1;
+    float atlasPlace_[4] = {};
+    bool atlasOutside_ = false;
     std::uint32_t defaultMatrix_ = 0;
     float depth01_ = 0;
     TexGen texgens_[CombinerProgram::MaxUnits];
