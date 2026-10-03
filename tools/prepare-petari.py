@@ -1424,6 +1424,13 @@ adapt("src/Game/Scene/StageDataHolder.cpp", "Game/Scene/StageDataHolder.cpp", [
     ("    JMapIdInfo startID = MR::getCurrentMarioStartIdInfo();\n    JMapInfoIter iter = makeMarioJMapInfoIter(startID);",
      "    JMapIdInfo startID = MR::getCurrentMarioStartIdInfo();\n    if (const s32 start = smgDevMarioStart(MR::getCurrentStageName()); start >= 0) {\n"
      "        startID._0 = start;\n    }\n    JMapInfoIter iter = makeMarioJMapInfoIter(startID);", 1),
+    # A placed object's zone is the holder one of whose tables it is in. The Wii told by address, the span from a
+    # holder's lowest table to the end of its highest; here spans can overlap (Gateway's rails went to the wrong zone).
+    ("    s32 data = (s32)rIter.mInfo->mData + rIter.mInfo->mData->mDataOffset + rIter.mInfo->mData->mEntrySize * rIter.mIndex;\n\n"
+     "    if (_E4 <= data && data < _E8) {\n        return this;\n    }\n",
+     "    for (const MR::AssignableArray< JMapInfo >* pArray : {&mPlacementObjs, &mStartObjs, &mGeneralPosObjs, &mChildObjs, &mPathObjs}) {\n"
+     "        for (const JMapInfo* pInfo = pArray->begin(); pInfo != pArray->end(); pInfo++) {\n"
+     "            if (pInfo->mData == rIter.mInfo->mData) {\n                return this;\n            }\n        }\n    }\n", 1),
 ])
 
 # A model's view matrices (J3DModel::viewCalc) are only drawn with: a step whose next step draws nothing has them

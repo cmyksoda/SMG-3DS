@@ -523,6 +523,13 @@ effect (Gateway) crashed in `SimpleEffectObj::init`. A local static holds it now
 `MorphItemObjNeo.hpp` and `EffectObjGravityDust`; a search of the decomp for `return &name;` after a local
 declaration finds no other.
 
+**Which zone a placed object is in.** `StageDataHolder::findPlacedStageDataHolder` told an object's zone (whose rails,
+start points and matrix it uses) by address: whether the object's row lies between the lowest of a holder's tables and
+the end of its highest. That held on the Wii, where each zone's tables sat together in its archive. In the port the
+spans can overlap (a galaxy's tables come from more than one archive, which load in the port's own order, and a
+repacked table lives in a block of its own; which of the two did it wasn't pinned down): Gateway's rails were then looked up by ID in the galaxy's own path table, found nothing, and
+`BezierRail` read the row past its end. The holder is now the one that has the row's table among its own.
+
 **The C library.** MSL's printf writes nothing for a null `%s`; newlib writes `(null)`. The game builds archive
 paths that way (`LayoutHolder`, `ResourceHolder`: four sites adapted). Other calls may lean on it; a general fix
 would give game code MSL's own formatter (its decompiled `printf.c`) or wrap the printf family.
