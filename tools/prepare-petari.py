@@ -1966,6 +1966,17 @@ adapt("src/Game/System/HeapMemoryWatcher.cpp", "Game/System/HeapMemoryWatcher.cp
      "            (unsigned long)heap->getTotalFreeSize(), (unsigned long)heap->mSize, (unsigned long)heap->getFreeSize(), (unsigned long)size, align);", 1),
 ])
 # The Wii Remote speaker's table and waves turn native as they load, once each (SpkSystem::setResource).
+# A race ghost's recording (GhostData*.arc's .gst, Cosmic Mario) is read a field at a time, its halves and words copied
+# byte by byte in the disc's order: they are put together big-endian.
+adapt("src/Game/Player/GhostPacket.cpp", "Game/Player/GhostPacket.cpp", [
+    ("void GhostPacket::read(u32* pOut) {\n    read((u8*)pOut, 4);\n}",
+     "void GhostPacket::read(u32* pOut) {\n    u8 bytes[4];\n    read(bytes, 4);\n"
+     "    *pOut = (u32)bytes[0] << 24 | (u32)bytes[1] << 16 | (u32)bytes[2] << 8 | bytes[3];\n}", 1),
+    ("void GhostPacket::read(s16* pOut) {\n    read((u8*)pOut, 2);\n}",
+     "void GhostPacket::read(s16* pOut) {\n    u8 bytes[2];\n    read(bytes, 2);\n    *pOut = (s16)(bytes[0] << 8 | bytes[1]);\n}", 1),
+    ("    read((u8*)&pOut->x, 2);\n    read((u8*)&pOut->y, 2);\n    read((u8*)&pOut->z, 2);",
+     "    read(&pOut->x);\n    read(&pOut->y);\n    read(&pOut->z);", 1),
+])
 adapt("src/Game/Speaker/SpkData.cpp", "Game/Speaker/SpkData.cpp", [
     ('#include "Game/Speaker/SpkData.hpp"\n', '#include "Game/Speaker/SpkData.hpp"\n#include <smg/NativeResources.hpp>\n', 1),
     ("    void* resource = mArchive->getResource(table);\n",
