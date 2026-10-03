@@ -42,7 +42,7 @@ void readFileTable() {
         table.assign(fromImage.begin(), fromImage.end());
     } else {
         FILE* file = std::fopen(sFileTable, "rb");
-        if (!file) stop("neither a disc image (3ds/SMG-3DS/game.rvz) nor sys/fst.bin, the disc's file table, is on the SD card");
+        if (!file) stop("neither a disc image (3ds/SMG-3DS/game.rvz, .wbfs or .iso) nor sys/fst.bin, the disc's file table, is on the SD card");
         std::fseek(file, 0, SEEK_END);
         table.resize(std::ftell(file));
         std::fseek(file, 0, SEEK_SET);
