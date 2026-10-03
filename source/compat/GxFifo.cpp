@@ -353,10 +353,25 @@ void smgGXLoadIndexedNow(unsigned command, unsigned index, unsigned target) {
         return smgGXFifo_u16(static_cast<unsigned short>(target));
     }
     const u8* from = sMatrixArrays[array] + index * sMatrixStrides[array];
+    const unsigned bytes = 5 + 4 * count;
+    if (getThreadLocalStorage() == smgFifoThread && sRenderThread) {
+        // The usual case, the game thread's: the whole load stored at once, each word big-endian as the stream holds it.
+        if (smgFifoAt + bytes > smgFifoEnd) makeRoom(bytes);
+        u8* at = smgFifoAt;
+        at[0] = 0x10, at[1] = 0, at[2] = static_cast<u8>(count - 1), at[3] = static_cast<u8>(address >> 8), at[4] = static_cast<u8>(address);
+        for (unsigned i = 0; i < count; ++i) {
+            u32 word;
+            std::memcpy(&word, from + 4 * i, 4);  // the CPU's own order, as the processor reads an array
+            word = __builtin_bswap32(word);
+            std::memcpy(at + 5 + 4 * i, &word, 4);
+        }
+        smgFifoAt = at + bytes;
+        return;
+    }
     smgGXFifo_u8(0x10), smgGXFifo_u16(static_cast<unsigned short>(count - 1)), smgGXFifo_u16(static_cast<unsigned short>(address));
     for (unsigned i = 0; i < count; ++i) {
         u32 word;
-        std::memcpy(&word, from + 4 * i, 4);  // the CPU's own order, as the processor reads an array
+        std::memcpy(&word, from + 4 * i, 4);
         smgGXFifo_u32(word);
     }
 }
