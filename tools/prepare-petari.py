@@ -2092,6 +2092,9 @@ adapt("src/RVL_SDK/gx/GXTev.c", "RVL_SDK/gx/GXTev.c", [
      "    tevReg = ((smgTevColorWord((const tev_color_env_t*)ctmp) & ~0xFF000000) | (tevReg & 0xFF000000));", 1),
     ("    tevReg = ((*atmp & ~0xFF00000F) | (tevReg & 0xFF00000F));",
      "    tevReg = ((smgTevAlphaWord((const tev_alpha_env_t*)atmp) & ~0xFF00000F) | (tevReg & 0xFF00000F));", 1),
+    # A TEV colour's BG half goes three times for the Wii GPU's register latch; the port's processor takes it once (a
+    # particle sets two colours, so this was four of its loads).
+    ("    GX_WRITE_RA_REG(regBG);\n    GX_WRITE_RA_REG(regBG);\n    GX_WRITE_RA_REG(regBG);\n", "    GX_WRITE_RA_REG(regBG);\n", 2),
 ])
 adapt("src/RVL_SDK/gx/GXPixel.c", "RVL_SDK/gx/GXPixel.c", [inc, ("    rgba = *(u32*)(&color);", "    rgba = smgColorWord(color);", 1)])
 adapt("src/RVL_SDK/gx/GXTransform.c", "RVL_SDK/gx/GXTransform.c", [(gx_writers, gx_writers_c, 1), (gx_matrices, gx_matrices_c, 1)])
