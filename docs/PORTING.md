@@ -852,7 +852,8 @@ storybook's hand-over to the plaza tore down the scene and then ran `TalkPeekZ::
 until it has read them all and then takes any interrupt still waiting for the CPU (`smgWaitDrawSyncs`), so the
 callbacks run before the logic. Waiting for the handlers to finish instead froze the title: JAudio2's DSP handler can
 wait on a full message queue while holding the port's CPU, and the token's interrupt queued behind it. The plaza keeps
-30 frames a second (3 ms to spare).
+30 frames a second (3 ms to spare). Both waits, this one and the one before `calcAnim`, later gave way to a frame
+in flight (below), with the scene's destruction waiting for the callbacks instead.
 
 **A scene's first textures.** The game's textures are decoded and converted on first use, on the render thread; the
 plaza's, drawn first behind the storybook, cost about 4 seconds (2.2 Mpixel of CMPR). Three changes made it about a
@@ -870,6 +871,31 @@ line counts textures kept and dropped, and how much of the free store is taken. 
 on core 1 was tried and taken out: 837 textures are loaded by the title (resident particles, layouts and objects) and
 the free store has about 12 MB beside the Wii arenas, so results held for later were evicted before their first draw
 (14 of 994 used), and a larger budget starved mesh building.
+
+**A frame in flight.** At the hilltop view of the castle the game's thread needed about 27.6 ms of work a frame and
+the render thread about 28.4, both under the 33.4 of a 30 fps frame, yet frames took about 38: the step after a drawn
+one waited for the GPU before its `calcAnim`, which left the render thread about 23 ms. That wait was there because J3D
+double-buffers what the GPU reads by `calcAnim` (each model's draw and normal matrices, its material and packet display
+lists), trusting the Wii's GPU to finish a frame within one logic step; with two steps a drawn frame, the second step's
+flip lands on the buffer the frame being drawn still reads. So that data no longer reaches the render thread by
+address. J3D's indexed matrix loads (`J3DFifoLoadIndx`, `J3DFifoLoadNrmMtxIndx3x3`, and the SDK's `GXLoadTexMtxIndx`)
+go out as immediate XF loads of what the index names when they are sent (`smgGXLoadIndexedNow`, reading the arrays
+`GXSetArray` gave for 12 to 15), and `J3DDisplayListObj::callDL` and Mario's own two-buffer light and alpha lists
+(`J3DModelX::drawIn`) copy their commands into the FIFO (`smgGXCallDisplayListNow`): the same bytes the Wii's GPU read,
+as J3D wrote nothing over them until the frame was done. The two places that swap CPU-deformed vertices every step
+(`J3DDeformData::deform`, the fur shader) swap only when a frame has been drawn since the owner last wrote
+(`smgSwapSinceDrawn`). The frame loop then waits only before drawing, until the frame before is out (every display
+copy issued has been read: `smgWaitFramesOut`), so the render thread has a whole frame. The draw-sync callbacks (the
+star pointer's and the talk balloons' depth peeks, the lens flare's) run beside the next logic step, as the Wii's
+interrupts ran beside its logic; a scene is destroyed only after the GPU is done and every callback has run
+(`GameSystemSceneController::exeDestroyScene`), the case that crashed when one ran late. The stream grew from about 93
+to 171 KB a frame in the plaza, and the castle view went from 25-29 frames a second to 29-30 (both threads now near
+28 ms). Other per-call cuts with it: vertex layouts are kept by their descriptor and table words (J3D sets each shape's
+own, so they came back every shape) and read only for the CPU path; lighting is read again only when a light or an XF
+register changed, not at every matrix load; a depth tile read back serves later peeks until something is drawn (the
+perf line counts peeks and their time, about 1.1 ms each); the game's area lookup by name
+(`AreaObjContainer::getManager`, a `strstr` against each of about 40 managers, many times a frame) is remembered by
+the name's address and text on the game's thread.
 
 **Development settings.** Keys in `settings.ini` for development only, written back only when on: `dev.skip_story=1`
 skips the prologue's storybook and movies; `dev.gx_dump=1` dumps a frame's draws to the log once a minute;
