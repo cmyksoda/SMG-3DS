@@ -392,7 +392,7 @@ so only programs without the game (the preview, tests, tools) ever take one.
 | OS threads, mutexes, messages, clock | `OsThreads.cpp` | libctru threads on the app core, Wii priorities mapped in order (16 = 0x30); recursive mutexes on LightLocks; blocking queues; time base at 60.75 MHz from the system tick, dated from 2000-01-01 |
 | Arenas | `OsMemory.cpp` | MEM1 (0x806C0000-0x81800000, from main.dol's end) and MEM2 (0x90000800-0x933E0000) as two blocks of the 3DS heap; boot info with the Wii's 24 MB |
 | Allocation | `GameHeap.cpp` | plain `new` from the game's current JKRHeap once the root heap exists (as the original), the free store before; `delete` by address. The port's own long-lived containers use `compat/smg/FreeStore.hpp`'s allocator, and port code the game calls into opens an `smg::PortMemory` scope, so its scratch never spends a game heap (a solid heap would never get it back) |
-| Disc | `Dvd.cpp` | entry numbers from the disc's `sys/fst.bin` (not reproducible by sorting: MovieData precedes ModuleData); reads from the SD files; async reads finish on a worker that calls back like the drive's interrupt |
+| Disc | `Dvd.cpp`, `DiscImage.cpp` | entry numbers from the disc's file table, the RVZ image's or `sys/fst.bin` (not reproducible by sorting: MovieData precedes ModuleData); reads from the image or the extracted files; async reads finish on a worker that calls back like the drive's interrupt |
 | Video | `Video.cpp` | a retrace thread on the 3DS VBlank runs the game's retrace callbacks, latches flushed buffers |
 | System settings | `SystemConfig.cpp` | language and sound mode from the 3DS's settings; 16:9 for the 5:3 screen |
 | WiiConnect24 | `Nwc24.cpp` | answers as a Wii with it switched off; the game sends no letters |
@@ -1146,10 +1146,24 @@ caught by boot.bin's Wii magic. `wii_disc_tests` builds a small disc encrypted t
 ISO and as a WBFS; on the USA disc, `disc_tool` (a host tool, given wit's decrypted title key) read all 2,371 files,
 3,228.2 MB, from the ISO and from wit's scrubbed WBFS, each identical to wit's extraction.
 
-The 3DS build doesn't use it yet: it still reads the extracted files under `3ds/SMG-3DS/game`. Open before it can:
-where the key comes from (Jaxi's call), and 64-bit file offsets (a 3.68 GB WBFS needs `FSFILE_Read`, since newlib's
-`off_t` is 32 bits). FAT32 caps a file at 4 GB, so the 4.4 GB ISO can't sit on a 3DS SD card; the scrubbed WBFS can.
-RVZ (Dolphin's format) stores partitions decrypted and needs no key, but compressed (zstd): not read yet.
+RVZ (Dolphin's format) keeps a partition's data decrypted, with its hashes left out, so it needs no key. The file
+holds the disc in groups (by default 128 KiB of disc, 124 KiB of a partition's data), each stored or compressed with
+Zstandard (the top bit of its size), a partition's groups beginning with hash exception lists (only for rebuilding
+the hashes, skipped here; a stored group pads them to a word). A group may be packed: runs of literal bytes and of
+junk, the Wii's padding, regenerated from a 68-byte seed by a lagged Fibonacci generator (j 32, k 521, the third byte
+of each word from bits 18-25) skipped forward to the run's place modulo 0x8000, counted without the hashes. These
+details follow Dolphin's reader. The decompressor is the caller's (`decompressWith`): the 3DS build links devkitPro's
+`libzstd`, and the host tests use a stand-in, checking a made-up RVZ's three kinds of group and its junk against a
+generator written the way Dolphin's format notes describe it. `disc_tool --rvz` rebuilds an RVZ from wit's folder
+(files where the table puts them, zeros between, no hashes, ticket or junk): of the USA disc, a 3.15 GB file, every
+file read back identical.
+
+The 3DS build reads `3ds/SMG-3DS/game.rvz` when it is on the SD card (`DiscImage.cpp`): the disc drive's file table and
+reads, main.dol's tables and the game code for the NAND's home all come from it, and the extracted files are the
+fallback. The file is read through `FSFILE_Read`, whose offsets are 64 bits (newlib's `off_t` is 32, and an image runs
+past 2 GB); the reader's buffers come from the free store. ISO and WBFS images aren't opened on the 3DS: they need
+the common key, and where that comes from is Jaxi's call. FAT32 caps a file at 4 GB, so the 4.4 GB ISO can't sit on a
+3DS SD card; the scrubbed WBFS and an RVZ can.
 
 The portable math tests check tolerances and conventions, not bit-identical Gekko rounding.
 The native validation app passes 1,069 math, 37 WPad, 190 BCSV, 1,043 J3D model/texture,
