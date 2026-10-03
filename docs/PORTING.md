@@ -897,6 +897,14 @@ perf line counts peeks and their time, about 1.1 ms each); the game's area looku
 (`AreaObjContainer::getManager`, a `strstr` against each of about 40 managers, many times a frame) is remembered by
 the name's address and text on the game's thread.
 
+**Work no frame shows.** With every second logic step drawn, the step right after a drawn one computes view matrices
+(`J3DModel::viewCalc`, through `ModelManager::calcView`) that the next step computes again before anything draws them:
+the frame loop now leaves them out there (`smgViewNeeded`), as their data reaches the GPU when a model is drawn and
+J3D's buffers no longer need a fixed rhythm. JMath's inline vector functions (`JMathInlineVEC`) are inline again (the
+port had them as calls; inside the namespace they must be called by their full name, or argument-dependent lookup also
+finds the SDK's global `PSVEC*` and the call is ambiguous). An inline matrix load is written into the stream in one
+pass rather than a word at a time.
+
 **Development settings.** Keys in `settings.ini` for development only, written back only when on: `dev.skip_story=1`
 skips the prologue's storybook and movies; `dev.gx_dump=1` dumps a frame's draws to the log once a minute;
 `dev.gx_null=1` draws nothing, to measure the game's own work; `dev.gx_timing=1` adds the renderer's parts to the perf
@@ -905,9 +913,15 @@ were cache hits, the CPU path's vertices and draws, a mesh draw's lookup, unifor
 use; each clock read costs Azahar 150 cycles, so it slows what it measures, by up to a fifth with all of them) with the
 vertices of refused lists by reason (the perf line names new draw states whose TEV program is approximated, by reason,
 without it); `dev.gx_check=1` checks each new mesh against the CPU path; `dev.gx_inline=1` draws on the game's thread
-instead of the render thread. Azahar runs the 3DS CPU at its base 268 MHz although the port switches a New 3DS to 804
+instead of the render thread; `dev.start=GALAXY N` starts that galaxy at its start point N (StartInfo's `MarioNo`), to
+reach a stage's later parts without walking there. The heartbeat (every 300th frame) logs where Mario is, for planning
+a run's route. Azahar runs the 3DS CPU at its base 268 MHz although the port switches a New 3DS to 804
 MHz (`osSetSpeedupEnable`), so every millisecond figure here is a slow-clock one; how much faster hardware is can only
 be measured on hardware.
+
+**Race ghosts.** A Cosmic Mario race replays a recording (`GhostData*.arc`'s `.gst`) that `GhostPacket` reads a field
+at a time, copying each half and word byte by byte in the disc's order; the adapted reader puts them together
+big-endian.
 
 **More byte-order traps.** Data the GPU reads must hold the Wii's bytes even when the source wrote it as wider
 integers: `MainLoopFramework`'s `clearZTexData` (Z24X8 texels as `u32`s) cleared every frame to near on ARM, and every
