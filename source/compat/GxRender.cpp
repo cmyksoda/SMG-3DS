@@ -1764,7 +1764,22 @@ struct Renderer {
         }
         const int sx = std::clamp(static_cast<int>((static_cast<float>(x) + 0.5f) * 400.0f / frame.width), 0, 399);
         const int sy = std::clamp(static_cast<int>((static_cast<float>(y) + 0.5f) * 240.0f / frame.height), 0, 239);
-        return 0xFFFFFF - (readEfb(true)[sx * 240 + (239 - sy)] & 0xFFFFFF);  // the port keeps nearer as larger
+        return 0xFFFFFF - (depthFromTile(unsigned(sx), unsigned(239 - sy)) & 0xFFFFFF);  // the port keeps nearer as larger
+    }
+
+    // One depth value from the target's 8x8 tile that holds it (row `row` of 400, column `column` of 240, as the
+    // whole readback lays them out): a 256-byte copy instead of the whole buffer.
+    u32* depthTile = nullptr;
+    u32 depthFromTile(unsigned row, unsigned column) {
+        if (!depthTile) depthTile = static_cast<u32*>(linearAlloc(256));
+        if (!depthTile) stop("reading a depth tile back with no memory to read it into");
+        const unsigned tile = (row / 8) * 30 + column / 8;
+        if (inFrame) pause();
+        C3D_SyncTextureCopy(static_cast<u32*>(target->frameBuf.depthBuf) + tile * 64, GX_BUFFER_DIM(256 / 16, 0), depthTile, GX_BUFFER_DIM(256 / 16, 0), 256,
+                            GX_TRANSFER_RAW_COPY(1));
+        GSPGPU_InvalidateDataCache(depthTile, 256);
+        if (inFrame) resume();
+        return depthTile[morton(column & 7, row & 7)];
     }
 
     static u32 copyClearColor(const GxCommandProcessor& gpu) {
