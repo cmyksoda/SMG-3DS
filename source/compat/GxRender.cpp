@@ -703,9 +703,12 @@ struct Renderer {
             for (u32 a = 0; a < 0x100; ++a)
                 if (gpu.bp[a] != bpAtBuild[a] && GxCommandProcessor::drawsRead(a)) ++perf.changed[a];
         }
-        std::memcpy(bpAtBuild, gpu.bp, sizeof bpAtBuild);
-        std::memcpy(colorAtBuild, gpu.tevColor, sizeof colorAtBuild);
-        std::memcpy(konstAtBuild, gpu.tevKonst, sizeof konstAtBuild);
+        // Read back only for a riding C0 (onlyColor0Changed) and by the timing's tally.
+        if (state_->color0InVertex || Step::timing()) {
+            std::memcpy(bpAtBuild, gpu.bp, sizeof bpAtBuild);
+            std::memcpy(colorAtBuild, gpu.tevColor, sizeof colorAtBuild);
+            std::memcpy(konstAtBuild, gpu.tevKonst, sizeof konstAtBuild);
+        }
         stateValid = true, stateBp = gpu.bpChanges, stateBesideColors = gpu.bpChangesBesideColors, stateColor1 = gpu.color1Changes;
         stateFrame = frame, ++stateVersion;
         if (state_->unsupported) stop(state_->unsupported);
