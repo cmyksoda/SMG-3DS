@@ -96,6 +96,7 @@ struct ChangedMemory {
     std::uintptr_t start[1024], end[1024];
     unsigned count = 0;
     bool overflowed = false;
+    std::atomic<bool> pending{false};  // set under the lock with each change, so the renderer can look without it
 } sChanged;
 
 // What a texture read of each EFB copy format (the PE's numbering) names: one channel reads as I4/I8, two as IA4/IA8.
@@ -852,11 +853,13 @@ struct Renderer {
     void applyChangedMemory() {
         std::uintptr_t* start = changedStart;
         std::uintptr_t* end = changedEnd;
+        if (!sChanged.pending.load(std::memory_order_acquire)) return;
         LightLock_Lock(&sChanged.lock);
         const unsigned count = sChanged.count;
         const bool overflowed = sChanged.overflowed;
         std::memcpy(start, sChanged.start, count * sizeof *start), std::memcpy(end, sChanged.end, count * sizeof *end);
         sChanged.count = 0, sChanged.overflowed = false;
+        sChanged.pending.store(false, std::memory_order_relaxed);
         LightLock_Unlock(&sChanged.lock);
         perf.flushesQueued += count;
         if (meshes.empty() && decodedLists.empty()) return;
@@ -909,12 +912,21 @@ struct Renderer {
         std::uintptr_t range[2][2] = {};  // the list, the array elements
     };
     std::unordered_map<u32, DecodedList> decodedLists;
+    // A list as it was: by words for the usual one block (the library's memcmp goes a byte at a time).
+    static bool sameBytes(const std::uint8_t* kept, const std::uint8_t* list, u32 size) {
+        if (size != 32) return !std::memcmp(kept, list, size);
+        u32 a[8], b[8];
+        std::memcpy(a, kept, 32), std::memcpy(b, list, 32);
+        u32 differ = 0;
+        for (int i = 0; i < 8; ++i) differ |= a[i] ^ b[i];
+        return !differ;
+    }
 
     bool drawDecodedList(const GxCommandProcessor& gpu, std::uint32_t address, std::uint32_t size) {
         applyChangedMemory();
         const std::uint8_t* list = gpu.memoryFunction()(address);
         auto found = decodedLists.find(address);
-        bool valid = found != decodedLists.end() && found->second.size == size && !std::memcmp(found->second.bytes, list, size);
+        bool valid = found != decodedLists.end() && found->second.size == size && sameBytes(found->second.bytes, list, size);
         if (valid && found->second.cpChanges != gpu.cpChanges) {
             for (const auto& [reg, value] : found->second.depends) valid &= gpu.cp[reg] == value;
             if (valid) found->second.cpChanges = gpu.cpChanges;
@@ -1868,6 +1880,7 @@ void gxRenderMemoryChanged(const void* start, std::uint32_t size) {
     } else {
         sChanged.overflowed = true;
     }
+    sChanged.pending.store(true, std::memory_order_release);
     LightLock_Unlock(&sChanged.lock);
 }
 
