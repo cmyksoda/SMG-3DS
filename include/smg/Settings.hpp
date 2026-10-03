@@ -49,6 +49,9 @@ struct Settings {
     bool devDrawEvery = false;
     // For development only (dev.gx_noraw=1): every draw goes through citro3d, none written into the command list directly.
     bool devGxNoRaw = false;
+    // For development only (dev.av_sync=1): every 90th drawn frame gets a white square and the audio a click at the
+    // same moment, to measure the port's sound against its picture in a recording.
+    bool devAvSync = false;
     static constexpr int MinSpeed = 25, MaxSpeed = 300, SpeedStep = 25;
 };
 bool operator==(const Settings& a, const Settings& b);

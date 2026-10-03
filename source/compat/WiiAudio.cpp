@@ -128,12 +128,20 @@ void noteFirstSound(const s16* samples, u32 count) {
 }
 
 // Copies the buffer the game handed over into the next wave, as the DMA took it, and tells the game it began.
+std::atomic<bool> sClickPending{false};  // dev.av_sync: the next block handed to NDSP starts with a click
+std::atomic<u64> sMarkTick{0};          // when the last mark was made
+ndspWaveBuf* sClickWave = nullptr;      // the block that carries it, until NDSP plays it
+
 void startBlock(ndspWaveBuf* wave) {
     const u32 length = std::min<u32>(u32(sDmaLength), MaxBuffer);
     if (sDmaStart && length) noteFirstSound(reinterpret_cast<const s16*>(static_cast<uintptr_t>(sDmaStart)), length / 2);
     if (wave) {
         s16* samples = const_cast<s16*>(wave->data_pcm16);
         if (sDmaStart && length) std::memcpy(samples, reinterpret_cast<const void*>(static_cast<uintptr_t>(sDmaStart)), length);
+        if (sClickPending.exchange(false)) {
+            for (u32 i = 0; i < std::min<u32>(length / 2, 320); ++i) samples[i] = i / 16 % 2 ? -24000 : 24000;
+            sClickWave = wave;
+        }
         wave->nsamples = length / 4;
         DSP_FlushDataCache(samples, length);
         ndspChnWaveBufAdd(0, wave);
@@ -155,6 +163,11 @@ void engine(void*) {
             } else {
                 LightEvent_Wait(&sNdspFrame);
             }
+            if (sClickWave && sClickWave->status != NDSP_WBUF_QUEUED) {
+                std::fprintf(stderr, "av sync: the click plays %.1f ms after the mark\n",
+                             double(svcGetSystemTick() - sMarkTick.load()) * 1000.0 / SYSCLOCK_ARM11);
+                sClickWave = nullptr;
+            }
         } else {
             // No output: blocks still take their time, so the game's audio keeps its pace.
             const u32 frames = std::max<u32>(u32(sDmaLength) / 4, 1);
@@ -165,8 +178,29 @@ void engine(void*) {
 }
 } // namespace
 
+extern "C" int smgDevAvSync();
+std::atomic<bool> smgAvSyncFramePending{false};  // read by the renderer at the marked frame's display copy
+u64 smgAvSyncMarkTick() { return sMarkTick.load(); }
+extern "C" void smgDrawMovieFrame(const u8* y, const u8* u, const u8* v, unsigned width, unsigned height, unsigned generation, int x,
+                                  int top, int w, int h);
+
 extern "C" {
 volatile void* smgAudioRegisters() { return sDspRegisters; }
+
+// dev.av_sync, from the frame loop after each drawn frame's draw: a white square in that frame and a click in the next
+// audio block, at one moment; in a recording their distance is the port's sound against its picture.
+void smgAvSyncFrame() {
+    static const bool on = smgDevAvSync();
+    static unsigned frames = 0;
+    if (!on || ++frames % 90) return;
+    static u8 white[16 * 16], chroma[8 * 8];
+    std::memset(white, 235, sizeof white), std::memset(chroma, 128, sizeof chroma);
+    sMarkTick = svcGetSystemTick();
+    smgDrawMovieFrame(white, chroma, chroma, 16, 16, 0x5A5A, 16, 16, 64, 64);
+    sClickPending = true;
+    smgAvSyncFramePending = true;
+    std::fprintf(stderr, "av sync: mark %u\n", frames / 90);
+}
 
 // DSP (the SDK's dsp.c, over the microcode in software).
 void DSPInit() {

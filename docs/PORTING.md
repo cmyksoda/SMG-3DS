@@ -739,7 +739,7 @@ attribute's index (its place among the loaders and fixed attributes, in the orde
 register it feeds. The mesh layout's normal (register 6) is attribute 5 and its matrix slot (register 5) attribute 6;
 they had been swapped since the first lit meshes, harmlessly while both fixed values were zero, until a rigid lit mesh
 (Mario's hands, on one joint) needed its slot to be 4 and drew from the view-to-clip rows instead: a giant glove over
-the camera. The shader's C++ model reads the slot from the vertex, so the mesh check could not see it.
+the camera. The shader's C++ model reads the slot from the vertex, so the mesh check could not see it. `dev.av_sync=1` puts a white square in every 90th drawn frame and a click at the start of the next audio block NDSP takes, at one moment, and logs when each goes out: the port plays the click 38 to 51 ms after its frame goes out. Azahar's video dumper (`-d FILE`) writes the audio track about 675 ms early (clicks land 640 ms before their squares), so a recording's sound is moved back by that much before it is shown.
 
 **The DSP on its own core.** The Wii's DSP ran JAudio2's microcode beside the CPU, answering its mail by interrupt;
 the port ran it inside `DSPSendMailToDSP`, on the game's core, about 5 to 7 ms of a plaza frame. Now a thread on the

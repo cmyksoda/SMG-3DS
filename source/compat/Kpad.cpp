@@ -72,6 +72,7 @@ BOOL smgDevGxTiming() { return input().settings().devGxTiming; }
 BOOL smgDevGxCheck() { return input().settings().devGxCheck; }
 BOOL smgDevGxInline() { return input().settings().devGxInline; }
 BOOL smgDevGxNoRaw() { return input().settings().devGxNoRaw; }
+BOOL smgDevAvSync() { return input().settings().devAvSync; }
 // GameSystem::frameLoop (adapted): logic steps per drawn frame. The Wii drew each one; the port draws every second one,
 // 30 frames a second with the game at full speed, unless dev.draw_every=1.
 int smgRenderInterval() { return input().settings().devDrawEvery ? 1 : 2; }

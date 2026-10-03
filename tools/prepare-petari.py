@@ -1318,13 +1318,13 @@ adapt("src/Game/Ride/SurfRay.cpp", "Game/Ride/SurfRay.cpp", [], cases=["    case
 # one would read a scene the logic step had already torn down.
 adapt("src/Game/System/GameSystem.cpp", "Game/System/GameSystem.cpp", [
     ("void main(void) {\n    OSInitFastCast();", "void smgGameMain() {\n    OSInitFastCast();", 1),
-    ('#include "Game/System/GameSystem.hpp"\n', '#include "Game/System/GameSystem.hpp"\n\nextern "C" void smgFramePhase(int phase);\nextern "C" int smgRenderInterval();\nextern "C" void smgWaitDrawSyncs();\n', 1),
+    ('#include "Game/System/GameSystem.hpp"\n', '#include "Game/System/GameSystem.hpp"\n\nextern "C" void smgFramePhase(int phase);\nextern "C" int smgRenderInterval();\nextern "C" void smgWaitDrawSyncs();\nextern "C" void smgAvSyncFrame();\n', 1),
     ("void GameSystem::frameLoop() {\n    MainLoopFramework::sManager->beginRender();\n    draw();\n    MainLoopFramework::sManager->endRender();\n"
      "    update();\n    calcAnim();\n    mObjHolder->captureIfAllowForScreenPreserver();\n    MainLoopFramework::sManager->endFrame();\n"
      "    MainLoopFramework::sManager->waitForRetrace();\n}",
      "void GameSystem::frameLoop() {\n    static bool drawnFrameOut = false;\n    smgFramePhase(0);\n"
      "    MainLoopFramework::sManager->mRenderInterval = smgRenderInterval();\n"
-     "    MainLoopFramework::sManager->beginRender();\n    if (MainLoopFramework::sManager->mDoRenderFrame) {\n        draw();\n    }\n"
+     "    MainLoopFramework::sManager->beginRender();\n    if (MainLoopFramework::sManager->mDoRenderFrame) {\n        draw();\n        smgAvSyncFrame();\n    }\n"
      "    MainLoopFramework::sManager->endRender();\n"
      "    if (drawnFrameOut) {\n        smgFramePhase(3);\n        smgWaitDrawSyncs();\n    }\n"
      "    smgFramePhase(1);\n    update();\n"

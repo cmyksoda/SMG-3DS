@@ -39,6 +39,8 @@ extern "C" int smgDevGxNoRaw();
 extern "C" void (*smgGpuMemoryChanged)(const void* start, u32 size);  // source/compat/Os.cpp
 extern std::atomic<u32> smgDspTicks;                                  // source/compat/WiiAudio.cpp
 
+extern std::atomic<bool> smgAvSyncFramePending;  // source/compat/WiiAudio.cpp, dev.av_sync
+u64 smgAvSyncMarkTick();
 namespace smg {
 namespace {
 constexpr std::size_t VertexBytes = 2u << 20, CommandBytes = 1u << 20;
@@ -1814,6 +1816,9 @@ struct Renderer {
         flushVertices();
         C3D_FrameEnd(GX_CMDLIST_FLUSH);
         inFrame = false;
+        if (smgAvSyncFramePending.exchange(false))
+            std::fprintf(stderr, "av sync: the marked frame goes out %.1f ms after the mark\n",
+                         double(svcGetSystemTick() - smgAvSyncMarkTick()) * 1000.0 / SYSCLOCK_ARM11);
         stateValid = false;  // read again each frame, as a Z texture the CPU rewrites would be
         if (command >> 11 & 1) clearColor = copyClearColor(gpu), clearDepth = copyClearDepth(gpu), clearPending = true;
     }
