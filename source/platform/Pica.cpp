@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <vector>
 
 namespace smg {
 namespace {
@@ -53,14 +54,23 @@ TiledTexture tile(const ModelTexture& source) {
     out.minFilter = source.minFilter;
     out.magFilter = source.magFilter;
     // GX reads v down from the first row; the PICA reads t up from the last row in memory, so rows go in upside down.
-    const auto sourceRow = [&](unsigned y) { return std::size_t((out.height - 1 - y) * image.height / out.height) * image.width; };
+    // Nearest-neighbour stretch for the few textures that are not a power of two, by a column map made once: the ARM11
+    // divides in software.
+    const auto sourceRow = [&](unsigned y) { return image.pixels.data() + std::size_t((out.height - 1 - y) * image.height / out.height) * image.width; };
+    std::vector<unsigned> columns(out.width);
+    for (unsigned x = 0; x < out.width; ++x) columns[x] = x * image.width / out.width;
+    const bool sameWidth = out.width == image.width;
     if (out.format == GPU_ETC1 || out.format == GPU_ETC1A4) {
         Image resized;
         resized.width = out.width;
         resized.height = out.height;
-        for (unsigned y = 0; y < out.height; ++y)
-            for (unsigned x = 0; x < out.width; ++x)
-                resized.pixels.push_back(image.pixels[sourceRow(y) + x * image.width / out.width]);
+        resized.pixels.resize(std::size_t(out.width) * out.height);
+        for (unsigned y = 0; y < out.height; ++y) {
+            const std::uint32_t* from = sourceRow(y);
+            std::uint32_t* to = resized.pixels.data() + std::size_t(y) * out.width;
+            if (sameWidth) std::memcpy(to, from, out.width * sizeof *to);
+            else for (unsigned x = 0; x < out.width; ++x) to[x] = from[columns[x]];
+        }
         out.bytes = encodeEtc1(resized, out.format == GPU_ETC1A4);
         return out;
     }
@@ -68,9 +78,9 @@ TiledTexture tile(const ModelTexture& source) {
     out.bytes.assign(std::size_t(out.width) * out.height * bytesPerTexel, 0);
     auto* bytes = out.bytes.data();
     for (unsigned y = 0; y < out.height; ++y) {
+        const std::uint32_t* row = sourceRow(y);
         for (unsigned x = 0; x < out.width; ++x) {
-            // Nearest-neighbour stretch for the few textures that are not a power of two.
-            const std::uint32_t c = image.pixels[sourceRow(y) + x * image.width / out.width];
+            const std::uint32_t c = row[columns[x]];
             const unsigned r = c >> 24, g = c >> 16 & 255, b = c >> 8 & 255, a = c & 255;
             const unsigned texel = ((y / 8) * (out.width / 8) + x / 8) * 64 + morton(x, y);
             std::uint16_t half = 0;
