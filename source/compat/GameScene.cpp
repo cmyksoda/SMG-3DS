@@ -15,6 +15,11 @@ NameObjHolder* getSceneNameObjHolder() {
     return SingletonHolder< GameSystem >::get()->mSceneController->mObjHolder;
 }
 
+// Whether this calcAnim's view matrices will be drawn (GameSystem::frameLoop, adapted; ModelManager::calcView).
+extern "C" {
+bool smgViewNeeded = true;
+}
+
 CollisionCode* getSceneCollisionCode() {
     return MR::getCollisionDirector()->mCode;
 }

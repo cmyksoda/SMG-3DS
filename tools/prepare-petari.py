@@ -1385,7 +1385,7 @@ adapt("src/Game/Ride/SurfRay.cpp", "Game/Ride/SurfRay.cpp", [], cases=["    case
 # A scene is destroyed only once they have all run (GameSystemSceneController, below).
 adapt("src/Game/System/GameSystem.cpp", "Game/System/GameSystem.cpp", [
     ("void main(void) {\n    OSInitFastCast();", "void smgGameMain() {\n    OSInitFastCast();", 1),
-    ('#include "Game/System/GameSystem.hpp"\n', '#include "Game/System/GameSystem.hpp"\n\nextern "C" void smgFramePhase(int phase);\nextern "C" int smgRenderInterval();\nextern "C" void smgAvSyncFrame();\nextern "C" void smgWaitFramesOut();\nextern "C" void smgFrameDrawn();\n', 1),
+    ('#include "Game/System/GameSystem.hpp"\n', '#include "Game/System/GameSystem.hpp"\n\nextern "C" void smgFramePhase(int phase);\nextern "C" int smgRenderInterval();\nextern "C" void smgAvSyncFrame();\nextern "C" void smgWaitFramesOut();\nextern "C" void smgFrameDrawn();\nextern "C" bool smgViewNeeded;\n', 1),
     ("void GameSystem::frameLoop() {\n    MainLoopFramework::sManager->beginRender();\n    draw();\n    MainLoopFramework::sManager->endRender();\n"
      "    update();\n    calcAnim();\n    mObjHolder->captureIfAllowForScreenPreserver();\n    MainLoopFramework::sManager->endFrame();\n"
      "    MainLoopFramework::sManager->waitForRetrace();\n}",
@@ -1398,9 +1398,20 @@ adapt("src/Game/System/GameSystem.cpp", "Game/System/GameSystem.cpp", [
      "        smgFrameDrawn();\n    }\n"
      "    MainLoopFramework::sManager->endRender();\n"
      "    smgFramePhase(1);\n    update();\n"
-     "    smgFramePhase(2);\n    calcAnim();\n    mObjHolder->captureIfAllowForScreenPreserver();\n"
+     "    smgFramePhase(2);\n"
+     "    smgViewNeeded = MainLoopFramework::sManager->mRenderCounter + 1 >= MainLoopFramework::sManager->mRenderInterval;\n"
+     "    calcAnim();\n    smgViewNeeded = true;\n    mObjHolder->captureIfAllowForScreenPreserver();\n"
      "    smgFramePhase(3);\n    MainLoopFramework::sManager->endFrame();\n"
      "    smgFramePhase(4);\n    MainLoopFramework::sManager->waitForRetrace();\n}", 1),
+])
+
+# A model's view matrices (J3DModel::viewCalc) are only drawn with: a step whose next step draws nothing has them
+# computed again by that next step before anything draws them, so the frame loop leaves them out of its calcAnim
+# (smgViewNeeded false only there). Their data reaches the GPU when drawn, so J3D's swap needs no fixed rhythm.
+adapt("src/Game/LiveActor/ModelManager.cpp", "Game/LiveActor/ModelManager.cpp", [
+    ('#include "Game/LiveActor/ModelManager.hpp"\n', '#include "Game/LiveActor/ModelManager.hpp"\n\nextern "C" bool smgViewNeeded;  // source/compat/GameScene.cpp\n', 1),
+    ("void ModelManager::calcView() {\n    getJ3DModel()->viewCalc();",
+     "void ModelManager::calcView() {\n    if (!smgViewNeeded) {\n        return;\n    }\n\n    getJ3DModel()->viewCalc();", 1),
 ])
 
 # A scene is destroyed (on another thread) once the GPU is done with it: the Wii's frame loop had waited for each frame
