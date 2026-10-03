@@ -263,15 +263,17 @@ GxVertex GxCommandProcessor::readVertex(const std::uint8_t* at, std::uint8_t for
 }
 
 void GxCommandProcessor::loadXf(std::uint32_t address, std::uint32_t count, const std::uint8_t* from, bool native) {
-    bool changed = false;
+    bool changed = false, registers = false;
     for (std::uint32_t i = 0; i < count && address + i < sizeof xf / sizeof *xf; ++i) {
         const std::uint32_t value = word(from + i * 4, native);
         if (xf[address + i] == value) continue;
         changed = true;
         if (address + i < 0x1000) ++xfRowChanges[(address + i) >> 2];
+        else registers = true;
         xf[address + i] = value;
     }
     xfChanges += changed;
+    xfRegisterChanges += registers;
 }
 
 void GxCommandProcessor::loadBp(std::uint32_t value) {

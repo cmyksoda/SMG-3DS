@@ -448,9 +448,24 @@ void readGxDrawState(const GxCommandProcessor& gpu, GxDrawState& out, bool palet
 float GxVertexPipeline::matrix(std::uint32_t row, int column) const { return asFloat(gpu_->xf[(row * 4 + column) & 0xFFF]); }
 
 bool GxVertexPipeline::prepare(const GxCommandProcessor& gpu, const GxDrawState& state, const GxFrame& frame, std::uint8_t kind, std::uint8_t format) {
-    if (prepared_ && &gpu == gpu_ && &state == state_ && kind == preparedKind_ && format == preparedFormat_ && gpu.bpChanges == preparedBp_ &&
-        gpu.xfChanges == preparedXf_ && gpu.cpChanges == preparedCp_ && frame == preparedFrame_)
+    if (prepared_ && &gpu == gpu_ && &state == state_ && kind == preparedKind_ && format == preparedFormat_ && gpu.cpChanges == preparedCp_ &&
+        frame == preparedFrame_ && gpu.bpChangesBesideColors == preparedBeside_ && gpu.xfRegisterChanges == preparedXfRegisters_) {
+        // Only TEV colours or XF matrix memory changed (a particle's): C0's bytes, the folds and the clip matrices again.
+        if (gpu.bpChanges != preparedBp_) {
+            if (color0InVertex_ && !gxColor0Bytes(gpu, color0_)) {
+                unsupported = "C0 outside a byte while it rides in the vertex colour";
+                return prepared_ = false;
+            }
+            preparedBp_ = gpu.bpChanges;
+        }
+        if (gpu.xfChanges != preparedXf_) {
+            for (unsigned u = 0; u < units_; ++u)
+                if (!texgens_[u].palette) refold(texgens_[u]);
+            if (channel_) lighting_.read(gpu), lightingXf_ = gpu.xfChanges;
+            preparedXf_ = xfSeen_ = gpu.xfChanges, clipReady_ = 0;
+        }
         return true;
+    }
     prepared_ = false;
     gpu_ = &gpu, state_ = &state, kind_ = kind;
     unsupported = state.unsupported;
@@ -489,28 +504,14 @@ bool GxVertexPipeline::prepare(const GxCommandProcessor& gpu, const GxDrawState&
         const std::uint32_t post = gpu.xf[XfPostTexGen + coord];
         t.normalize = XF_DUALTEX_F_GET_NORMAL_ENABLE(post);
         t.post = XfPostMatrices / 4 + XF_DUALTEX_F_GET_DUALMATRIX_ADRS(post);
+        t.ctrl = ctrl, t.postCtrl = post;
         t.folded = !t.perVertexMatrix && !(t.dual && t.normalize);
-        if (t.folded && !foldStillHolds(t, ctrl, post)) {
-            // The matrix's rows (a third of (0, 0, 0, 1) without projection), then the dual transform over them.
-            double m[3][4] = {{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 1}};
-            for (int r = 0; r < t.rows; ++r)
-                for (int c = 0; c < 4; ++c) m[r][c] = matrix(t.matrix + r, c);
-            for (int r = 0; r < 3; ++r)
-                for (int c = 0; c < 4; ++c) {
-                    double sum = m[r][c];
-                    if (t.dual) {
-                        sum = c == 3 ? matrix(t.post + r, 3) : 0;
-                        for (int k = 0; k < 3; ++k) sum += matrix(t.post + r, k) * m[k][c];
-                    }
-                    t.fold[r][c] = static_cast<float>(sum);
-                }
-        }
-        // A texcoord source, or the AB11 form, gives a third input of one; with q fixed at one there's nothing to divide.
-        t.planar = t.folded && (t.source >= 5 || !t.threeInputs) && t.fold[2][0] == 0 && t.fold[2][1] == 0 && t.fold[2][2] == 0 && t.fold[2][3] == 1;
+        refold(t);
     }
     if (channel_ && lightingXf_ != gpu.xfChanges) lighting_.read(gpu), lightingXf_ = gpu.xfChanges;
     prepared_ = true, preparedKind_ = kind, preparedFormat_ = format, preparedFrame_ = frame;
     preparedBp_ = gpu.bpChanges, preparedXf_ = gpu.xfChanges, preparedCp_ = gpu.cpChanges;
+    preparedBeside_ = gpu.bpChangesBesideColors, preparedXfRegisters_ = gpu.xfRegisterChanges;
     if (gpu.xfChanges == xfSeen_ && frame == frameSeen_) return true;
     xfSeen_ = gpu.xfChanges, clipReady_ = 0;
     // Most XF loads are matrices; the projection and viewport change far less often.
@@ -569,6 +570,27 @@ bool GxVertexPipeline::foldStillHolds(TexGen& t, std::uint32_t ctrl, std::uint32
     for (int r = 0; r < t.rows; ++r) t.rowChanges[r] = rows[(t.matrix + r) & 0x3FF];
     for (int r = 0; r < 3 && t.dual; ++r) t.rowChanges[3 + r] = rows[(t.post + r) & 0x3FF];
     return same;
+}
+
+// A folded texgen's map again when the matrices it was made from changed, and whether it is planar.
+void GxVertexPipeline::refold(TexGen& t) const {
+    if (t.folded && !foldStillHolds(t, t.ctrl, t.postCtrl)) {
+        // The matrix's rows (a third of (0, 0, 0, 1) without projection), then the dual transform over them.
+        double m[3][4] = {{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 1}};
+        for (int r = 0; r < t.rows; ++r)
+            for (int c = 0; c < 4; ++c) m[r][c] = matrix(t.matrix + r, c);
+        for (int r = 0; r < 3; ++r)
+            for (int c = 0; c < 4; ++c) {
+                double sum = m[r][c];
+                if (t.dual) {
+                    sum = c == 3 ? matrix(t.post + r, 3) : 0;
+                    for (int k = 0; k < 3; ++k) sum += matrix(t.post + r, k) * m[k][c];
+                }
+                t.fold[r][c] = static_cast<float>(sum);
+            }
+    }
+    // A texcoord source, or the AB11 form, gives a third input of one; with q fixed at one there's nothing to divide.
+    t.planar = t.folded && (t.source >= 5 || !t.threeInputs) && t.fold[2][0] == 0 && t.fold[2][1] == 0 && t.fold[2][2] == 0 && t.fold[2][3] == 1;
 }
 
 // A position matrix (three rows from `index`) through toClip_: one 4x4 per vertex instead of a matrix, the projection

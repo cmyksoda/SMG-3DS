@@ -191,6 +191,7 @@ private:
         bool threeInputs = false, perVertexMatrix = false, dual = false, normalize = false;
         bool palette = false;  // the unit samples the C1 palette (setPaletteTexel), not a texgen
         std::uint32_t matrix = 0, post = 0;
+        std::uint32_t ctrl = 0, postCtrl = 0;  // its XF texgen and post-texgen registers
         // With one matrix for the whole primitive and no normalizing, the texgen is one affine map: the matrix and the
         // dual transform folded together (the input's fourth component is always one).
         bool folded = false, planar = false;  // planar: two inputs, two outputs, nothing to divide by
@@ -202,13 +203,14 @@ private:
     const float* clipMatrix(std::uint32_t index) { return index < 64 && clipReady_ >> index & 1 ? clip_[index] : makeClipMatrix(index); }
     const float* makeClipMatrix(std::uint32_t index);
     bool foldStillHolds(TexGen& t, std::uint32_t ctrl, std::uint32_t post) const;
+    void refold(TexGen& t) const;
     void texgen(const TexGen& t, const GxVertex& v, float st[2]) const;
     float matrix(std::uint32_t row, int column) const;
 
     // What the last prepare saw: a primitive with nothing changed since skips it (most of a model's do).
     bool prepared_ = false;
     std::uint8_t preparedKind_ = 0, preparedFormat_ = 0;
-    std::uint32_t preparedBp_ = 0, preparedXf_ = 0, preparedCp_ = 0;
+    std::uint32_t preparedBp_ = 0, preparedXf_ = 0, preparedCp_ = 0, preparedBeside_ = 0, preparedXfRegisters_ = 0;
     GxFrame preparedFrame_;
     const GxCommandProcessor* gpu_ = nullptr;
     const GxDrawState* state_ = nullptr;
