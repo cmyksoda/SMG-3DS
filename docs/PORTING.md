@@ -815,6 +815,13 @@ Then three more, each measured on the title (Azahar, 268 MHz):
 
 The title then runs at 28 to 30 frames a second (33.4 to 35.8 ms), the file select 26 to 30.
 
+Later: `GXSetTevColor` wrote a colour's BG half three times (the Wii GPU's register latch wants it); the port's processor
+ends in the same state after one, so the adapted SDK writes it once. A particle is then 82 bytes of commands (C0 and C1,
+two loads each; its position matrix; the list call), and the menus' render time fell from 19.75 to 18.35 microseconds a
+primitive: 84 of 92 four-second windows hold 29 to 30 frames a second, the busiest sparkle bursts 27 to 28. Also: a clip
+matrix converts its twelve source elements to double once, not four times each, and a decoded list's draw skips the
+changed-memory queue's lock when nothing is pending and compares its 32 bytes by words.
+
 A depth peek (the star pointer's `GXPeekZ` at a draw sync each frame) pauses the frame and waits for the GPU, then copies
 back only the 8x8 tile of the depth buffer that holds the pixel (256 bytes, `C3D_SyncTextureCopy`); it took 1.2 ms a frame
 copying the whole buffer. Checked against the whole readback at 188,700 points, none different.
