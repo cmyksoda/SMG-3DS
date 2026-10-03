@@ -540,7 +540,8 @@ struct Renderer {
         draw.depth01 = static_cast<float>((depth + draw.depthTextureOffset) & 0xFFFFFF) / 16777215.0f;
     }
 
-    void draw(const GxCommandProcessor& gpu, std::uint8_t kind, std::uint8_t format, std::uint16_t count, const std::uint8_t* data) {
+    void draw(const GxCommandProcessor& gpu, std::uint8_t kind, std::uint8_t format, std::uint16_t count, const std::uint8_t* data,
+              const GxVertex* decoded = nullptr) {
         ++perf.primitives, perf.vertices += count;
         ensureState(gpu, true);
         bool prepared;
@@ -554,7 +555,9 @@ struct Renderer {
         roomFor(count);
         if (state_->color1InTexture) choosePaletteTexel(gpu);
         const Step step(perf, 6);
-        indexUsed += pipeline.run(data, count, vertices + used, static_cast<std::uint16_t>(used), indices + indexUsed);
+        const auto first = static_cast<std::uint16_t>(used);
+        indexUsed += decoded ? pipeline.runDecoded(decoded, count, vertices + used, first, indices + indexUsed)
+                             : pipeline.run(data, count, vertices + used, first, indices + indexUsed);
         used += count;
     }
 
@@ -839,6 +842,7 @@ struct Renderer {
     void dropAllMeshes() {
         if (inFrame) pause(), resume();  // the GPU may still read them
         while (!meshes.empty()) dropMesh(meshes.begin());
+        decodedLists.clear();  // its page marks go too
         meshPages.clear();
         for (auto& bits : sMeshPageBits) bits.store(0, std::memory_order_relaxed);
     }
@@ -855,7 +859,7 @@ struct Renderer {
         sChanged.count = 0, sChanged.overflowed = false;
         LightLock_Unlock(&sChanged.lock);
         perf.flushesQueued += count;
-        if (meshes.empty()) return;
+        if (meshes.empty() && decodedLists.empty()) return;
         if (overflowed) return ++perf.meshOverflows, dropAllMeshes();
         bool paused = false;
         for (unsigned i = 0; i < count; ++i) {
@@ -871,6 +875,11 @@ struct Renderer {
                 }
                 it = next;
             }
+            for (auto it = decodedLists.begin(); it != decodedLists.end();) {
+                const auto& r = it->second.range;
+                const bool overlaps = (r[0][0] < end[i] && start[i] < r[0][1]) || (r[1][0] < end[i] && start[i] < r[1][1]);
+                it = overlaps ? decodedLists.erase(it) : std::next(it);
+            }
         }
     }
 
@@ -879,9 +888,97 @@ struct Renderer {
     bool displayList(const GxCommandProcessor& gpu, std::uint32_t address, std::uint32_t size) {
         const unsigned why = displayListMesh(gpu, address, size);
         listRefusal = why;
+        if (why == GxVertexPipeline::MeshSmall) return drawDecodedList(gpu, address, size);
         return !why;
     }
     unsigned listRefusal = 0;
+
+    // Small display lists (a particle's quad), their primitives decoded once and drawn on the CPU path from then on:
+    // read again when the list's bytes or the CP registers it was read under differ, or memory it came from changes
+    // (the meshes' page marks).
+    struct DecodedList {
+        u32 size = 0, cpChanges = 0;
+        std::uint8_t bytes[32] = {};
+        std::vector<std::pair<std::uint8_t, u32>> depends;
+        struct Primitive {
+            std::uint8_t kind, format;
+            std::uint16_t first, count;
+        };
+        std::vector<Primitive> primitives;
+        std::vector<GxVertex> vertices;
+        std::uintptr_t range[2][2] = {};  // the list, the array elements
+    };
+    std::unordered_map<u32, DecodedList> decodedLists;
+
+    bool drawDecodedList(const GxCommandProcessor& gpu, std::uint32_t address, std::uint32_t size) {
+        applyChangedMemory();
+        const std::uint8_t* list = gpu.memoryFunction()(address);
+        auto found = decodedLists.find(address);
+        bool valid = found != decodedLists.end() && found->second.size == size && !std::memcmp(found->second.bytes, list, size);
+        if (valid && found->second.cpChanges != gpu.cpChanges) {
+            for (const auto& [reg, value] : found->second.depends) valid &= gpu.cp[reg] == value;
+            if (valid) found->second.cpChanges = gpu.cpChanges;
+        }
+        if (!valid) {
+            if (found != decodedLists.end()) decodedLists.erase(found);
+            if (decodedLists.size() >= 1024) decodedLists.clear();
+            DecodedList decoded;
+            if (!decodeList(gpu, list, size, decoded)) return false;
+            // Its pages are marked before it is read for good, as a mesh's are.
+            for (const auto& r : decoded.range) markPages(r[0], r[1]);
+            std::atomic_thread_fence(std::memory_order_seq_cst);
+            if (!decodeList(gpu, list, size, decoded)) return false;
+            found = decodedLists.emplace(address, std::move(decoded)).first;
+        }
+        const DecodedList& d = found->second;
+        for (const auto& p : d.primitives) {
+            perf.listVertices += p.count, perf.refusedVertices[GxVertexPipeline::MeshSmall] += p.count;
+            draw(gpu, p.kind, p.format, p.count, nullptr, &d.vertices[p.first]);
+        }
+        return true;
+    }
+
+    // A list of primitives alone, read into `out`; false for anything else (it stays the command processor's).
+    static bool decodeList(const GxCommandProcessor& gpu, const std::uint8_t* list, std::uint32_t size, DecodedList& out) {
+        out = DecodedList{};
+        const std::uint8_t* lo = reinterpret_cast<const std::uint8_t*>(UINTPTR_MAX);
+        const std::uint8_t* hi = nullptr;
+        std::uint8_t formats = 0;
+        std::uint16_t arrays = 0;
+        for (std::uint32_t at = 0; at < size;) {
+            const std::uint8_t op = list[at];
+            if (op == 0x00) {
+                ++at;
+                continue;
+            }
+            if (op < 0x80 || op >= 0xA8 || at + 3 > size) return false;
+            const std::uint16_t count = static_cast<std::uint16_t>(list[at + 1] << 8 | list[at + 2]);
+            const GxVertexLayout& layout = gpu.layout(op & 7);
+            if (at + 3 + std::uint32_t(count) * layout.size > size) return false;
+            out.primitives.push_back({static_cast<std::uint8_t>(op & 0xF8), static_cast<std::uint8_t>(op & 7), static_cast<std::uint16_t>(out.vertices.size()), count});
+            for (std::uint16_t i = 0; i < count; ++i) {
+                const std::uint8_t* vertex = list + at + 3 + i * layout.size;
+                out.vertices.push_back(gpu.readVertex(vertex, op & 7));
+                layout.indexedSpan(vertex, lo, hi);
+            }
+            formats = static_cast<std::uint8_t>(formats | 1u << (op & 7));
+            arrays = static_cast<std::uint16_t>(arrays | layout.indexedArrays());
+            at += 3 + std::uint32_t(count) * layout.size;
+        }
+        if (out.primitives.empty()) return false;
+        for (std::uint8_t reg : {std::uint8_t(0x50), std::uint8_t(0x60)}) out.depends.emplace_back(reg, gpu.cp[reg]);
+        for (unsigned f = 0; f < 8; ++f)
+            if (formats >> f & 1)
+                for (unsigned table : {0x70u, 0x80u, 0x90u}) out.depends.emplace_back(std::uint8_t(table + f), gpu.cp[table + f]);
+        for (unsigned a = 0; a < 12; ++a)
+            if (arrays >> a & 1)
+                for (unsigned base : {0xA0u, 0xB0u}) out.depends.emplace_back(std::uint8_t(base + a), gpu.cp[base + a]);
+        out.size = size, out.cpChanges = gpu.cpChanges;
+        std::memcpy(out.bytes, list, size);
+        out.range[0][0] = reinterpret_cast<std::uintptr_t>(list), out.range[0][1] = out.range[0][0] + size;
+        if (hi > lo) out.range[1][0] = reinterpret_cast<std::uintptr_t>(lo), out.range[1][1] = reinterpret_cast<std::uintptr_t>(hi);
+        return true;
+    }
 
     // 0 when the list was drawn from a mesh, else why not.
     unsigned displayListMesh(const GxCommandProcessor& gpu, std::uint32_t address, std::uint32_t size) {
