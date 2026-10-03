@@ -24,28 +24,33 @@ struct Choice {
     std::uint64_t word = 0;
 };
 
-// Best table and per-pixel modifiers for one half-block around a fixed base color. A modifier
-// moves all three channels equally, so each pixel's pick is the one nearest its mean offset.
+// Best table and per-pixel modifiers for one half-block around a fixed base color. A modifier moves all three channels
+// equally, so each pixel takes the one nearest its mean offset (by the midpoints between them). Only the three tables
+// whose large modifier is nearest the half's widest offset are tried: all eight cost a scene's first frames seconds.
+// Each half's eight pixels (x * 4 + y), by flip and then first.
+constexpr std::uint8_t HalfPixels[2][2][8] = {{{8, 9, 10, 11, 12, 13, 14, 15}, {0, 1, 2, 3, 4, 5, 6, 7}},
+                                              {{2, 3, 6, 7, 10, 11, 14, 15}, {0, 1, 4, 5, 8, 9, 12, 13}}};
+
 long fitHalf(const Rgb block[16], bool flip, bool first, Rgb base, unsigned& table, std::uint32_t& indices) {
-    int offsets[8];
-    unsigned positions[8], count = 0;
-    for (unsigned x = 0; x < 4; ++x) for (unsigned y = 0; y < 4; ++y) {
-        if (inFirst(x, y, flip) != first) continue;
-        const Rgb& p = block[x * 4 + y];
-        offsets[count] = (p.r - base.r + p.g - base.g + p.b - base.b) / 3;
-        positions[count++] = x * 4 + y;
+    int offsets[8], widest = 0;
+    const std::uint8_t* positions = HalfPixels[flip][first];
+    const unsigned count = 8;
+    for (unsigned i = 0; i < count; ++i) {
+        const Rgb& p = block[positions[i]];
+        offsets[i] = (p.r - base.r + p.g - base.g + p.b - base.b) / 3;
+        widest = std::max(widest, std::abs(offsets[i]));
     }
+    unsigned centre = 0;
+    for (unsigned t = 1; t < 8; ++t)
+        if (std::abs(Modifiers[t][1] - widest) < std::abs(Modifiers[centre][1] - widest)) centre = t;
     long best = LONG_MAX;
-    for (unsigned t = 0; t < 8; ++t) {
+    for (unsigned t = centre ? centre - 1 : 0; t <= std::min(centre + 1, 7u); ++t) {
+        const int middle = (Modifiers[t][0] + Modifiers[t][1]) / 2;
         long total = 0;
         std::uint32_t chosen = 0;
         for (unsigned i = 0; i < count; ++i) {
-            unsigned pick = 0;
-            int nearest = INT_MAX;
-            for (unsigned m = 0; m < 4; ++m) {
-                const int distance = std::abs(offsets[i] - Modifiers[t][m]);
-                if (distance < nearest) { nearest = distance; pick = m; }
-            }
+            const int o = offsets[i];
+            const unsigned pick = o >= middle ? 1 : o >= 0 ? 0 : o >= -middle ? 2 : 3;
             const Rgb& p = block[positions[i]];
             const int d = Modifiers[t][pick];
             const long dr = clamp255(base.r + d) - p.r, dg = clamp255(base.g + d) - p.g, db = clamp255(base.b + d) - p.b;
@@ -58,15 +63,36 @@ long fitHalf(const Rgb block[16], bool flip, bool first, Rgb base, unsigned& tab
     return best;
 }
 
-Rgb average(const Rgb block[16], bool flip, bool first) {
-    int r = 0, g = 0, b = 0;
-    for (unsigned x = 0; x < 4; ++x) for (unsigned y = 0; y < 4; ++y) {
-        if (inFirst(x, y, flip) != first) continue;
-        const Rgb& p = block[x * 4 + y];
-        r += p.r; g += p.g; b += p.b;
+// A block's four 2x2 quadrants (x / 2, y / 2): their channel sums and sums of squares, from which either split's
+// averages and error follow without visiting a pixel again.
+struct Quadrants {
+    long sum[2][2][3] = {}, squares[2][2][3] = {};
+    explicit Quadrants(const Rgb block[16]) {
+        for (unsigned x = 0; x < 4; ++x) for (unsigned y = 0; y < 4; ++y) {
+            const Rgb& p = block[x * 4 + y];
+            const int c[3] = {p.r, p.g, p.b};
+            for (int k = 0; k < 3; ++k) sum[x / 2][y / 2][k] += c[k], squares[x / 2][y / 2][k] += long(c[k]) * c[k];
+        }
     }
-    return {r / 8, g / 8, b / 8};
-}
+    // The two quadrants a half holds: by x for the first split, by y for the flipped one.
+    long half(const long (&of)[2][2][3], bool flip, bool first, int k) const {
+        const unsigned i = first ? 0 : 1;
+        return flip ? of[0][i][k] + of[1][i][k] : of[i][0][k] + of[i][1][k];
+    }
+    Rgb average(bool flip, bool first) const {
+        return {int(half(sum, flip, first, 0) / 8), int(half(sum, flip, first, 1) / 8), int(half(sum, flip, first, 2) / 8)};
+    }
+    // How far the pixels sit from their own half's average, split one way or the other: the split to fit.
+    long splitError(bool flip) const {
+        long error = 0;
+        for (bool first : {true, false}) {
+            const Rgb m = average(flip, first);
+            const int mean[3] = {m.r, m.g, m.b};
+            for (int k = 0; k < 3; ++k) error += half(squares, flip, first, k) - 2 * mean[k] * half(sum, flip, first, k) + 8L * mean[k] * mean[k];
+        }
+        return error;
+    }
+};
 
 std::uint64_t pack(bool differential, bool flip, const int c1[3], const int c2[3], unsigned t1, unsigned t2,
                    std::uint32_t i1, std::uint32_t i2) {
@@ -93,25 +119,14 @@ std::uint64_t pack(bool differential, bool flip, const int c1[3], const int c2[3
     return w | std::uint64_t(msb) << 16 | lsb;
 }
 
-// How far the block's pixels sit from their own half's average, split one way or the other: the split to fit.
-long splitError(const Rgb block[16], bool flip) {
-    const Rgb a = average(block, flip, true), b = average(block, flip, false);
-    long error = 0;
-    for (unsigned x = 0; x < 4; ++x) for (unsigned y = 0; y < 4; ++y) {
-        const Rgb& p = block[x * 4 + y];
-        const Rgb& m = inFirst(x, y, flip) ? a : b;
-        error += long(p.r - m.r) * (p.r - m.r) + long(p.g - m.g) * (p.g - m.g) + long(p.b - m.b) * (p.b - m.b);
-    }
-    return error;
-}
-
 // One split, chosen by its halves' fit, and one mode: differential when the halves are close enough, else individual.
 // The exhaustive search over both took four times as long, which first frames of large scenes felt.
 std::uint64_t encodeBlock(const Rgb block[16]) {
     Choice best;
-    const bool chosen = splitError(block, true) < splitError(block, false);
+    const Quadrants quadrants(block);
+    const bool chosen = quadrants.splitError(true) < quadrants.splitError(false);
     for (bool flip : {chosen}) {
-        const Rgb a = average(block, flip, true), b = average(block, flip, false);
+        const Rgb a = quadrants.average(flip, true), b = quadrants.average(flip, false);
         // Differential mode keeps five bits per channel when the halves are close enough.
         const int d1[3]{a.r * 31 / 255, a.g * 31 / 255, a.b * 31 / 255};
         const int d2[3]{b.r * 31 / 255, b.g * 31 / 255, b.b * 31 / 255};
