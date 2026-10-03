@@ -850,16 +850,18 @@ second: the ETC1 encoder tries the three tables around a half-block's widest off
 (output identical); `tile()` maps columns once instead of two software divides a pixel; and a new mesh's pages are
 marked by a span pass (`meshSpan`) so it is built once, not twice.
 
+
 **Development settings.** Keys in `settings.ini` for development only, written back only when on: `dev.skip_story=1`
 skips the prologue's storybook and movies; `dev.gx_dump=1` dumps a frame's draws to the log once a minute;
 `dev.gx_null=1` draws nothing, to measure the game's own work; `dev.gx_timing=1` adds the renderer's parts to the perf
 line (CPU-path primitives, display lists, texture copies, frame ends, then each per-call step: state builds and how many
-were cache hits, the CPU path's vertices and draws, a mesh draw's lookup, uniforms and draw calls; each clock read costs
-Azahar 150 cycles, so it slows what it measures, by up to a fifth with all of them) with the vertices of refused lists
-by reason; `dev.gx_check=1` checks each new mesh against the CPU path; `dev.gx_inline=1` draws on the game's thread
-instead of the render thread. Azahar runs the 3DS CPU at its base 268 MHz although the port switches a New 3DS to 804 MHz
-(`osSetSpeedupEnable`), so every millisecond figure here is a slow-clock one; how much faster hardware is can only be
-measured on hardware.
+were cache hits, the CPU path's vertices and draws, a mesh draw's lookup, uniforms and draw calls, a texture's first
+use; each clock read costs Azahar 150 cycles, so it slows what it measures, by up to a fifth with all of them) with the
+vertices of refused lists by reason (the perf line names new draw states whose TEV program is approximated, by reason,
+without it); `dev.gx_check=1` checks each new mesh against the CPU path; `dev.gx_inline=1` draws on the game's thread
+instead of the render thread. Azahar runs the 3DS CPU at its base 268 MHz although the port switches a New 3DS to 804
+MHz (`osSetSpeedupEnable`), so every millisecond figure here is a slow-clock one; how much faster hardware is can only
+be measured on hardware.
 
 **More byte-order traps.** Data the GPU reads must hold the Wii's bytes even when the source wrote it as wider
 integers: `MainLoopFramework`'s `clearZTexData` (Z24X8 texels as `u32`s) cleared every frame to near on ARM, and every

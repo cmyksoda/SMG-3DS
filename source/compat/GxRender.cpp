@@ -21,6 +21,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <malloc.h>
 #include <map>
 #include <string>
 #include <tuple>
@@ -90,6 +91,8 @@ std::atomic<u32> sPhaseTicks[Phases] = {}, sPhaseFrames{0};
 // hook, so the game's many flushes of other memory (matrices every frame) cost one load. Set as meshes are made,
 // cleared when all are dropped; a stale bit only queues a range for nothing.
 std::atomic<std::uint32_t> sMeshPageBits[1u << 15];
+
+extern "C" u32 __ctru_heap_size;  // libctru: the free store's size
 
 // Ranges the game flushed over mesh pages (gxRenderMemoryChanged), kept until the renderer next looks: the hook runs on
 // any thread, the renderer only under the FIFO's lock. A leaf lock; past the queue's end every mesh is dropped.
@@ -202,12 +205,14 @@ struct Renderer {
         u64 timed[6] = {};  // dev.gx_timing: CPU-path primitives (immediate, in lists), display lists (mesh draws), texture copies, movie, frame ends
         u64 cpuCopyTicks = 0;  // of the texture copies, those read back and encoded on the CPU
         // dev.gx_timing: building the draw state, applying it, preparing the vertex pipeline; of the first, reading GX's
-        // state, the per-register stats, the pixel state; the CPU path's vertices and draws; a mesh's lookup, uniforms, draw.
-        u64 stepTicks[11] = {};
-        u32 steps[11] = {};
+        // state, the per-register stats, the pixel state; the CPU path's vertices and draws; a mesh's lookup, uniforms, draw;
+        // a texture's first use, decoded and converted for the PICA.
+        u64 stepTicks[12] = {};
+        u32 steps[12] = {};
         u32 stateHits = 0, stateMisses = 0;
         u32 cpuCopies = 0, gpuCopies = 0;
         u32 meshesChecked = 0, meshesDiffering = 0;  // dev.gx_check
+        std::pair<const char*, u32> approximated[8] = {};  // new draw states whose combiner program is approximated, by reason
         u32 listVertices = 0;
         u32 refused[GxVertexPipeline::MeshRefusals] = {}, refusedOpcode[0x100] = {};
         u32 refusedVertices[GxVertexPipeline::MeshRefusals] = {};  // drawn on the CPU path inside lists refused for each reason
@@ -502,6 +507,7 @@ struct Renderer {
         const Key key{map.address, map.width, map.height, map.format, map.wrapS, map.wrapT, map.minFilter, map.magFilter};
         if (auto found = textures.find(key); found != textures.end()) return found->second;
         if (map.format == 8 || map.format == 9 || map.format == 10) stop("a palette texture");
+        const Step converting(perf, 11);
         ModelTexture source;
         source.format = static_cast<GxFormat>(map.format);
         source.wrapS = map.wrapS, source.wrapT = map.wrapT;
@@ -621,6 +627,14 @@ struct Renderer {
     u32 stateWords[MaxStateWords];
     CachedState* stateEntry = nullptr;  // the entry the last read came from or went into
 
+    void countApproximation(const char* reason) {
+        for (auto& [why, count] : perf.approximated)
+            if (!why || !std::strcmp(why, reason)) {
+                why = reason, ++count;
+                return;
+            }
+    }
+
     void readState(const GxCommandProcessor& gpu, bool palette) {
         std::size_t count = gxDrawStateKey(gpu, stateWords);
         stateWords[count++] = palette;
@@ -638,6 +652,7 @@ struct Renderer {
         CachedState& entry = states[hash];  // a key that collides takes the entry over
         std::memcpy(entry.words, stateWords, bytes), entry.count = count;
         readGxDrawState(gpu, entry.state, palette);
+        if (!entry.state.program.exact) countApproximation(entry.state.program.approximation);
         entry.pixelReady = false;
         stateEntry = &entry, state_ = &entry.state;
     }
@@ -1380,10 +1395,12 @@ struct Renderer {
             perf.changed[most - perf.changed] = 0;
         }
         std::fprintf(stderr, "gx perf: GPU path %.0f draws (%.0f groups through citro3d), %.0f triangles, %.1f meshes made per frame (%zu kept, %.1f MB); TEV programs compiled %.1f, "
-                     "movie frames decoded %.1f, display lists %.0f (%.0f bytes) per frame; %.1f MB linear free; state changes by BP register (per frame):%s\n",
+                     "movie frames decoded %.1f, display lists %.0f (%.0f bytes) per frame; %.1f MB linear free, %.1f MB of %.1f in the free store taken; state changes by BP register "
+                     "(per frame):%s\n",
                      perf.meshDraws / n, perf.citroDraws / n, perf.meshTriangles / n, perf.meshesMade / n, meshes.size(), meshBytes / 1048576.0, (gxTevCompiles() - perf.compilesBefore) / n,
                      (smgMovieDecodes() - perf.moviesBefore) / n, (lastGpu->displayListCalls - perf.listsBefore) / n,
-                     (lastGpu->displayListBytes - perf.listBytesBefore) / n, linearSpaceFree() / 1048576.0, top.c_str());
+                     (lastGpu->displayListBytes - perf.listBytesBefore) / n, linearSpaceFree() / 1048576.0, mallinfo().uordblks / 1048576.0,
+                     __ctru_heap_size / 1048576.0, top.c_str());
         // Why display lists stayed on the CPU path, and the first commands of those that weren't primitives.
         std::string refusals;
         for (unsigned why = 1; why < GxVertexPipeline::MeshRefusals; ++why) {
@@ -1411,10 +1428,14 @@ struct Renderer {
                          perf.stepTicks[0] * ms, perf.steps[0] / n, perf.stepTicks[1] * ms, perf.steps[1] / n, perf.stepTicks[2] * ms, perf.steps[2] / n,
                          perf.stepTicks[3] * ms, perf.stateHits / n, perf.stateMisses / n, perf.stepTicks[4] * ms, perf.stepTicks[5] * ms);
             std::fprintf(stderr, "gx perf: and: CPU-path vertices %.1f ms (%.0f calls), CPU-path draws %.1f ms (%.0f); mesh lookups %.1f ms (%.0f), "
-                         "uniforms %.1f ms (%.0f), draw calls %.1f ms (%.0f)\n", perf.stepTicks[6] * ms, perf.steps[6] / n, perf.stepTicks[7] * ms,
-                         perf.steps[7] / n, perf.stepTicks[8] * ms, perf.steps[8] / n, perf.stepTicks[9] * ms, perf.steps[9] / n, perf.stepTicks[10] * ms,
-                         perf.steps[10] / n);
+                         "uniforms %.1f ms (%.0f), draw calls %.1f ms (%.0f), first-use textures %.1f ms (%.1f)\n", perf.stepTicks[6] * ms,
+                         perf.steps[6] / n, perf.stepTicks[7] * ms, perf.steps[7] / n, perf.stepTicks[8] * ms, perf.steps[8] / n, perf.stepTicks[9] * ms,
+                         perf.steps[9] / n, perf.stepTicks[10] * ms, perf.steps[10] / n, perf.stepTicks[11] * ms, perf.steps[11] / n);
         }
+        std::string approximations;
+        for (const auto& [why, count] : perf.approximated)
+            if (why) approximations += std::string(approximations.empty() ? " " : ", ") + why + " " + std::to_string(count);
+        if (!approximations.empty()) std::fprintf(stderr, "gx perf: new draw states approximated:%s\n", approximations.c_str());
         std::string listed;
         for (unsigned why = 0; why < GxVertexPipeline::MeshRefusals; ++why)
             if (perf.refusedVertices[why]) listed += " " + std::to_string(why) + ":" + std::to_string(unsigned(perf.refusedVertices[why] / n));
