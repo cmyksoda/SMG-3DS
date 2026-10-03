@@ -174,7 +174,7 @@ public:
     void setPaletteTexel(float s, float t) { palette_[0] = s, palette_[1] = t; }
     // A unit whose texture sits in an atlas: its coordinates go into the texture's place (u and v scale, then offset).
     // takeAtlasOutside says whether a vertex since the last call fell outside the texture, where the atlas would sample
-    // its neighbours instead of clamping.
+    // its neighbors instead of clamping.
     void setAtlas(unsigned unit, const float place[4]) { atlasUnit_ = static_cast<int>(unit), std::memcpy(atlasPlace_, place, sizeof atlasPlace_); }
     void clearAtlas() { atlasUnit_ = -1; }
     bool takeAtlasOutside() {

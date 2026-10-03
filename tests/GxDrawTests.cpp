@@ -343,7 +343,7 @@ void dualTexgen() {
 }
 
 // A unit whose texture sits in an atlas: its coordinates move into the texture's place, and coordinates past the
-// texture, where the atlas would sample a neighbour, are told.
+// texture, where the atlas would sample a neighbor, are told.
 void atlasPlace() {
     auto owned = std::make_unique<smg::GxCommandProcessor>(host());
     smg::GxCommandProcessor& gpu = *owned;

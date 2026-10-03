@@ -698,7 +698,7 @@ struct Renderer {
 
     // Mario's running dust picks one of three textures a particle, which ended the batch at every particle: textures
     // taking turns under one otherwise equal state share an atlas instead. A vertex outside its texture would sample a
-    // neighbour, so that atlas is given up and the primitive drawn again from its own texture.
+    // neighbor, so that atlas is given up and the primitive drawn again from its own texture.
     struct Atlas {
         u32 base = 0;
         std::vector<Key> members;
@@ -792,7 +792,7 @@ struct Renderer {
 
     bool buildAtlas(u32 base, const std::vector<Key>& keys) {
         // Members of one GX format and power-of-two sizes, in the PICA format that holds each of them: the one they share,
-        // else grey with alpha for grey ones, else RGBA8 (a member's texels then a little finer than its own texture's).
+        // else gray with alpha for gray ones, else RGBA8 (a member's texels then a little finer than its own texture's).
         std::vector<ModelTexture> members(keys.size());
         GPU_TEXCOLOR format = GPU_RGBA8;
         for (std::size_t k = 0; k < keys.size(); ++k) {
@@ -807,9 +807,9 @@ struct Renderer {
                                         GxPalette::IA8, m.image, error))
                 return false;
             const GPU_TEXCOLOR chosen = tile(m).format;
-            const auto grey = [](GPU_TEXCOLOR f) { return f == GPU_L8 || f == GPU_LA4 || f == GPU_LA8; };
+            const auto gray = [](GPU_TEXCOLOR f) { return f == GPU_L8 || f == GPU_LA4 || f == GPU_LA8; };
             if (chosen == GPU_ETC1 || chosen == GPU_ETC1A4) return false;
-            format = !k || chosen == format ? chosen : grey(chosen) && grey(format) ? GPU_LA8 : GPU_RGBA8;
+            format = !k || chosen == format ? chosen : gray(chosen) && gray(format) ? GPU_LA8 : GPU_RGBA8;
         }
         // Shelves of cells, tallest first, each member bordered by the texels its wrap mode samples past its edges.
         std::vector<std::size_t> order(keys.size());

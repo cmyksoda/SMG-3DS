@@ -923,9 +923,9 @@ batch. A CPU-path state with one map on one unit now also gets a base, the hash 
 address (its GX format stays in, so only textures of one format meet); two states in a row with the same base and
 different textures are a turn. Once a base's textures have taken 24 turns within 8 frames, they're packed into an atlas
 (at most 8 members, power-of-two sizes, shelves within 256x256, each bordered by the texels its wrap mode samples past
-its edges), in the PICA format they share, or LA8 for grey ones, or RGBA8; a later window with new textures rebuilds it
+its edges), in the PICA format they share, or LA8 for gray ones, or RGBA8; a later window with new textures rebuilds it
 with them while they fit. A state whose texture is in the batch's atlas then joins the batch: the vertex pipeline maps
-that unit's coordinates into the texture's place (`setAtlas`). A vertex outside [0, 1] would sample a neighbour: the
+that unit's coordinates into the texture's place (`setAtlas`). A vertex outside [0, 1] would sample a neighbor: the
 atlas is given up for good and the primitive drawn again from its own texture. A base that fails to build three times,
 or rebuilds more than six, is left alone; a member's memory changing drops every atlas. Two traps on the way: units
 sampling no texture had counted as a second map, and a base was first refused for good after one crowded window (many
