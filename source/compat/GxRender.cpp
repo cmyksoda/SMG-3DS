@@ -21,6 +21,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <malloc.h>
 #include <map>
 #include <string>
@@ -213,6 +214,7 @@ struct Renderer {
         u32 stateHits = 0, stateMisses = 0, stateClears = 0;
         u32 cpuCopies = 0, gpuCopies = 0;
         u32 peeks = 0;
+        u32 atlasJoins = 0, atlasesBuilt = 0, atlasTurns = 0;  // CPU-path draws that joined their batch by an atlas, and atlases made
         u64 peekTicks = 0;  // depth peeks: the frame paused, the GPU waited for, one tile read back
         u32 meshesChecked = 0, meshesDiffering = 0;  // dev.gx_check
         std::pair<const char*, u32> approximated[8] = {};  // new draw states whose combiner program is approximated, by reason
@@ -570,8 +572,14 @@ struct Renderer {
         if (state_->color1InTexture) choosePaletteTexel(gpu);
         const Step step(perf, 6);
         const auto first = static_cast<std::uint16_t>(used);
-        indexUsed += decoded ? pipeline.runDecoded(decoded, count, vertices + used, first, indices + indexUsed)
-                             : pipeline.run(data, count, vertices + used, first, indices + indexUsed);
+        const std::size_t written = decoded ? pipeline.runDecoded(decoded, count, vertices + used, first, indices + indexUsed)
+                                            : pipeline.run(data, count, vertices + used, first, indices + indexUsed);
+        if (pipeline.takeAtlasOutside()) {
+            refuseAtlas(boundAtlas);
+            stateValid = false;
+            return draw(gpu, kind, format, count, data, decoded);
+        }
+        indexUsed += written;
         used += count;
     }
 
@@ -628,6 +636,15 @@ struct Renderer {
         u32 colors[4];  // C0 and C1 as read, for a marked key whose state kept them
         PicaPixel pixel;  // preparePixel's, of the state's material and program
         bool pixelReady = false;
+        // CPU path, one map on one unit: a hash of the key without that map's size and address (shared by states that
+        // differ only in which texture they sample), the texture, and its place in an atlas.
+        bool oneMap = false;
+        std::uint8_t mapUnit = 0;
+        u32 base = 0;
+        Key texture{};
+        int atlas = -1;
+        float place[4] = {};
+        u32 atlasGeneration = 0;
     };
     std::unordered_map<u32, CachedState> states;
     u32 stateWords[MaxStateWords];
@@ -641,35 +658,230 @@ struct Renderer {
             }
     }
 
-    void readState(const GxCommandProcessor& gpu, bool palette) {
-        unsigned markers = 0;
-        std::size_t count = gxDrawStateKey(gpu, stateWords, palette, &markers);
+    // The key for the state GX holds now (stateWords), and its cached entry if there is one.
+    u32 keyHash = 0;
+    std::size_t keyCount = 0, keyMapsAt = 0;
+    unsigned keyMarkers = 0;
+    CachedState* findState(const GxCommandProcessor& gpu, bool palette) {
+        keyMarkers = 0;
+        std::size_t count = gxDrawStateKey(gpu, stateWords, palette, &keyMarkers, &keyMapsAt);
         stateWords[count++] = palette;
-        const u32* word = stateWords + count;
-        const std::size_t bytes = std::size_t(word - stateWords) * sizeof(u32);
         u32 hash = 0x811C9DC5u;
-        for (const u32* w = stateWords; w != word; ++w) hash = (hash ^ *w) * 0x01000193u;
+        for (std::size_t i = 0; i < count; ++i) hash = (hash ^ stateWords[i]) * 0x01000193u;
+        keyHash = hash, keyCount = count;
         // A marked colour holds for every value only if the state rides it; one whose program kept the value (exact only
         // that way) holds for that value.
         const auto holds = [&](const CachedState& c) {
-            return (!(markers & 1) || c.state.color0InVertex || (c.colors[0] == gpu.tevColor[2] && c.colors[1] == gpu.tevColor[3])) &&
-                   (!(markers & 2) || c.state.color1InTexture || (c.colors[2] == gpu.tevColor[4] && c.colors[3] == gpu.tevColor[5]));
+            return (!(keyMarkers & 1) || c.state.color0InVertex || (c.colors[0] == gpu.tevColor[2] && c.colors[1] == gpu.tevColor[3])) &&
+                   (!(keyMarkers & 2) || c.state.color1InTexture || (c.colors[2] == gpu.tevColor[4] && c.colors[3] == gpu.tevColor[5]));
         };
-        if (auto found = states.find(hash); found != states.end() && found->second.count == count && !std::memcmp(found->second.words, stateWords, bytes) &&
-                                            holds(found->second)) {
-            ++perf.stateHits;
-            stateEntry = &found->second, state_ = &found->second.state;
-            return;
-        }
+        const auto found = states.find(hash);
+        if (found == states.end() || found->second.count != count || std::memcmp(found->second.words, stateWords, count * sizeof(u32)) ||
+            !holds(found->second))
+            return nullptr;
+        ++perf.stateHits;
+        return &found->second;
+    }
+    // The state for findState's key, read from GX (a key that collides takes its entry over).
+    CachedState& makeState(const GxCommandProcessor& gpu, bool palette) {
         ++perf.stateMisses;
         if (states.size() >= 512) states.clear(), ++perf.stateClears;
-        CachedState& entry = states[hash];  // a key that collides takes the entry over
-        std::memcpy(entry.words, stateWords, bytes), entry.count = count;
+        CachedState& entry = states[keyHash];
+        std::memcpy(entry.words, stateWords, keyCount * sizeof(u32)), entry.count = keyCount;
         readGxDrawState(gpu, entry.state, palette);
         std::memcpy(entry.colors, gpu.tevColor + 2, sizeof entry.colors);
         if (!entry.state.program.exact) countApproximation(entry.state.program.approximation);
         entry.pixelReady = false;
-        stateEntry = &entry, state_ = &entry.state;
+        describeForAtlas(entry, palette);
+        return entry;
+    }
+
+    // Mario's running dust picks one of three textures a particle, which ended the batch at every particle: textures
+    // taking turns under one otherwise equal state share an atlas instead. A vertex outside its texture would sample a
+    // neighbour, so that atlas is given up and the primitive drawn again from its own texture.
+    struct Atlas {
+        u32 base = 0;
+        std::vector<Key> members;
+        std::vector<std::array<float, 4>> place;
+        C3D_Tex texture{};
+        bool built = false, refused = false;
+    };
+    // Many effects share a base: only textures taking turns together lately are worth an atlas.
+    struct Turns {
+        std::vector<Key> textures;
+        u32 count = 0, since = 0, builds = 0, failures = 0;
+        bool refused = false;
+    };
+    static constexpr unsigned AtlasMembers = 8, AtlasTurns = 24, AtlasSide = 256, AtlasWindow = 8, AtlasBuilds = 6;
+    u32 framesShown = 0;
+    std::deque<Atlas> atlases;  // citro3d keeps a bound texture's address: atlases never move
+    std::unordered_map<u32, unsigned> atlasByBase;
+    std::unordered_map<u32, Turns> turnsByBase;
+    std::unordered_set<u32> atlasAddresses;  // members' texels, whose change drops every atlas
+    u32 atlasGeneration = 1;
+    int boundAtlas = -1;  // the atlas the pending batch's coordinates were made for
+
+    void describeForAtlas(CachedState& e, bool palette) {
+        e.oneMap = false, e.atlas = -1, e.atlasGeneration = 0;
+        if (!palette || e.state.unsupported) return;
+        int unit = -1, map = -1;
+        for (unsigned u = 0; u < e.state.program.unitCount; ++u) {
+            const int t = e.state.program.units[u].texture;
+            if (t < 0) continue;  // no map, or the palette's
+            if (unit >= 0) return;
+            unit = int(u), map = t;
+        }
+        if (unit < 0 || map < 0 || map >= 8) return;
+        const GxTextureMap& m = e.state.textures[map];
+        if (m.wrapS > 2 || m.wrapT > 2 || gpuCopies.count(m.address)) return;
+        // Without the maps' sizes and addresses, but with their formats: only textures of one format share an atlas.
+        u32 hash = 0x811C9DC5u;
+        for (std::size_t i = 0; i < e.count; ++i) {
+            const std::size_t word = i >= keyMapsAt && i + 1 < e.count ? (i - keyMapsAt) % 3 : 0;
+            hash = (hash ^ (word == 0 ? e.words[i] : word == 1 ? e.words[i] & 0x00F00000u : 0)) * 0x01000193u;
+        }
+        e.oneMap = true, e.mapUnit = static_cast<std::uint8_t>(unit), e.base = hash;
+        e.texture = Key{m.address, m.width, m.height, m.format, m.wrapS, m.wrapT, m.minFilter, m.magFilter};
+    }
+
+    void placeInAtlas(CachedState& e) {
+        if (e.atlasGeneration == atlasGeneration) return;
+        e.atlasGeneration = atlasGeneration, e.atlas = -1;
+        if (!e.oneMap) return;
+        const auto found = atlasByBase.find(e.base);
+        if (found == atlasByBase.end()) return;
+        const Atlas& a = atlases[found->second];
+        if (!a.built || a.refused) return;
+        for (std::size_t k = 0; k < a.members.size(); ++k)
+            if (a.members[k] == e.texture) {
+                e.atlas = int(found->second);
+                std::memcpy(e.place, a.place[k].data(), sizeof e.place);
+                return;
+            }
+    }
+
+    // Two CPU-path states in a row that differ only in their texture: once a base's textures have taken enough turns
+    // within a window, an atlas holds them, with its old members when they fit. True when it built one (the pending batch
+    // was drawn first if an old atlas went).
+    bool noteTurn(const CachedState& previous, const CachedState& next) {
+        if (!previous.oneMap || !next.oneMap || previous.base != next.base || previous.texture == next.texture) return false;
+        Turns& turns = turnsByBase[previous.base];
+        if (turns.refused) return false;
+        ++perf.atlasTurns;
+        if (framesShown - turns.since > AtlasWindow) turns.textures.clear(), turns.count = 0;
+        if (turns.textures.empty()) turns.since = framesShown;
+        for (const Key& k : {previous.texture, next.texture})
+            if (std::find(turns.textures.begin(), turns.textures.end(), k) == turns.textures.end()) turns.textures.push_back(k);
+        if (turns.textures.size() > AtlasMembers) turns.textures = {previous.texture, next.texture}, turns.count = 0, turns.since = framesShown;
+        if (++turns.count < AtlasTurns) return false;
+        std::vector<Key> keys = std::move(turns.textures);
+        turns.textures.clear(), turns.count = 0;
+        const auto found = atlasByBase.find(previous.base);
+        if (found != atlasByBase.end()) {
+            const Atlas& atlas = atlases[found->second];
+            std::vector<Key> joined = atlas.members;
+            for (const Key& k : keys)
+                if (std::find(joined.begin(), joined.end(), k) == joined.end()) joined.push_back(k);
+            if (atlas.built && joined.size() == atlas.members.size()) return false;
+            if (joined.size() <= AtlasMembers) keys = std::move(joined);
+        }
+        // Effects whose textures can't share one, or that keep changing it, are left to draw apart.
+        if (++turns.builds > AtlasBuilds || (!buildAtlas(previous.base, keys) && ++turns.failures >= 3)) turns.refused = true;
+        return true;
+    }
+
+    bool buildAtlas(u32 base, const std::vector<Key>& keys) {
+        // Members of one GX format and power-of-two sizes, in the PICA format that holds each of them: the one they share,
+        // else grey with alpha for grey ones, else RGBA8 (a member's texels then a little finer than its own texture's).
+        std::vector<ModelTexture> members(keys.size());
+        GPU_TEXCOLOR format = GPU_RGBA8;
+        for (std::size_t k = 0; k < keys.size(); ++k) {
+            const auto& [address, width, height, fmt, wrapS, wrapT, minFilter, magFilter] = keys[k];
+            if (fmt != std::get<3>(keys[0]) || fmt == 8 || fmt == 9 || fmt == 10 || fmt == 14 || (width & (width - 1)) || (height & (height - 1)))
+                return false;
+            ModelTexture& m = members[k];
+            m.format = static_cast<GxFormat>(fmt);
+            std::string error;
+            const std::size_t size = gxImageSize(m.format, width, height);
+            if (!size || !decodeGxImage({static_cast<const std::uint8_t*>(OSPhysicalToCached(address)), size}, m.format, width, height, {},
+                                        GxPalette::IA8, m.image, error))
+                return false;
+            const GPU_TEXCOLOR chosen = tile(m).format;
+            const auto grey = [](GPU_TEXCOLOR f) { return f == GPU_L8 || f == GPU_LA4 || f == GPU_LA8; };
+            if (chosen == GPU_ETC1 || chosen == GPU_ETC1A4) return false;
+            format = !k || chosen == format ? chosen : grey(chosen) && grey(format) ? GPU_LA8 : GPU_RGBA8;
+        }
+        // Shelves of cells, tallest first, each member bordered by the texels its wrap mode samples past its edges.
+        std::vector<std::size_t> order(keys.size());
+        for (std::size_t k = 0; k < order.size(); ++k) order[k] = k;
+        std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) { return members[a].image.height > members[b].image.height; });
+        unsigned atlasWidth = 8, atlasHeight = 8;
+        std::vector<std::array<unsigned, 2>> at(keys.size());
+        for (;; atlasWidth *= 2) {
+            if (atlasWidth > AtlasSide) return false;
+            unsigned x = 0, y = 0, shelf = 0;
+            bool fits = true;
+            for (std::size_t k : order) {
+                const unsigned w = members[k].image.width + 2, h = members[k].image.height + 2;
+                if (w > atlasWidth) { fits = false; break; }
+                if (x + w > atlasWidth) x = 0, y += shelf, shelf = 0;
+                at[k] = {x + 1, y + 1}, x += w, shelf = std::max(shelf, h);
+            }
+            atlasHeight = 8;
+            while (atlasHeight < y + shelf) atlasHeight *= 2;
+            if (fits && atlasHeight <= AtlasSide) break;
+        }
+        ModelTexture packed;
+        packed.format = members[0].format;
+        packed.image.width = atlasWidth, packed.image.height = atlasHeight, packed.image.grayscale = true;
+        packed.image.pixels.assign(std::size_t(atlasWidth) * atlasHeight, 0);
+        std::vector<std::array<float, 4>> place(keys.size());
+        for (std::size_t k = 0; k < keys.size(); ++k) {
+            const Image& image = members[k].image;
+            packed.image.grayscale &= image.grayscale;
+            const int w = int(image.width), h = int(image.height);
+            const auto beyond = [](int i, int size, int wrap) { return wrap == 1 ? (i + size) % size : std::clamp(i, 0, size - 1); };
+            for (int y = -1; y <= h; ++y)
+                for (int x = -1; x <= w; ++x)
+                    packed.image.pixels[std::size_t(int(at[k][1]) + y) * atlasWidth + std::size_t(int(at[k][0]) + x)] =
+                        image.pixels[std::size_t(beyond(y, h, std::get<5>(keys[k]))) * image.width + std::size_t(beyond(x, w, std::get<4>(keys[k])))];
+            place[k] = {float(w) / float(atlasWidth), float(h) / float(atlasHeight), float(at[k][0]) / float(atlasWidth), float(at[k][1]) / float(atlasHeight)};
+        }
+        packed.minFilter = std::get<6>(keys[0]) & 4 ? 1 : 0, packed.magFilter = std::get<7>(keys[0]);
+        const TiledTexture tiled = tile(packed, format);
+        auto found = atlasByBase.find(base);
+        if (found == atlasByBase.end()) found = atlasByBase.emplace(base, unsigned(atlases.size())).first, atlases.emplace_back();
+        Atlas& atlas = atlases[found->second];
+        if (atlas.built) {
+            flushBatch();  // the pending batch may sample the old one
+            if (inFrame) pause(), resume();
+            C3D_TexDelete(&atlas.texture);
+            atlas.built = false;
+        }
+        if (!upload(atlas.texture, tiled)) return false;
+        atlas.base = base, atlas.members = keys, atlas.place = std::move(place), atlas.built = true, atlas.refused = false;
+        for (const Key& k : keys) atlasAddresses.insert(std::get<0>(k));
+        ++atlasGeneration, ++perf.atlasesBuilt;
+        return true;
+    }
+
+    void refuseAtlas(int index) {
+        if (index < 0) return;
+        atlases[std::size_t(index)].refused = true;
+        turnsByBase[atlases[std::size_t(index)].base].refused = true;
+        ++atlasGeneration;
+    }
+
+    // A member's texels changed, or every texture went: the atlases go too (built again as their textures take turns).
+    void dropAtlases() {
+        if (atlases.empty() && turnsByBase.empty()) return;
+        flushBatch();
+        if (inFrame && !atlases.empty()) pause(), resume();
+        for (Atlas& a : atlases)
+            if (a.built) C3D_TexDelete(&a.texture);
+        atlases.clear(), atlasByBase.clear(), turnsByBase.clear(), atlasAddresses.clear();
+        ++atlasGeneration, boundAtlas = -1, stateValid = false;
+        pipeline.clearAtlas();
     }
 
     // dev.gx_timing: the clock around one of the per-call steps.
@@ -694,12 +906,36 @@ struct Renderer {
     }
 
     void buildState(const GxCommandProcessor& gpu, bool cpuPath) {
-        flushBatch();
-        const Step step(perf, 0);
+        CachedState* previous = stateValid && cpuPath ? stateEntry : nullptr;
+        CachedState* next;
         {
             const Step read(perf, 3);
-            readState(gpu, cpuPath);
+            next = findState(gpu, cpuPath);
         }
+        if (previous && next && previous != next) {
+            if (noteTurn(*previous, *next)) previous = nullptr;  // an atlas made or remade: the batch is drawn, start afresh
+            if (previous) placeInAtlas(*next);
+            if (previous && boundAtlas >= 0 && next->atlas == boundAtlas && frame == stateFrame) {
+                // The same state but its texture, which sits in the batch's atlas: the particle joins the batch.
+                stateEntry = next, state_ = &next->state;
+                pipeline.stateChanged();
+                pipeline.setAtlas(next->mapUnit, next->place);
+                stateBp = gpu.bpChanges, stateBesideColors = gpu.bpChangesBesideColors, stateColor1 = gpu.color1Changes;
+                ++perf.atlasJoins;
+                return;
+            }
+        }
+        flushBatch();
+        const Step step(perf, 0);
+        if (!next) {
+            const Step read(perf, 3);
+            next = &makeState(gpu, cpuPath);
+        }
+        stateEntry = next, state_ = &next->state;
+        boundAtlas = -1;
+        if (cpuPath) placeInAtlas(*next), boundAtlas = next->atlas;
+        if (boundAtlas >= 0) pipeline.setAtlas(next->mapUnit, next->place);
+        else pipeline.clearAtlas();
         pipeline.stateChanged();
         if (Step::timing()) {
             const Step stats(perf, 4);
@@ -916,6 +1152,7 @@ struct Renderer {
                 const auto [lo, hi] = textureRange(it->first);
                 if (lo >= end[i] || start[i] >= hi) { ++it; continue; }
                 if (inFrame && !paused) pause(), resume(), paused = true;  // the GPU may still read it
+                if (atlasAddresses.count(std::get<0>(it->first))) dropAtlases();
                 C3D_TexDelete(&it->second), ++perf.texturesInvalidated;
                 it = textures.erase(it);
                 stateValid = applied = false;  // its textures may be gone
@@ -1366,7 +1603,8 @@ struct Renderer {
             sendScissor();
             for (unsigned unit = 0; unit < state_->program.unitCount; ++unit) {
                 const int map = state_->program.units[unit].texture;
-                if (map != CombinerProgram::Palette) sendTexture(unit, texture(state_->textures[map]));
+                if (map != CombinerProgram::Palette && boundAtlas >= 0 && unit == stateEntry->mapUnit) sendTexture(unit, atlases[std::size_t(boundAtlas)].texture);
+                else if (map != CombinerProgram::Palette) sendTexture(unit, texture(state_->textures[map]));
                 else if (batchPalette >= 0) sendTexture(unit, palettes[batchPalette]);
                 else stop("the C1 palette's unit with no palette chosen");
             }
@@ -1399,7 +1637,7 @@ struct Renderer {
 
     void perfLine() {
         const u64 now = svcGetSystemTick();
-        ++perf.frames;
+        ++perf.frames, ++framesShown;
         if (!perf.since) perf.since = now;
         const double ms = double(now - perf.since) * 1000.0 / SYSCLOCK_ARM11;
         if (ms < 4000) return;
@@ -1414,14 +1652,14 @@ struct Renderer {
         std::fprintf(stderr, "gx perf: t=%.0f, %lu frames, %.1f ms/frame (%.1f fps, %.2f logic steps each); per logic step: game thread draw %.1f, "
                      "logic %.1f, animation %.1f, waiting for the GPU %.1f, retrace wait %.1f; per frame: GX stream read %s %.1f ms (%.1f of it waiting "
                      "for the PICA), game waiting for room %.1f ms, %.0f KB; DSP %.1f ms; %.0f primitives (%.0f same state, %.0f with only C0 new), %.0f "
-                     "vertices, %.0f triangles, %.0f draws; depth peeks %.1f (%.2f ms)\n",
+                     "vertices, %.0f triangles, %.0f draws; depth peeks %.1f (%.2f ms); atlases %zu (%lu made), %.0f draws joined by them, %.0f turns\n",
                      double(now) / SYSCLOCK_ARM11, static_cast<unsigned long>(perf.frames), ms / n, n * 1000.0 / ms, phaseFrames / n, phases[0], phases[1],
                      phases[2], phases[3], phases[4],
                      clock.core == 2 ? "on core 2" : clock.core == 1 ? "on core 1" : "on the game's thread", clock.busy.exchange(0) * tick,
                      perf.syncTicks * tick, clock.gameWaits.exchange(0) * tick, clock.bytes.exchange(0) / 1024.0 / n,
                      smgDspTicks.exchange(0, std::memory_order_relaxed) * tick, perf.primitives / n,
                      perf.sameState / n, perf.color0Rides / n, perf.vertices / n, perf.triangles / n, perf.draws / n, perf.peeks / n,
-                     perf.peekTicks * tick);
+                     perf.peekTicks * tick, atlases.size(), static_cast<unsigned long>(perf.atlasesBuilt), perf.atlasJoins / n, perf.atlasTurns / n);
         // The registers behind most state changes, so batching can be aimed at them.
         std::string top;
         for (int k = 0; k < 6; ++k) {
@@ -1495,6 +1733,7 @@ struct Renderer {
     }
 
     void dropAllTextures() {
+        dropAtlases();
         if (inFrame) pause(), resume();
         for (auto& [key, texture] : textures) C3D_TexDelete(&texture);
         perf.texturesInvalidated += textures.size();
@@ -1505,6 +1744,11 @@ struct Renderer {
 
     // Textures made from memory a copy has just written are stale.
     void forget(u32 address, std::size_t size) {
+        for (u32 member : atlasAddresses)
+            if (member >= address && member < address + size) {
+                dropAtlases();
+                break;
+            }
         for (auto it = textures.begin(); it != textures.end();) {
             if (std::get<0>(it->first) >= address && std::get<0>(it->first) < address + size) {
                 C3D_TexDelete(&it->second);
