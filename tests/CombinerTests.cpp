@@ -64,22 +64,24 @@ Rgba gx(const smg::ModelMaterial& m, const Inputs& in) {
             default: return 0;
             }
         };
-        const auto combine = [](float a, float b, float c, float d, int op, int bias, int scale, bool clamp) {
+        // A compare weighs a against b by component, or for R8 by their reds (redA, redB).
+        const auto combine = [](float a, float b, float c, float d, int op, int bias, int scale, bool clamp, float redA, float redB) {
             a = wrapByte(a), b = wrapByte(b), c = wrapByte(c);
             const float lerp = a * (1 - c) + b * c;
             float v = op == 1 ? d - lerp : d + lerp;
             v += bias == 1 ? 0.5f : bias == 2 ? -0.5f : 0;
             v *= scale == 1 ? 2 : scale == 2 ? 4 : scale == 3 ? 0.5f : 1;
-            // Compares by component (RGB8, A8) only; the R8, GR16 and BGR24 ones compare across components.
-            if (op >= 8) v = d + ((op & 1 ? a == b : a > b) ? c : 0);
+            if (op == 8 || op == 9) a = wrapByte(redA), b = wrapByte(redB);
+            if (op >= 8) v = d + ((op & 1 ? a == b : a > b) ? c : 0);  // no GR16 or BGR24
             return clamp ? std::clamp(v, 0.0f, 1.0f) : std::clamp(v, -1024 / 255.0f, 1023 / 255.0f);
         };
         Rgba out;
         for (int c = 0; c < 3; ++c)
             out[c] = combine(colorIn(s.colorIn[0], c), colorIn(s.colorIn[1], c), colorIn(s.colorIn[2], c),
-                             colorIn(s.colorIn[3], c), s.colorOp, s.colorBias, s.colorScale, s.colorClamp);
-        out[3] = combine(alphaIn(s.alphaIn[0]), alphaIn(s.alphaIn[1]), alphaIn(s.alphaIn[2]), alphaIn(s.alphaIn[3]),
-                         s.alphaOp, s.alphaBias, s.alphaScale, s.alphaClamp);
+                             colorIn(s.colorIn[3], c), s.colorOp, s.colorBias, s.colorScale, s.colorClamp,
+                             colorIn(s.colorIn[0], 0), colorIn(s.colorIn[1], 0));
+        const float a = alphaIn(s.alphaIn[0]), b = alphaIn(s.alphaIn[1]);
+        out[3] = combine(a, b, alphaIn(s.alphaIn[2]), alphaIn(s.alphaIn[3]), s.alphaOp, s.alphaBias, s.alphaScale, s.alphaClamp, a, b);
         for (int c = 0; c < 3; ++c) reg[s.colorReg & 3][c] = out[c];
         reg[s.alphaReg & 3][3] = out[3];
     }
@@ -355,6 +357,50 @@ void compareWithoutC(std::mt19937& rng) {
     }
 }
 
+// Inputs as the PICA sees them, in whole steps of 1/255, with ties between texture, raster and konst alpha.
+Inputs byteInputs(std::mt19937& rng) {
+    std::uniform_int_distribution<int> byte(0, 255), tie(0, 3);
+    Inputs in;
+    for (auto& t : in.texture) for (auto& c : t) c = byte(rng) / 255.0f;
+    for (auto& c : in.raster) c = byte(rng) / 255.0f;
+    if (!tie(rng)) in.texture[0][3] = in.raster[3];
+    if (!tie(rng)) in.texture[0][3] = 128 / 255.0f;
+    if (!tie(rng)) in.texture[0][0] = in.raster[0];
+    return in;
+}
+
+// The title's dissolve: alpha is TEXA > K.a ? RASA : 0, then by colour: RGB8 adds K where TEXC > RASC to the texture's
+// own colour, R8 adds C0 where the texture's red passes the raster's, and the bloom's bright pass is that test alone.
+void compareAddsC(std::mt19937& rng) {
+    smg::ModelMaterial m;
+    m.textures[0] = 0;
+    m.konstColors[0] = {0.25f, 0.5f, 0.75f, 128 / 255.0f};
+    m.tevColors[0] = {0.2f, 0.4f, 0.6f, 1};
+    const std::uint8_t colors[4][4]{{10, 15, 15, 15}, {8, 10, 14, 8}, {8, 10, 2, 15}, {8, 10, 12, 15}}, ops[4]{0, 14, 8, 8};
+    for (int t = 0; t < 4; ++t) {
+        m.tevStageCount = 1;
+        auto& s = m.stages[0];
+        s = {};
+        std::copy(colors[t], colors[t] + 4, s.colorIn);
+        const std::uint8_t alpha[4]{4, 6, 5, 7};
+        std::copy(alpha, alpha + 4, s.alphaIn);
+        s.colorOp = ops[t];
+        s.alphaOp = 14;  // GX_TEV_COMP_A8_GT
+        s.konstColor = 0x0c;
+        s.konstAlpha = 0x1c;
+        s.texMap = s.texCoord = 0;
+        s.channel = 4;
+        const auto program = smg::compileTev(m);
+        check(program.exact && program.stageCount <= 6, "a compare that adds c translates exactly");
+        for (int i = 0; i < 300; ++i) {
+            const auto in = byteInputs(rng);
+            if (same(gx(m, in), pica(program, in))) continue;
+            dump(m, program, in);
+            check(false, "and matches GX on byte inputs, ties included");
+        }
+    }
+}
+
 // BloomEffect's blur: six stages each add one tap of the same map (its own coordinate) weighted by the rasterized colour.
 // The PICA has three units; the extra taps share one, so black stays black instead of each adding white.
 void sixTapBlur(std::mt19937& rng) {
@@ -451,6 +497,7 @@ int runCombinerTests() {
     marioEyeLid(rng);
     previousTwice(rng);
     compareWithoutC(rng);
+    compareAddsC(rng);
     sixTapBlur(rng);
     randomMaterials(rng);
     std::printf("%u TEV combiner checks passed\n", checks);

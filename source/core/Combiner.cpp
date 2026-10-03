@@ -236,12 +236,7 @@ struct Compiler {
         std::vector<Op> ops;
         const Arg temp = kind(Arg::Temp, alpha ? CombineOperand::Alpha : CombineOperand::Color);
         const bool subtract = op == 1;
-        if (op > 1) {
-            // A compare adds c or nothing to d, so without c it is d whatever it finds. The PICA can't compare: else
-            // nothing is added, leaving an effect out rather than spreading it over the screen.
-            if (!zero(c)) approximate("compare op");
-            return build(kind(Arg::Zero), kind(Arg::Zero), kind(Arg::Zero), d, 0, 0, 0, alpha);
-        }
+        if (op > 1) return compare(a, b, c, d, op, alpha);
         Form form;
         Arg x, y;
         if (zero(c) || (a == b)) { form = Single; x = a; }
@@ -323,6 +318,33 @@ struct Compiler {
             }
         }
         return ops;
+    }
+
+    // d + (a > b ? c : 0). For eight-bit inputs a > b is (a - b) * 256 saturated: a subtract and two doublings, each
+    // times four. Equality and the 16- and 24-bit compares add nothing, leaving an effect out rather than smeared.
+    std::vector<Op> compare(Arg a, Arg b, const Arg& c, const Arg& d, std::uint8_t op, bool alpha) {
+        const Arg none = kind(Arg::Zero);
+        if (zero(c)) return build(none, none, none, d, 0, 0, 0, alpha);
+        const auto unsupported = [&] {
+            approximate("compare op");
+            return build(none, none, none, d, 0, 0, 0, alpha);
+        };
+        const bool byRed = !alpha && op <= 9;
+        if ((op & 1) || (op < 14 && !byRed) || !inUnit(d)) return unsupported();
+        if (byRed) {
+            for (Arg* x : {&a, &b}) {
+                if (x->kind == Arg::Constant) *x = constant(x->value[0]);
+                else if (x->operand == CombineOperand::Color) x->operand = CombineOperand::Red;
+            }
+        }
+        const Arg temp = kind(Arg::Temp, alpha ? CombineOperand::Alpha : CombineOperand::Color);
+        std::vector<Op> ops{{CombineFunc::Subtract, {a, b}, 4}, {CombineFunc::Add, {temp, temp}, 4}, {CombineFunc::Add, {temp, temp}, 4}};
+        if (zero(d)) {
+            if (!one(c)) ops.push_back({CombineFunc::Modulate, {temp, c}});
+        } else {
+            ops.push_back(one(c) ? Op{CombineFunc::Add, {temp, d}} : Op{CombineFunc::MultiplyAdd, {temp, c, d}});
+        }
+        return program.stageCount + ops.size() > CombinerProgram::MaxStages ? unsupported() : ops;
     }
 
     // (k +/- t) * scale for a constant k outside 0..1, as GX saturates it: the positive and negative
@@ -520,8 +542,7 @@ struct Compiler {
                                         : Range{std::min(a.lo, b.lo), std::max(a.hi, b.hi)};
         Range out = op == 1 ? Range{d.lo - lerp.hi, d.hi - lerp.lo} : Range{d.lo + lerp.lo, d.hi + lerp.hi};
         if (op > 1 || bias == 3) {
-            // Compare ops add c or nothing; they are approximated anyway, but later stages read the result.
-            out = {d.lo, d.hi + 1};
+            out = {d.lo, d.hi + c.hi};  // a compare adds c or nothing
         } else {
             const float shift = bias == 1 ? 0.5f : bias == 2 ? -0.5f : 0;
             const float factor = scale == 1 ? 2 : scale == 2 ? 4 : scale == 3 ? 0.5f : 1;

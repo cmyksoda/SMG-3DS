@@ -579,8 +579,15 @@ wants it: left = 240 - (y + h), top = 400 - (x + w).
 and friends. Image effects lean on them: `FallOutFieldDraw`'s screen fill sets alpha to `texture alpha > K0.a ? A0 :
 0` and lets an alpha test drop the zeros. With A0 = 0 that pass is invisible on the Wii. Read as an ordinary lerp,
 it painted its colour over the file select's planets. A compare whose c is zero is exactly d, so it compiles
-exactly. One the PICA can't decide adds nothing and is counted as an approximation: the effect is left out rather
-than spread over the screen. 27 of the disc's 7,780 materials still need a real comparison.
+exactly. A greater-than compare by component (RGB8, A8) or by red (R8: the bloom's bright pass, `TEXC.r > RASC.r ? 1 :
+0`) is built from saturating steps: for eight-bit inputs `a > b` is `(a - b) * 256` saturated, which is a subtract
+times four and then two doublings times four, followed by one op for `c * step + d`: four PICA stages at most, exact
+on byte inputs (`compareAddsC` checks ties). The title's sea of light draws with one: alpha is `texture alpha >
+K.a ? vertex alpha : 0`, and the game raises K as the file select arrives, so the sea dissolves away. Read as d, it
+stayed on screen behind the planets. Equality needs both one-sided steps kept apart in the buffer, six ops for
+one GX stage, and the 16- and 24-bit compares read across components: those add nothing and are counted as
+approximations, so the effect is left out rather than spread over the screen. 16 of the disc's 7,780 materials still
+need one (27 before), mostly the water's `R8_EQ` masks.
 
 **EFB copies on the GPU.** Encoding a copy texel by texel was the port's largest cost: in the file-select level the
 game copies the whole screen every frame (`CaptureScreenDirector`'s RGB565 capture, `ScreenAlphaCapture`'s A8 one for
@@ -774,8 +781,8 @@ alpha. The adapted `drawIn` tests bit 31 - i. `MR::validateExCollisionParts` set
 
 **EFB copies to RG8 and GB8** keep two channels a texel, as the pixel engine writes them (green then red, blue then
 green: read back as IA8, alpha byte first); `GxCopyTests` checks both. A copy kept on the GPU goes to the CPU's encoder
-for these, as the PICA's copy pass has no two-channel packing. Still left: depth copies, real TEV compares (the bloom's
-threshold), and the second colour channel, which the PICA's combiner has no second vertex colour for.
+for these, as the PICA's copy pass has no two-channel packing. Still left: depth copies, equality compares (the water's
+masks), and the second colour channel, which the PICA's combiner has no second vertex colour for.
 
 ### Particles: the title and file select
 
