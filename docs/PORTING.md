@@ -801,6 +801,20 @@ Four changes took the title from 97 ms a frame to 31 to 46:
   check is two compares; and it counts changes to each four-word row of XF matrix memory, so a texgen's folded texture
   matrix is reused across a particle's position matrix load (`foldStillHolds`).
 
+Then three more, each measured on the title (Azahar, 268 MHz):
+
+- **No whole-piece copies.** `GxCommandProcessor::put` read a piece of the FIFO in place only while nothing was waiting;
+  once a 16 KB piece ended inside a command (nearly always), every later piece was copied whole into staging behind it.
+  Now a waiting command takes just the bytes it still needs and the rest is read where it is (27 to 24.5 microseconds a
+  particle).
+- **Vertex setup kept.** `GxVertexPipeline::prepare` redoes only C0's bytes, the texgen folds and the clip matrices
+  when nothing but TEV colours or XF matrix memory changed (`xfRegisterChanges` counts register loads apart).
+- **Small lists decoded once.** A list in one block is decoded into `GxVertex`es on first use and drawn from them
+  (`runDecoded`) until its bytes or the CP registers it was read under differ, or the memory it came from changes
+  (the meshes' page marks; dropping every mesh drops these too). 24 to 19 microseconds a particle.
+
+The title then runs at 28 to 30 frames a second (33.4 to 35.8 ms), the file select 26 to 30.
+
 A depth peek (the star pointer's `GXPeekZ` at a draw sync each frame) pauses the frame, waits for the GPU and copies the
 depth buffer back: about 1.2 ms a frame in Azahar.
 
