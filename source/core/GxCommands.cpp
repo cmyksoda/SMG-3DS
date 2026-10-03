@@ -234,23 +234,33 @@ void GxVertexLayout::indexedSpan(const std::uint8_t* at, const std::uint8_t*& lo
 
 bool GxCommandProcessor::drawsRead(std::uint32_t address) { return drawsReadRegister(address); }
 
-bool GxVertexLayout::refresh(const GxCommandProcessor& gpu, std::uint8_t format) {
-    if (!read_ || words_[0] != gpu.cp[VcdLo] || words_[1] != gpu.cp[VcdHi] || words_[2] != gpu.cp[VatA + format] ||
-        words_[3] != gpu.cp[VatB + format] || words_[4] != gpu.cp[VatC + format])
-        return false;
+bool GxVertexLayout::readFrom(const GxCommandProcessor& gpu, std::uint8_t format) const {
+    return read_ && words_[0] == gpu.cp[VcdLo] && words_[1] == gpu.cp[VcdHi] && words_[2] == gpu.cp[VatA + format] &&
+           words_[3] == gpu.cp[VatB + format] && words_[4] == gpu.cp[VatC + format];
+}
+
+void GxVertexLayout::rebase(const GxCommandProcessor& gpu) {
     for (Attribute* at : {&position_, &normal_, &color_[0], &color_[1], &texcoord_[0], &texcoord_[1], &texcoord_[2], &texcoord_[3], &texcoord_[4],
                           &texcoord_[5], &texcoord_[6], &texcoord_[7]}) {
         if (at->type < 2) continue;
         at->base = gpu.cp[ArrayBase + at->arrayIndex], at->stride = gpu.cp[ArrayStride + at->arrayIndex];
         at->array = gpu.memoryFunction()(at->base);
     }
-    return true;
 }
 
 const GxVertexLayout& GxCommandProcessor::layout(std::uint8_t format) const {
     format &= 7;
     if (layoutChanges_[format] != cpChanges) {
-        if (!layouts_[format].refresh(*this, format)) layouts_[format] = GxVertexLayout(*this, format);
+        GxVertexLayout& current = layouts_[format];
+        if (!current.readFrom(*this, format)) {
+            std::uint32_t hash = cp[VcdLo] * 0x9E3779B1u ^ cp[VcdHi];
+            for (int table : {VatA, VatB, VatC}) hash = (hash ^ (hash >> 15)) * 0x85EBCA77u ^ cp[table + format];
+            GxVertexLayout& seen = seenLayouts_[(hash ^ (hash >> 16)) % SeenLayouts];
+            if (!seen.readFrom(*this, format)) seen = GxVertexLayout(*this, format), ++layoutsRead;
+            else ++layoutsReused;
+            current = seen;
+        }
+        current.rebase(*this);
         layoutChanges_[format] = cpChanges;
     }
     return layouts_[format];
@@ -263,17 +273,18 @@ GxVertex GxCommandProcessor::readVertex(const std::uint8_t* at, std::uint8_t for
 }
 
 void GxCommandProcessor::loadXf(std::uint32_t address, std::uint32_t count, const std::uint8_t* from, bool native) {
-    bool changed = false, registers = false;
+    bool changed = false, registers = false, lights = false;
     for (std::uint32_t i = 0; i < count && address + i < sizeof xf / sizeof *xf; ++i) {
         const std::uint32_t value = word(from + i * 4, native);
         if (xf[address + i] == value) continue;
         changed = true;
-        if (address + i < 0x1000) ++xfRowChanges[(address + i) >> 2];
+        if (address + i < 0x1000) ++xfRowChanges[(address + i) >> 2], lights |= address + i >= 0x600 && address + i < 0x680;
         else registers = true;
         xf[address + i] = value;
     }
     xfChanges += changed;
     xfRegisterChanges += registers;
+    xfLightChanges += lights;
 }
 
 void GxCommandProcessor::loadBp(std::uint32_t value) {

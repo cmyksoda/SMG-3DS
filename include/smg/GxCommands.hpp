@@ -17,9 +17,10 @@ class GxVertexLayout {
 public:
     GxVertexLayout() = default;
     GxVertexLayout(const GxCommandProcessor& gpu, std::uint8_t format);
-    // After a CP change: when the format's words are the ones it was read from, only its arrays' bases and strides
-    // are read again (J3D sets the arrays before every shape) and this returns true.
-    bool refresh(const GxCommandProcessor& gpu, std::uint8_t format);
+    // Whether the format's words are the ones it was read from.
+    bool readFrom(const GxCommandProcessor& gpu, std::uint8_t format) const;
+    // Its arrays' bases and strides read again (J3D sets the arrays before every shape).
+    void rebase(const GxCommandProcessor& gpu);
     // Overwrites the attributes the format has; the others keep what `vertex` held.
     void read(const std::uint8_t* at, GxVertex& vertex) const;
     // The arrays (0 position, 1 normal, 2-3 colours, 4-11 texture coordinates) this format reads by index, a bit each.
@@ -99,8 +100,8 @@ public:
     // Loads that changed something, by kind: equal counts mean that part of the state is as it was. bpChanges counts only
     // the BP registers a draw reads (TEV, textures, pixel tests, scissor, culling), so a run of primitives can share one draw.
     std::uint32_t bpChanges = 0, xfChanges = 0, cpChanges = 0;
-    // Loads that changed an XF register (0x1000 up) rather than matrix memory.
-    std::uint32_t xfRegisterChanges = 0;
+    // Loads that changed an XF register (0x1000 up) rather than matrix memory, and those that changed a light (0x600-0x67F).
+    std::uint32_t xfRegisterChanges = 0, xfLightChanges = 0;
     // Changes to each four-word row of XF memory (the matrices, below 0x1000): what read a row still holds while its count stays.
     std::uint32_t xfRowChanges[0x400] = {};
     // The same for every register a draw reads but the TEV colours C0 and C1, which can ride in the vertices and a
@@ -108,6 +109,8 @@ public:
     std::uint32_t bpChangesBesideColors = 0, color1Changes = 0;
     // Display lists called, and their bytes (for the renderer's perf line).
     std::uint32_t displayListCalls = 0, displayListBytes = 0;
+    // Vertex layouts read from the registers, and taken from those read before (for the perf line).
+    mutable std::uint32_t layoutsRead = 0, layoutsReused = 0;
     // How deep the processor is in called display lists (0: the FIFO itself).
     unsigned displayListDepth = 0;
 
@@ -121,6 +124,9 @@ private:
     Host host_;
     mutable GxVertexLayout layouts_[8];
     mutable std::uint32_t layoutChanges_[8] = {~0u, ~0u, ~0u, ~0u, ~0u, ~0u, ~0u, ~0u};
+    // Layouts read before, by their words: J3D sets each shape's own descriptor and table, so formats come back often.
+    static constexpr unsigned SeenLayouts = 64;
+    mutable GxVertexLayout seenLayouts_[SeenLayouts];
     std::uint32_t bpMask_ = 0xFFFFFF;  // BP 0xFE: the bits the next BP load changes
     // The whole length of the command a stream has begun, from its header (at least the header itself).
     std::uint32_t length(const std::uint8_t* at, std::uint32_t available) const;

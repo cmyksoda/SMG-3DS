@@ -1463,7 +1463,12 @@ struct Renderer {
                          "uniforms %.1f ms (%.0f), draw calls %.1f ms (%.0f), first-use textures %.1f ms (%.1f)\n", perf.stepTicks[6] * ms,
                          perf.steps[6] / n, perf.stepTicks[7] * ms, perf.steps[7] / n, perf.stepTicks[8] * ms, perf.steps[8] / n, perf.stepTicks[9] * ms,
                          perf.steps[9] / n, perf.stepTicks[10] * ms, perf.steps[10] / n, perf.stepTicks[11] * ms, perf.steps[11] / n);
+            std::fprintf(stderr, "gx perf: pipeline per frame: %.0f prepares read whole, %.0f folds made, %.0f lighting reads; vertex layouts %.0f read, "
+                         "%.0f reused\n", pipeline.fullPrepares / n, pipeline.foldsMade / n, pipeline.lightingReads / n, lastGpu->layoutsRead / n,
+                         lastGpu->layoutsReused / n);
         }
+        pipeline.fullPrepares = pipeline.foldsMade = pipeline.lightingReads = 0;
+        lastGpu->layoutsRead = lastGpu->layoutsReused = 0;
         std::string approximations;
         for (const auto& [why, count] : perf.approximated)
             if (why) approximations += std::string(approximations.empty() ? " " : ", ") + why + " " + std::to_string(count);

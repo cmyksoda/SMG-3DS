@@ -192,6 +192,9 @@ public:
     // Whether this state's colour comes from each vertex (otherwise GxMeshUniforms' fixed colour): part of a mesh's key.
     bool meshColorFromVertex() const;
     const char* unsupported = nullptr;
+    // Prepares that read the state whole, folds made, and lighting read (for the perf line).
+    std::uint32_t fullPrepares = 0, lightingReads = 0;
+    mutable std::uint32_t foldsMade = 0;
 
 private:
     struct TexGen {
@@ -212,6 +215,11 @@ private:
     const float* makeClipMatrix(std::uint32_t index);
     bool foldStillHolds(TexGen& t, std::uint32_t ctrl, std::uint32_t post) const;
     void refold(TexGen& t) const;
+    // Lighting read again only when an XF register or a light changed (matrix loads leave it as it was).
+    void readLighting(const GxCommandProcessor& gpu) {
+        lighting_.read(gpu), ++lightingReads;
+        lightingRegisters_ = gpu.xfRegisterChanges, lightingLights_ = gpu.xfLightChanges;
+    }
     void vertex(const GxVertex& v, GxDrawVertex& d);
     std::size_t triangles(GxDrawVertex* vertices, std::uint16_t count, std::uint16_t first, std::uint16_t* indices) const;
     void texgen(const TexGen& t, const GxVertex& v, float st[2]) const;
@@ -224,7 +232,6 @@ private:
     GxFrame preparedFrame_;
     const GxCommandProcessor* gpu_ = nullptr;
     const GxDrawState* state_ = nullptr;
-    const GxVertexLayout* layout_ = nullptr;
     std::uint8_t kind_ = 0, reject_ = 0, units_ = 0;
     bool perVertexMatrix_ = false, channel_ = false, lit_ = false, fixedDepth_ = false, color0InVertex_ = false;
     std::uint8_t color0_[4] = {};
@@ -239,7 +246,7 @@ private:
     float clip_[64][16] = {}, clipScratch_[16] = {};
     std::uint64_t clipReady_ = 0;
     GxLighting lighting_;
-    std::uint32_t lightingXf_ = ~0u;
+    std::uint32_t lightingRegisters_ = ~0u, lightingLights_ = ~0u;  // the XF register and light changes it was read at
 };
 
 // gx.v.pica's transform path in C++, for checking meshes against the CPU path: one vertex under a draw's uniforms, its

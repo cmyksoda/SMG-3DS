@@ -494,17 +494,16 @@ bool GxVertexPipeline::prepare(const GxCommandProcessor& gpu, const GxDrawState&
         if (gpu.xfChanges != preparedXf_) {
             for (unsigned u = 0; u < units_; ++u)
                 if (!texgens_[u].palette) refold(texgens_[u]);
-            if (channel_) lighting_.read(gpu), lightingXf_ = gpu.xfChanges;
+            if (channel_ && lightingLights_ != gpu.xfLightChanges) readLighting(gpu);
             preparedXf_ = xfSeen_ = gpu.xfChanges, clipReady_ = 0;
         }
         return true;
     }
-    prepared_ = false;
+    prepared_ = false, ++fullPrepares;
     gpu_ = &gpu, state_ = &state, kind_ = kind;
     unsupported = state.unsupported;
     if (kind >= 0xA8) unsupported = "lines and points";
     if (unsupported) return false;
-    layout_ = &gpu.layout(format);
     // GEN_MODE's reject bits as GXSetCullMode swaps them in: 1 culls what GX_CULL_BACK names, 2 GX_CULL_FRONT.
     reject_ = static_cast<std::uint8_t>(GEN_MODE_GET_REJECT_EN(gpu.bp[0x00]));
     perVertexMatrix_ = gpu.cp[0x50] & 1;
@@ -541,7 +540,7 @@ bool GxVertexPipeline::prepare(const GxCommandProcessor& gpu, const GxDrawState&
         t.folded = !t.perVertexMatrix && !(t.dual && t.normalize);
         refold(t);
     }
-    if (channel_ && lightingXf_ != gpu.xfChanges) lighting_.read(gpu), lightingXf_ = gpu.xfChanges;
+    if (channel_ && (lightingRegisters_ != gpu.xfRegisterChanges || lightingLights_ != gpu.xfLightChanges)) readLighting(gpu);
     prepared_ = true, preparedKind_ = kind, preparedFormat_ = format, preparedFrame_ = frame;
     preparedBp_ = gpu.bpChanges, preparedXf_ = gpu.xfChanges, preparedCp_ = gpu.cpChanges;
     preparedBeside_ = gpu.bpChangesBesideColors, preparedXfRegisters_ = gpu.xfRegisterChanges;
@@ -608,6 +607,7 @@ bool GxVertexPipeline::foldStillHolds(TexGen& t, std::uint32_t ctrl, std::uint32
 // A folded texgen's map again when the matrices it was made from changed, and whether it is planar.
 void GxVertexPipeline::refold(TexGen& t) const {
     if (t.folded && !foldStillHolds(t, t.ctrl, t.postCtrl)) {
+        ++foldsMade;
         // The matrix's rows (a third of (0, 0, 0, 1) without projection), then the dual transform over them.
         double m[3][4] = {{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 1}};
         for (int r = 0; r < t.rows; ++r)
@@ -682,10 +682,11 @@ void GxVertexPipeline::texgen(const TexGen& t, const GxVertex& v, float st[2]) c
 }
 
 std::size_t GxVertexPipeline::run(const std::uint8_t* data, std::uint16_t count, GxDrawVertex* vertices, std::uint16_t first, std::uint16_t* indices) {
-    const std::uint32_t size = layout_->size;
+    const GxVertexLayout& layout = gpu_->layout(preparedFormat_);  // a mesh's draw never needs it, so prepare leaves it
+    const std::uint32_t size = layout.size;
     GxVertex v;  // attributes the format lacks stay zero for every vertex
     for (std::uint16_t i = 0; i < count; ++i) {
-        layout_->read(data + i * size, v);
+        layout.read(data + i * size, v);
         vertex(v, vertices[i]);
     }
     return triangles(vertices, count, first, indices);
