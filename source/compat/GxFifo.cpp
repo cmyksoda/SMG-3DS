@@ -318,6 +318,9 @@ volatile void* smgUnportedRegisters(const char* block) {
 
 void smgGXFifoFlush() { flushIfBuffering(); }
 
+// The game's own thread: the one that writes GX (GXInit's), for memos only it keeps.
+int smgOnGameThread() { return getThreadLocalStorage() == smgFifoThread; }
+
 void smgGXFifoBytes(const void* bytes, unsigned size) {
     const u8* from = static_cast<const u8*>(bytes);
     if (getThreadLocalStorage() != smgFifoThread || !sRenderThread) {

@@ -1162,7 +1162,26 @@ adapt("include/Game/LiveActor/ShadowVolumeDrawer.hpp", "include/Game/LiveActor/S
     ("    virtual void loadModelDrawMtx() const override;\n    virtual void drawShape() const override;",
      "    virtual void loadModelDrawMtx() const;\n    virtual void drawShape() const;", 1),
 ])
-for relative in ["Game/AreaObj/AreaObjContainer.cpp", "Game/Demo/DemoExecutor.cpp",
+# The game asks for an area manager by name many times a frame (is Mario in water, a death area, a camera area...),
+# each a strstr against every manager in turn. The managers come from cCreateTable in its order, so a name's index is
+# fixed by its text: the game's own thread remembers it by the name's address and text.
+adapt("src/Game/AreaObj/AreaObjContainer.cpp", "Game/AreaObj/AreaObjContainer.cpp", [
+    ("AreaObjMgr* AreaObjContainer::getManager(const char* pName) const {\n"
+     "    return *std::find_if(mManagerArray, mManagerArray + mNumManagers, std::binder2nd< IsManagerName, const char* >(IsManagerName(), pName));\n}",
+     "extern \"C\" int smgOnGameThread();  // source/compat/GxFifo.cpp\n\n"
+     "namespace {\n    struct ManagerMemo {\n        const char* mName;\n        char mText[32];\n        s32 mIndex;\n    };\n"
+     "    ManagerMemo sManagerMemo[64];\n}  // namespace\n\n"
+     "AreaObjMgr* AreaObjContainer::getManager(const char* pName) const {\n"
+     "    const bool memo = smgOnGameThread();\n"
+     "    ManagerMemo& entry = sManagerMemo[(reinterpret_cast< u32 >(pName) >> 2) % 64];\n"
+     "    if (memo && entry.mName == pName && strcmp(entry.mText, pName) == 0) {\n        return mManagerArray[entry.mIndex];\n    }\n"
+     "    AreaObjMgr* const* found = std::find_if(mManagerArray, mManagerArray + mNumManagers, std::binder2nd< IsManagerName, const char* >(IsManagerName(), pName));\n"
+     "    const s32 index = found - mManagerArray;\n"
+     "    if (memo && index < static_cast< s32 >(mNumManagers) && strlen(pName) < sizeof(entry.mText)) {\n"
+     "        entry.mName = pName;\n        strcpy(entry.mText, pName);\n        entry.mIndex = index;\n    }\n"
+     "    return *found;\n}", 1),
+])
+for relative in ["Game/Demo/DemoExecutor.cpp",
                  "Game/Effect/MultiEmitter.cpp", "Game/LiveActor/EffectKeeper.cpp",
                  "Game/MapObj/ElectricBall.cpp", "Game/MapObj/GeneralMapParts.cpp", "Game/Scene/MultiSceneEffectKeeper.cpp"]:
     adapt("src/" + relative, relative, [])
