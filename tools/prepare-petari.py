@@ -1485,6 +1485,10 @@ adapt("src/Game/MapObj/MapPartsBreaker.cpp", "Game/MapObj/MapPartsBreaker.cpp", 
     ("f32 TVec2f::squared(const TVec2f& rOther) const {", "template <>\nf32 TVec2f::squared(const TVec2f& rOther) const {", 1),
 ])
 # A pointer to a temporary, read straight away by the caller: a local static holds the same value past the return.
+# SimpleEffectObj's names a local instead, which gcc returns as null without a warning (the scan can't see it).
+adapt("include/Game/Effect/SimpleEffectObj.hpp", "include/Game/Effect/SimpleEffectObj.hpp", [
+    ("        TVec3f vec;\n        vec.set(0.0f, 0.0f, 0.0f);\n        return &vec;", "        static TVec3f offset(0.0f, 0.0f, 0.0f);\n        return &offset;", 1),
+])
 adapt("include/Game/MapObj/MorphItemObjNeo.hpp", "include/Game/MapObj/MorphItemObjNeo.hpp", [
     ("        return &(TVec3f(0.0f, 200.0f, 0.0f));", "        static TVec3f offset(0.0f, 200.0f, 0.0f);\n        return &offset;", 2),
     ("        return &TVec3f(0.0f, 580.0f, 0.0f);", "        static TVec3f offset(0.0f, 580.0f, 0.0f);\n        return &offset;", 1),
