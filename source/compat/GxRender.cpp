@@ -1015,14 +1015,14 @@ struct Renderer {
         if (stale) dropMesh(found), found = meshes.end(), ++perf.meshMismatches;
         stepEnd(8, lookup);
         if (found == meshes.end()) {
-            GxMesh mesh;
-            if (const unsigned why = pipeline.buildMesh(list, size, mesh)) return ++perf.refused[why], why;
-            // Its pages are marked before it is read for good: a write and flush from another thread between a reading and
-            // the marking would never reach it (the flush hook passes unmarked pages by), so the first reading only finds them.
+            // Its pages are marked before it is read: a write and flush from another thread between a reading and the
+            // marking would never reach it (the flush hook passes unmarked pages by).
+            const std::uint8_t *lo, *hi;
+            if (!pipeline.meshSpan(list, size, lo, hi)) return ++perf.refused[GxVertexPipeline::MeshCommand], GxVertexPipeline::MeshCommand;
             markPages(reinterpret_cast<std::uintptr_t>(list), reinterpret_cast<std::uintptr_t>(list) + size);
-            markPages(reinterpret_cast<std::uintptr_t>(mesh.arraysLo), reinterpret_cast<std::uintptr_t>(mesh.arraysHi));
+            markPages(reinterpret_cast<std::uintptr_t>(lo), reinterpret_cast<std::uintptr_t>(hi));
             std::atomic_thread_fence(std::memory_order_seq_cst);
-            mesh = GxMesh{};
+            GxMesh mesh;
             if (const unsigned why = pipeline.buildMesh(list, size, mesh)) return ++perf.refused[why], why;
             static const bool checking = smgDevGxCheck();
             if (checking) checkMesh(gpu, list, size, mesh, address);

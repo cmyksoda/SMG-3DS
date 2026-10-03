@@ -177,6 +177,9 @@ public:
                                   MeshMatrixIndex, MeshTooLarge, MeshEmpty, MeshSmall, MeshRefusals };
     unsigned meshEligible() const;
     unsigned buildMesh(const std::uint8_t* list, std::uint32_t size, GxMesh& mesh) const;
+    // The array memory a list's primitives index, [lo, hi), without decoding them: false for a list buildMesh refuses
+    // as holding something other than primitives.
+    bool meshSpan(const std::uint8_t* list, std::uint32_t size, const std::uint8_t*& lo, const std::uint8_t*& hi) const;
     void meshUniforms(std::uint16_t slots, const GxMesh::Group& group, GxMeshUniforms& out);
     // Another group of the same mesh: only its slots' rows.
     void meshSlotUniforms(const GxMesh::Group& group, GxMeshUniforms& out);

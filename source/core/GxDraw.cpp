@@ -773,6 +773,24 @@ unsigned GxVertexPipeline::meshEligible() const {
     return MeshOk;
 }
 
+bool GxVertexPipeline::meshSpan(const std::uint8_t* list, std::uint32_t size, const std::uint8_t*& lo, const std::uint8_t*& hi) const {
+    lo = reinterpret_cast<const std::uint8_t*>(UINTPTR_MAX), hi = nullptr;
+    for (std::uint32_t at = 0; at < size;) {
+        const std::uint8_t op = list[at];
+        if (op == 0x00) {
+            ++at;
+            continue;
+        }
+        if (op < 0x80 || op >= 0xA8 || at + 3 > size) return false;
+        const std::uint16_t count = static_cast<std::uint16_t>(list[at + 1] << 8 | list[at + 2]);
+        const GxVertexLayout& layout = gpu_->layout(op & 7);
+        if (at + 3 + std::uint32_t(count) * layout.size > size) return false;
+        for (std::uint16_t i = 0; i < count; ++i) layout.indexedSpan(list + at + 3 + std::uint32_t(i) * layout.size, lo, hi);
+        at += 3 + std::uint32_t(count) * layout.size;
+    }
+    return true;
+}
+
 unsigned GxVertexPipeline::buildMesh(const std::uint8_t* list, std::uint32_t size, GxMesh& mesh) const {
     mesh = GxMesh{};
     mesh.arraysLo = reinterpret_cast<const std::uint8_t*>(UINTPTR_MAX), mesh.arraysHi = nullptr;

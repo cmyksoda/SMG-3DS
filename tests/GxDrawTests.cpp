@@ -436,6 +436,32 @@ void decodedVertices() {
           "decoded vertices come out as the bytes do");
 }
 
+// The span pass finds the array memory a list's indexed vertices read, as the full build does, without decoding them.
+void meshSpans() {
+    auto owned = std::make_unique<smg::GxCommandProcessor>(host());
+    smg::GxCommandProcessor& gpu = *owned;
+    Stream s;
+    clearState(s);
+    s.bp(0xC008FFF8);                                       // colour (0, 0, 0, TEXC)
+    s.cp(0x50, 2 << 9), s.cp(0x60, 0);                      // positions by an 8-bit index alone
+    s.cp(0xA0, 0x1800), s.cp(0xB0, 12);                     // into array 0
+    gpu.put(s.bytes.data(), static_cast<std::uint32_t>(s.bytes.size()));
+    Stream list;
+    list.u8(0x90), list.u16(3), list.u8(2), list.u8(0), list.u8(1);
+    smg::GxDrawState state;
+    smg::readGxDrawState(gpu, state);
+    smg::GxVertexPipeline pipeline;
+    smg::GxMesh mesh;
+    const std::uint8_t *lo = nullptr, *hi = nullptr;
+    check(pipeline.prepare(gpu, state, {}, 0x90, 0) && pipeline.meshSpan(list.bytes.data(), static_cast<std::uint32_t>(list.bytes.size()), lo, hi) &&
+              pipeline.buildMesh(list.bytes.data(), static_cast<std::uint32_t>(list.bytes.size()), mesh) == smg::GxVertexPipeline::MeshOk &&
+              lo == mesh.arraysLo && hi == mesh.arraysHi && lo == memory.data() + 0x1800 && hi > lo + 2 * 12,
+          "the span pass finds the array memory the build reads");
+    Stream state0;
+    state0.bp(0x00000001);
+    check(!pipeline.meshSpan(state0.bytes.data(), static_cast<std::uint32_t>(state0.bytes.size()), lo, hi), "and refuses a list of anything but primitives");
+}
+
 // The GPU path: a display list of primitives decodes once into model-space vertices and triangles; its uniforms move a
 // vertex where the CPU path would, and a list with anything but primitives stays the CPU's.
 void meshFromDisplayList() {
@@ -690,6 +716,7 @@ int runGxDrawTests() {
     color0Rides();
     color1Rides();
     decodedVertices();
+    meshSpans();
     meshFromDisplayList();
     litMesh();
     litMeshGroups();
