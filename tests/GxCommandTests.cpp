@@ -176,15 +176,17 @@ void bpMasksAndCopies() {
         stream.clear(), stream.push_back(0x61), put32(stream, value);
         gpu->put(stream.data(), static_cast<std::uint32_t>(stream.size()));
     };
-    const std::uint32_t all = gpu->bpChanges, beside = gpu->bpChangesBesideC0;
+    const std::uint32_t all = gpu->bpChanges, beside = gpu->bpChangesBesideColors, color1 = gpu->color1Changes;
     load(0xE2000011u), load(0xE3001100u);
-    check(gpu->bpChanges == all + 2 && gpu->bpChangesBesideC0 == beside, "a new C0 counts as a change, but not beside C0");
+    check(gpu->bpChanges == all + 2 && gpu->bpChangesBesideColors == beside, "a new C0 counts as a change, but not beside the colours");
     load(0xE2800081u);
-    check(gpu->bpChangesBesideC0 == beside + 1, "a konst colour at C0's address is beside it");
+    check(gpu->bpChangesBesideColors == beside + 1, "a konst colour at C0's address is beside them");
     load(0xE2800081u), load(0xE2000011u);
-    check(gpu->bpChangesBesideC0 == beside + 1, "and writing either one again as it was changes nothing beside C0");
+    check(gpu->bpChangesBesideColors == beside + 1, "and writing either one again as it was changes nothing beside them");
     load(0xE4000022u);
-    check(gpu->bpChangesBesideC0 == beside + 2, "C1 is beside C0");
+    check(gpu->bpChangesBesideColors == beside + 1 && gpu->color1Changes == color1 + 1, "C1 counts apart");
+    load(0xE6000022u);
+    check(gpu->bpChangesBesideColors == beside + 2, "and C2 beside them");
     delete gpu;
 }
 

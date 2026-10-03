@@ -286,11 +286,14 @@ void GxCommandProcessor::loadBp(std::uint32_t value) {
     const bool changed = (kind & BpDrawn) && bp[address] != data;
     bpChanges += changed;
     bp[address] = data;
-    if (!(kind & (BpColour | BpEvent))) return void(bpChangesBesideC0 += changed);
+    if (!(kind & (BpColour | BpEvent))) return void(bpChangesBesideColors += changed);
     if (kind & BpColour) {
         const bool konst = data >> 23 & 1;
         std::uint32_t& value = (konst ? tevKonst : tevColor)[address - 0xE0];
-        bpChangesBesideC0 += value != data && (konst || (address != 0xE2 && address != 0xE3));
+        if (value != data) {
+            if (!konst && (address == 0xE4 || address == 0xE5)) ++color1Changes;
+            else if (konst || (address != 0xE2 && address != 0xE3)) ++bpChangesBesideColors;
+        }
         value = data;
     }
     if (address == 0x45) host_.drawDone();                                    // PE_DONE

@@ -136,7 +136,7 @@ struct Renderer {
     PicaPixel pixel;
     int writeMask = 0, scissor[4] = {};
     bool stateValid = false, applied = false, scissorEmpty = false, scissorWhole = true;
-    u32 stateBp = 0, stateBpBesideC0 = 0, stateVersion = 0, appliedVersion = 0;
+    u32 stateBp = 0, stateBesideColors = 0, stateColor1 = 0, stateVersion = 0, appliedVersion = 0;
     GxFrame stateFrame;
     // The target's colour and depth read back (both four bytes a pixel, the screen's way round), until drawn on again.
     u32* readback[2] = {};
@@ -238,6 +238,11 @@ struct Renderer {
         vertices = static_cast<GxDrawVertex*>(linearAlloc(VertexBytes + MaxIndices * sizeof(std::uint16_t)));
         indices = reinterpret_cast<std::uint16_t*>(reinterpret_cast<std::uint8_t*>(vertices) + VertexBytes);
         if (!target || !shader || R_FAILED(shaderProgramSetVsh(&program, &shader->DVLE[0])) || !vertices) stop("setting up citro3d");
+        for (C3D_Tex& palette : palettes) {
+            if (!C3D_TexInit(&palette, 8, 8, GPU_RGBA8)) stop("making the C1 palettes");
+            C3D_TexSetFilter(&palette, GPU_NEAREST, GPU_NEAREST);
+            C3D_TexSetWrap(&palette, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+        }
         clipUniform = shaderInstanceGetUniformLocation(program.vertexShader, "clip");
         texrowUniform = shaderInstanceGetUniformLocation(program.vertexShader, "texrow");
         transformUniform = shaderInstanceGetUniformLocation(program.vertexShader, "transform");
@@ -285,6 +290,7 @@ struct Renderer {
     // Every draw reads one buffer from its start, in the shader's layout; set once per command list.
     void startBuffers() {
         used = flushed = indexUsed = indexFlushed = batchStart = 0;
+        paletteUsed = paletteFlushed = 0, batchPalette = -1;
         C3D_BindProgram(&program);
         forgetSent();
         bindCpuBuffers();
@@ -462,6 +468,9 @@ struct Renderer {
         if (used > flushed) GSPGPU_FlushDataCache(vertices + flushed, (used - flushed) * sizeof(GxDrawVertex));
         if (indexUsed > indexFlushed) GSPGPU_FlushDataCache(indices + indexFlushed, (indexUsed - indexFlushed) * sizeof(std::uint16_t));
         flushed = used, indexFlushed = indexUsed;
+        if (paletteUsed > paletteFlushed)
+            for (unsigned t = paletteFlushed / PaletteSlots; t <= (paletteUsed - 1) / PaletteSlots; ++t) C3D_TexFlush(&palettes[t]);
+        paletteFlushed = paletteUsed;
     }
 
     // Ends the frame drawn so far without showing it; resume() begins again on the same target once the GPU is done, so
@@ -533,7 +542,7 @@ struct Renderer {
 
     void draw(const GxCommandProcessor& gpu, std::uint8_t kind, std::uint8_t format, std::uint16_t count, const std::uint8_t* data) {
         ++perf.primitives, perf.vertices += count;
-        ensureState(gpu);
+        ensureState(gpu, true);
         bool prepared;
         {
             const Step step(perf, 2);
@@ -543,29 +552,58 @@ struct Renderer {
         if (scissorEmpty || !count) return;
         if (!inFrame) begin();
         roomFor(count);
+        if (state_->color1InTexture) choosePaletteTexel(gpu);
         const Step step(perf, 6);
         indexUsed += pipeline.run(data, count, vertices + used, static_cast<std::uint16_t>(used), indices + indexUsed);
         used += count;
     }
 
-    // The draw state for what comes next: kept while the BP registers a draw reads (C0 alone, when it rides) stay.
-    void ensureState(const GxCommandProcessor& gpu) {
+    // The draw state for what comes next: kept while the BP registers a draw reads (C0 and C1 alone, when they ride)
+    // stay. The CPU path's state may read C1 from the palette; a mesh's never does.
+    void ensureState(const GxCommandProcessor& gpu, bool cpuPath) {
+        if (stateValid && !cpuPath && state_->color1InTexture) return buildState(gpu, false);
         if (!stateValid || gpu.bpChanges != stateBp || !(frame == stateFrame)) {
-            std::uint8_t color0[4];
-            if (stateValid && frame == stateFrame && state_->color0InVertex &&
-                (gpu.bpChangesBesideC0 == stateBpBesideC0 || onlyColor0Changed(gpu)) && gxColor0Bytes(gpu, color0))
-                stateBp = gpu.bpChanges, stateBpBesideC0 = gpu.bpChangesBesideC0, ++perf.color0Rides;
+            std::uint8_t color[4];
+            const bool colorsOnly = gpu.bpChangesBesideColors == stateBesideColors && (state_->color1InTexture || gpu.color1Changes == stateColor1);
+            if (stateValid && frame == stateFrame && state_->color0InVertex && (colorsOnly || onlyColor0Changed(gpu)) && gxColor0Bytes(gpu, color) &&
+                (!state_->color1InTexture || gxColor1Bytes(gpu, color)))
+                stateBp = gpu.bpChanges, stateBesideColors = gpu.bpChangesBesideColors, stateColor1 = gpu.color1Changes, ++perf.color0Rides;
             else
-                buildState(gpu);
+                buildState(gpu, cpuPath);
         } else {
             ++perf.sameState;
         }
     }
 
+    // C1 for states that read it from the palette unit: 8x8 RGBA8 textures of 64 colours each, taken in order through a
+    // command list (startBuffers starts over), so the texels a recorded draw samples never change under it.
+    static constexpr unsigned PaletteTextures = 64, PaletteSlots = 64;
+    C3D_Tex palettes[PaletteTextures];
+    unsigned paletteUsed = 0, paletteFlushed = 0;
+    int batchPalette = -1;  // the palette the pending batch samples
+    u32 paletteColour = 0;  // the last texel's
+    static unsigned morton(unsigned x, unsigned y) {
+        return (x & 1) | (y & 1) << 1 | (x & 2) << 1 | (y & 2) << 2 | (x & 4) << 2 | (y & 4) << 3;
+    }
+    void choosePaletteTexel(const GxCommandProcessor& gpu) {
+        std::uint8_t c[4];
+        gxColor1Bytes(gpu, c);  // in range, or the state would not read it from here
+        const u32 rgba = u32(c[0]) << 24 | u32(c[1]) << 16 | u32(c[2]) << 8 | c[3];
+        if (paletteUsed && rgba == paletteColour && int((paletteUsed - 1) / PaletteSlots) == batchPalette) return;
+        if (paletteUsed == PaletteTextures * PaletteSlots) pause(), resume();
+        const unsigned slot = paletteUsed++, texture = slot / PaletteSlots, at = slot % PaletteSlots;
+        if (int(texture) != batchPalette) flushBatch(), batchPalette = int(texture), ++stateVersion;
+        paletteColour = rgba;
+        // GX rows run down from the first; the PICA's run up from the last in memory, as tile() lays them.
+        const unsigned x = at % 8, row = at / 8;
+        std::memcpy(static_cast<std::uint8_t*>(palettes[texture].data) + 4 * morton(x, 7 - row), &rgba, 4);
+        pipeline.setPaletteTexel((static_cast<float>(x) + 0.5f) / 8, (static_cast<float>(row) + 0.5f) / 8);
+    }
+
     // readGxDrawState through a cache keyed by the registers it reads for the stages and maps in use (gxDrawStateKey):
     // J3D's materials come back every frame, so most builds are a lookup. The key is hashed by 32-bit multiplies, and the
     // draw uses the cached state where it lies.
-    static constexpr unsigned MaxStateWords = MaxDrawStateKey;
+    static constexpr unsigned MaxStateWords = MaxDrawStateKey + 1;
     struct CachedState {
         u32 words[MaxStateWords];
         std::size_t count = 0;
@@ -577,8 +615,9 @@ struct Renderer {
     u32 stateWords[MaxStateWords];
     CachedState* stateEntry = nullptr;  // the entry the last read came from or went into
 
-    void readState(const GxCommandProcessor& gpu) {
-        const std::size_t count = gxDrawStateKey(gpu, stateWords);
+    void readState(const GxCommandProcessor& gpu, bool palette) {
+        std::size_t count = gxDrawStateKey(gpu, stateWords);
+        stateWords[count++] = palette;
         const u32* word = stateWords + count;
         const std::size_t bytes = std::size_t(word - stateWords) * sizeof(u32);
         u32 hash = 0x811C9DC5u;
@@ -592,7 +631,7 @@ struct Renderer {
         if (states.size() >= 512) states.clear();
         CachedState& entry = states[hash];  // a key that collides takes the entry over
         std::memcpy(entry.words, stateWords, bytes), entry.count = count;
-        readGxDrawState(gpu, entry.state);
+        readGxDrawState(gpu, entry.state, palette);
         entry.pixelReady = false;
         stateEntry = &entry, state_ = &entry.state;
     }
@@ -618,12 +657,12 @@ struct Renderer {
         if (start) perf.stepTicks[which] += svcGetSystemTick() - start, ++perf.steps[which];
     }
 
-    void buildState(const GxCommandProcessor& gpu) {
+    void buildState(const GxCommandProcessor& gpu, bool cpuPath) {
         flushBatch();
         const Step step(perf, 0);
         {
             const Step read(perf, 3);
-            readState(gpu);
+            readState(gpu, cpuPath);
         }
         pipeline.stateChanged();
         if (Step::timing()) {
@@ -634,7 +673,8 @@ struct Renderer {
         std::memcpy(bpAtBuild, gpu.bp, sizeof bpAtBuild);
         std::memcpy(colorAtBuild, gpu.tevColor, sizeof colorAtBuild);
         std::memcpy(konstAtBuild, gpu.tevKonst, sizeof konstAtBuild);
-        stateValid = true, stateBp = gpu.bpChanges, stateBpBesideC0 = gpu.bpChangesBesideC0, stateFrame = frame, ++stateVersion;
+        stateValid = true, stateBp = gpu.bpChanges, stateBesideColors = gpu.bpChangesBesideColors, stateColor1 = gpu.color1Changes;
+        stateFrame = frame, ++stateVersion;
         if (state_->unsupported) stop(state_->unsupported);
         if (state_->material.blend.type == 2 && state_->material.blend.logic != 3) stop("a logic op other than copy");
         if (state_->depthTextureOp) depthFromTexture(*state_);
@@ -711,6 +751,10 @@ struct Renderer {
         }
         std::string maps;
         for (unsigned u = 0; u < state_->program.unitCount; ++u) {
+            if (state_->program.units[u].texture == CombinerProgram::Palette) {
+                maps += " C1-palette";
+                continue;
+            }
             const GxTextureMap& t = state_->textures[state_->program.units[u].texture];
             char text[64];
             std::snprintf(text, sizeof text, " %08lx:%ux%u:f%u", static_cast<unsigned long>(t.address), t.width, t.height, t.format);
@@ -847,7 +891,7 @@ struct Renderer {
         // A list in one 32-byte block (a particle's quad) is a draw of its own as a mesh; read, it joins its neighbours' draw.
         if (size <= 32) return ++perf.refused[GxVertexPipeline::MeshSmall], GxVertexPipeline::MeshSmall;
         applyChangedMemory();
-        ensureState(gpu);
+        ensureState(gpu, false);
         bool prepared;
         {
             const Step step(perf, 2);
@@ -1157,8 +1201,12 @@ struct Renderer {
         if (!applied || appliedVersion != stateVersion) {
             sendPixel();
             sendScissor();
-            for (unsigned unit = 0; unit < state_->program.unitCount; ++unit)
-                sendTexture(unit, texture(state_->textures[state_->program.units[unit].texture]));
+            for (unsigned unit = 0; unit < state_->program.unitCount; ++unit) {
+                const int map = state_->program.units[unit].texture;
+                if (map != CombinerProgram::Palette) sendTexture(unit, texture(state_->textures[map]));
+                else if (batchPalette >= 0) sendTexture(unit, palettes[batchPalette]);
+                else stop("the C1 palette's unit with no palette chosen");
+            }
             applied = true, appliedVersion = stateVersion;
         }
     }
