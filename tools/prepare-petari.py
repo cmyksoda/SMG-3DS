@@ -1137,9 +1137,23 @@ adapt("include/Game/LiveActor/ShadowVolumeDrawer.hpp", "include/Game/LiveActor/S
      "    virtual void loadModelDrawMtx() const;\n    virtual void drawShape() const;", 1),
 ])
 for relative in ["Game/AreaObj/AreaObjContainer.cpp", "Game/Demo/DemoExecutor.cpp",
-                 "Game/Effect/MultiEmitter.cpp", "Game/LiveActor/EffectKeeper.cpp", "Game/LiveActor/LiveActorGroupArray.cpp",
+                 "Game/Effect/MultiEmitter.cpp", "Game/LiveActor/EffectKeeper.cpp",
                  "Game/MapObj/ElectricBall.cpp", "Game/MapObj/GeneralMapParts.cpp", "Game/Scene/MultiSceneEffectKeeper.cpp"]:
     adapt("src/" + relative, relative, [])
+# Pointers and references to what a block or a statement made, used after it ended: Metrowerks left those bytes as they
+# were, GCC reuses them or (for a returned reference) returns null (tools/ub-scan.sh names them). The wall normals'
+# getters return a zero vector that lasts (checkGround asks for the back wall's while only _8 is set).
+adapt("src/Game/Player/MarioCollision.cpp", "Game/Player/MarioCollision.cpp", [
+    ("    return TVec3f(gZeroVec);\n", "    return smgWallNormZero;\n", 3),
+    ("const TVec3f& Mario::getSideWallNorm() const {", "static const TVec3f smgWallNormZero(0.0f, 0.0f, 0.0f);\n\nconst TVec3f& Mario::getSideWallNorm() const {", 1),
+])
+adapt("src/Game/LiveActor/LiveActorGroupArray.cpp", "Game/LiveActor/LiveActorGroupArray.cpp", [
+    ("    if (pName == nullptr) {\n        char defaultName[32];\n", "    char defaultName[32];\n    if (pName == nullptr) {\n", 1),
+])
+adapt("src/Game/Ride/Tamakoro.cpp", "Game/Ride/Tamakoro.cpp", [
+    ("        // TVec3f tmpVec;\n", "        TVec3f tmpVec;\n", 1),
+    ("            TVec3f tmpVec(-mGravity);\n", "            tmpVec = -mGravity;\n", 1),
+])
 # MSL's headers declared the narrow string functions along with the rest; the standard <cstring> does.
 adapt("src/Game/Util/StringUtil.cpp", "Game/Util/StringUtil.cpp", [
     ("#include <cstdio>\n#include <wstring.h>", "#include <cstdio>\n#include <cstring>\n#include <wstring.h>", 1),
