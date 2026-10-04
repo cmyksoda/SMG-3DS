@@ -19,6 +19,7 @@ extern "C" void smgRaiseInterrupt(__OSInterrupt interrupt);
 extern "C" void smgDrawSyncRead();
 extern "C" void smgDisplayCopyRead();
 extern "C" int smgDevGxInline();  // source/compat/Kpad.cpp
+extern "C" int smgDevGxTiming();
 extern "C" void smgMarkGameThread();  // source/compat/Os.cpp
 // GX words written so far, for the renderer's perf line (source/compat/GxRender.cpp).
 extern "C" {
@@ -249,6 +250,7 @@ void startRenderThread() {
 }
 
 void begin(void* self) {
+    processor().countCommands = smgDevGxTiming();
     smgFifoThread = self;
     smgMarkGameThread();
     sMainStream = streamOf(reinterpret_cast<u32>(self));

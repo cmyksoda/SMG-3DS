@@ -316,6 +316,58 @@ void GxCommandProcessor::loadBp(std::uint32_t value) {
     else if (address == 0x52 && host_.copy) host_.copy(data);
 }
 
+[[gnu::always_inline]] inline std::uint32_t GxCommandProcessor::command(const std::uint8_t* at, std::uint32_t available) {
+    const std::uint8_t opcode = at[0];
+    std::uint32_t used;
+    // Most of a stream, read here without execute()'s call: BP runs, then CP and XF loads.
+    if (opcode == 0x61) {
+        used = bpRun(at, available);
+    } else if (opcode == 0x08) {  // load a CP register
+        if (available < 6) return 0;
+        const std::uint32_t value = word(at + 2);
+        if (cp[at[1]] != value) cp[at[1]] = value, ++cpChanges;
+        used = 6;
+    } else if (opcode == 0x10) {  // load XF registers: the count less one, then the first address
+        if (available < 5) return 0;
+        const std::uint32_t header = word(at + 1), count = (header >> 16) + 1;
+        if (available < 5 + count * 4) return 0;
+        const GxZoneScope zone(ZoneXf);
+        loadXf(header & 0xFFFF, count, at + 5, false);
+        used = 5 + count * 4;
+    } else {
+        used = execute(at, available);
+    }
+    if (!countCommands) return used;
+    const unsigned kind = opcode == 0x61 ? CommandBp : opcode == 0x08 ? CommandCp : opcode == 0x10 ? CommandXf : opcode >= 0x20 && opcode < 0x40 ? CommandXfIndexed
+                        : opcode == 0x40 ? CommandCall : opcode >= 0x80 ? CommandPrimitive : CommandOther;
+    if (used) commandCounts[kind] += kind == CommandBp ? used / 5 : 1, commandBytes[kind] += used;
+    return used;
+}
+
+// BP loads, a run at a time (most of a material's display list): the mask and the change counts stay in registers, and
+// only colours and events, whose handling reads them, go through loadBp.
+std::uint32_t GxCommandProcessor::bpRun(const std::uint8_t* at, std::uint32_t available) {
+    const GxZoneScope zone(ZoneBp);
+    std::uint32_t used = 0, mask = bpMask_, changes = 0;
+    for (; available - used >= 5 && at[used] == 0x61; used += 5) {
+        const std::uint32_t value = word(at + used + 1), address = value >> 24;
+        const std::uint8_t kind = bpKinds[address];
+        if (kind & (BpColour | BpEvent | BpMask)) {
+            bpMask_ = mask, bpChanges += changes, bpChangesBesideColors += changes, changes = 0;
+            loadBp(value);
+            mask = bpMask_;
+            continue;
+        }
+        const std::uint32_t data = (bp[address] & ~mask) | (value & mask);
+        mask = 0xFFFFFF;
+        if (bp[address] == data) continue;
+        bp[address] = data;
+        changes += kind & BpDrawn;
+    }
+    bpMask_ = mask, bpChanges += changes, bpChangesBesideColors += changes;
+    return used;
+}
+
 void GxCommandProcessor::run(const std::uint8_t* at, std::uint32_t size) {
     while (size) {
         const std::uint32_t used = command(at, size);
@@ -328,23 +380,8 @@ void GxCommandProcessor::run(const std::uint8_t* at, std::uint32_t size) {
     }
 }
 
-std::uint32_t GxCommandProcessor::command(const std::uint8_t* at, std::uint32_t available) {
-    const std::uint8_t opcode = at[0];
-    const std::uint32_t used = execute(at, available);
-    const unsigned kind = opcode == 0x61 ? CommandBp : opcode == 0x08 ? CommandCp : opcode == 0x10 ? CommandXf : opcode >= 0x20 && opcode < 0x40 ? CommandXfIndexed
-                        : opcode == 0x40 ? CommandCall : opcode >= 0x80 ? CommandPrimitive : CommandOther;
-    if (used) commandCounts[kind] += kind == CommandBp ? used / 5 : 1, commandBytes[kind] += used;
-    return used;
-}
-
 std::uint32_t GxCommandProcessor::execute(const std::uint8_t* at, std::uint32_t available) {
     const std::uint8_t opcode = at[0];
-    if (opcode == 0x61) {  // BP loads, a run at a time: most of a material's display list
-        const GxZoneScope zone(ZoneBp);
-        std::uint32_t used = 0;
-        while (available - used >= 5 && at[used] == 0x61) loadBp(word(at + used + 1)), used += 5;
-        return used;
-    }
     if (opcode == 0x00) {  // NOPs, a run at a time: J3D pads its display lists to 32 bytes with them
         std::uint32_t used = 1;
         while (used < available && !at[used]) ++used;
@@ -356,20 +393,6 @@ std::uint32_t GxCommandProcessor::execute(const std::uint8_t* at, std::uint32_t 
         if (!host_.copiesStay) host_.unsupported("the port's copy-mode command with no host for it", at[1]);
         else host_.copiesStay(at[1] != 0);
         return 2;
-    }
-    if (opcode == 0x08) {                           // load a CP register
-        if (available < 6) return 0;
-        const std::uint32_t value = word(at + 2);
-        if (cp[at[1]] != value) cp[at[1]] = value, ++cpChanges;
-        return 6;
-    }
-    if (opcode == 0x10) {  // load XF registers: the count less one, then the first address
-        if (available < 5) return 0;
-        const std::uint32_t header = word(at + 1), count = (header >> 16) + 1, address = header & 0xFFFF;
-        if (available < 5 + count * 4) return 0;
-        const GxZoneScope zone(ZoneXf);
-        loadXf(address, count, at + 5, false);
-        return 5 + count * 4;
     }
     if (opcode == 0x40) {  // call a display list at its physical address
         if (available < 9) return 0;
