@@ -607,7 +607,11 @@ unchanged. The renderer reads its target back for each copy and for `GXPeekZ`/`G
 EFB pixel to target index `sx * 240 + (239 - sy)`, checked against a live frame), quantised to the EFB's pixel
 format; depth reads back as raw D24S8 words, with the port's nearer-is-larger turned to the Wii's Z. Indirect
 texturing has no PICA counterpart (no dependent reads): a stage that only offsets its coordinates is drawn without
-the offset, with a one-time note, and set-ups that wrap, replace or chain coordinates stop by name. A frame whose
+the offset, with a one-time note, and set-ups that wrap or chain coordinates or bump alpha stop by name. One kind is
+left out instead, with a note and a count in the perf line ("primitives left out"): a stage whose coordinates the
+lookup replaces outright (`GX_ITW_0` both ways), a pure dependent read, which drawn would sample one texel everywhere.
+That is the depth-of-field blur's last pass (Flipswitch and others), which looks up a blend amount by each pixel's
+depth: the screen keeps its sharp image, with no blur by distance. A frame whose
 commands outgrow citro3d's 1 MB buffer is ended and begun again with the screen output detached. GX's scissor
 (BP 0x20/0x21, less the 342 offset) is scaled to the screen and set on the target the way citro3d's quarter turn
 wants it: left = 240 - (y + h), top = 400 - (x + w).

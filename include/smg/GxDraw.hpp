@@ -52,6 +52,9 @@ struct GxDrawState {
     int scissor[4] = {};  // left, top, right, bottom (exclusive), EFB pixels
     // A stage's indirect offset left out, its regular coordinates kept: the PICA has no dependent texture reads.
     bool indirectDropped = false;
+    // Why the draws under this state are left out (null if they aren't): a stage's coordinates replaced by an indirect
+    // lookup, which would read one texel everywhere instead.
+    const char* leftOut = nullptr;
     // The program reads TEV register C0 as the vertex colour, which then holds C0: a primitive whose C0 alone differs
     // (a particle's fading colour) joins the same draw instead of starting another.
     bool color0InVertex = false;

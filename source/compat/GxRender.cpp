@@ -215,7 +215,7 @@ struct Renderer {
         u32 meshDraws = 0, meshTriangles = 0, meshesMade = 0, citroDraws = 0;
         u32 pendingWhy[9] = {};  // mesh draws through citro3d after each kind of change (Pending)
         u32 meshInvalidated = 0, meshOverflows = 0, meshBudgetDrops = 0, meshMismatches = 0, flushesQueued = 0, texturesInvalidated = 0;
-        u32 meshesEvicted = 0;
+        u32 meshesEvicted = 0, leftOutDraws = 0;
         u32 mismatchWhy[5] = {};  // the key's words, the descriptor (CP 0x50/0x60), a format table, an array base, a stride
         u64 timed[6] = {};  // dev.gx_timing: CPU-path primitives (immediate, in lists), display lists (mesh draws), texture copies, movie, frame ends
         u64 cpuCopyTicks = 0;  // of the texture copies, those read back and encoded on the CPU
@@ -579,6 +579,11 @@ struct Renderer {
               const GxVertex* decoded = nullptr) {
         ++perf.primitives, perf.vertices += count;
         ensureState(gpu, true);
+        if (state_->leftOut) {
+            static bool noted = false;
+            if (!noted) std::fprintf(stderr, "The Wii GPU's drawing: %s is left out\n", state_->leftOut), noted = true;
+            return void(++perf.leftOutDraws);
+        }
         bool prepared;
         {
             const Step step(perf, 2);
@@ -1339,7 +1344,7 @@ struct Renderer {
             const Step step(perf, 2);
             prepared = pipeline.prepare(gpu, *state_, frame, 0x90, 0);
         }
-        if (!prepared) return ++perf.refused[GxVertexPipeline::MeshUnsupported], GxVertexPipeline::MeshUnsupported;
+        if (!prepared || state_->leftOut) return ++perf.refused[GxVertexPipeline::MeshUnsupported], GxVertexPipeline::MeshUnsupported;
         if (scissorEmpty) return GxVertexPipeline::MeshEmpty;
         if (const unsigned why = pipeline.meshEligible()) return ++perf.refused[why], why;
         const u64 lookup = stepStart();
@@ -1812,8 +1817,8 @@ struct Renderer {
         if (perf.meshesChecked) std::fprintf(stderr, "gx perf: meshes checked %lu, differing %lu\n", static_cast<unsigned long>(perf.meshesChecked),
                                              static_cast<unsigned long>(perf.meshesDiffering));
         std::fprintf(stderr, "gx perf: display lists refused by reason (per frame):%s; meshes invalidated %.1f, overflows %.1f, over budget %.1f, "
-                     "evicted %.1f, key mismatches %.1f, flushes queued %.1f; GX FIFO writes %.0f per frame; textures %zu, %lu invalidated\n", refusals.c_str(),
-                     perf.meshInvalidated / n, perf.meshOverflows / n, perf.meshBudgetDrops / n, perf.meshesEvicted / n, perf.meshMismatches / n, perf.flushesQueued / n,
+                     "evicted %.1f, key mismatches %.1f, primitives left out %.1f, flushes queued %.1f; GX FIFO writes %.0f per frame; textures %zu, %lu invalidated\n", refusals.c_str(),
+                     perf.meshInvalidated / n, perf.meshOverflows / n, perf.meshBudgetDrops / n, perf.meshesEvicted / n, perf.meshMismatches / n, perf.leftOutDraws / n, perf.flushesQueued / n,
                      (smgFifoWrites - perf.writesBefore) / n, textures.size(), static_cast<unsigned long>(perf.texturesInvalidated));
         if (perf.meshMismatches)
             std::fprintf(stderr, "gx perf: key mismatches by what changed (per frame): key %.1f, descriptor %.1f, format table %.1f, array base %.1f, "

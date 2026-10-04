@@ -92,6 +92,14 @@ void indirect() {
     smg::GxDraw wrapped;
     smg::buildGxDraw(gpu, drawn[0].kind, drawn[0].format, drawn[0].count, drawn[0].data.data(), {}, wrapped);
     check(wrapped.unsupported != nullptr, "one that wraps its coordinates stops by name");
+    gpu.bp[0x10] = 0x270 | 6 << 13 | 6 << 16;  // GX_ITW_0 both ways: the lookup is the whole coordinate, a dependent read
+    smg::GxDraw replaced;
+    smg::buildGxDraw(gpu, drawn[0].kind, drawn[0].format, drawn[0].count, drawn[0].data.data(), {}, replaced);
+    check(!replaced.unsupported && replaced.leftOut, "one the lookup replaces is left out, by name");
+    gpu.bp[0x10] = 0x270 | 6 << 13 | 6 << 16 | 1 << 20;  // the same, added to the previous stage's
+    smg::GxDraw chained;
+    smg::buildGxDraw(gpu, drawn[0].kind, drawn[0].format, drawn[0].count, drawn[0].data.data(), {}, chained);
+    check(chained.unsupported && !chained.leftOut, "but chained to another stage it still stops");
 }
 
 // GX lighting, by XF state as GXSetChanCtrl, GXSetChanMatColor, GXSetChanAmbColor and GXLoadLightObjImm leave it.

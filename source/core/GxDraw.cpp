@@ -81,7 +81,9 @@ void readTev(const GxCommandProcessor& gpu, GxDrawState& out) {
         s.konstAlpha = static_cast<std::uint8_t>(odd ? TEV_KSEL_GET_KASEL1(ksel) : TEV_KSEL_GET_KASEL0(ksel));
         // BP 0x10+: bias 4-6, bump alpha 7-8, matrix 9-12, S and T wraps 13-18, LOD 19, add the previous stage's 20.
         const std::uint32_t indirect = gpu.bp[0x10 + i];
-        if (indirect >> 7 & 3 || indirect >> 13 & 0x3F || indirect >> 20 & 1)
+        if ((indirect >> 13 & 0x3F) == (6 | 6 << 3) && !(indirect >> 7 & 3) && !(indirect >> 20 & 1))  // GX_ITW_0 both ways
+            out.leftOut = "a draw whose coordinates an indirect lookup replaces (a dependent read)";
+        else if (indirect >> 7 & 3 || indirect >> 13 & 0x3F || indirect >> 20 & 1)
             out.unsupported = "an indirect lookup that wraps, replaces or chains its coordinates, or bumps alpha";
         else if (indirect >> 9 & 0xF) out.indirectDropped = true;
         if (s.texMap < 8) m.textures[s.texMap] = s.texMap;
