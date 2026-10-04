@@ -171,8 +171,10 @@ struct Renderer {
         C3D_Tex texture{};
         const std::uint8_t* key = nullptr;
         unsigned generation = 0;
-        bool ready = false;
+        bool ready = false, topFirst = false;  // topFirst: Y2R's rows, which go in from the top
     } movie[2];
+    bool y2rTried = false, y2rOpen = false;
+    Handle y2rDone = 0;
     GxFrame frame{640, 480, true};
     bool indirectNoted = false, dstAlphaNoted = false;
     // dev.gx_dump: one frame's draws, copies and states listed in the log every minute of the game's clock.
@@ -2022,6 +2024,35 @@ struct Renderer {
         C3D_TexEnvBufUpdate(C3D_Both, 0);
     }
 
+    // Y2R, the 3DS's YUV converter, writes the frame into the texture's 8x8 tiles itself, a row of tiles per transfer.
+    bool convertByY2r(const std::uint8_t* y, const std::uint8_t* u, const std::uint8_t* v, unsigned width, unsigned height, C3D_Tex& texture) {
+        if (!y2rTried) {
+            y2rTried = true;
+            y2rOpen = R_SUCCEEDED(y2rInit()) && R_SUCCEEDED(Y2RU_SetTransferEndInterrupt(true)) && R_SUCCEEDED(Y2RU_GetTransferEndEvent(&y2rDone));
+            if (!y2rOpen) std::fprintf(stderr, "The Wii's THP movies: Y2R won't open, so their frames turn to RGB on the CPU\n");
+        }
+        if (!y2rOpen || width % 8 || height % 8 || width > texture.width) return false;
+        Y2RU_ConversionParams params{};
+        params.input_format = INPUT_YUV420_INDIV_8, params.output_format = OUTPUT_RGB_16_565, params.rotation = ROTATION_NONE;
+        params.block_alignment = BLOCK_8_BY_8, params.input_line_width = static_cast<s16>(width), params.input_lines = static_cast<s16>(height);
+        params.standard_coefficient = COEFFICIENT_ITU_R_BT_601, params.alpha = 0xFF;
+        const u32 luma = width * height;
+        svcFlushProcessDataCache(CUR_PROCESS_HANDLE, reinterpret_cast<u32>(y), luma);
+        svcFlushProcessDataCache(CUR_PROCESS_HANDLE, reinterpret_cast<u32>(u), luma / 4);
+        svcFlushProcessDataCache(CUR_PROCESS_HANDLE, reinterpret_cast<u32>(v), luma / 4);
+        GSPGPU_FlushDataCache(texture.data, texture.size);  // no dirty line left to land over what Y2R writes
+        svcClearEvent(y2rDone);
+        const s16 tileRow = static_cast<s16>(width * 8 * 2), gap = static_cast<s16>((texture.width - width) * 8 * 2);
+        if (R_FAILED(Y2RU_SetConversionParams(&params)) || R_FAILED(Y2RU_SetSendingY(y, luma, static_cast<s16>(width), 0)) ||
+            R_FAILED(Y2RU_SetSendingU(u, luma / 4, static_cast<s16>(width / 2), 0)) || R_FAILED(Y2RU_SetSendingV(v, luma / 4, static_cast<s16>(width / 2), 0)) ||
+            R_FAILED(Y2RU_SetReceiving(texture.data, luma * 2, tileRow, gap)) || R_FAILED(Y2RU_StartConversion()))
+            stop("Y2R refusing a movie frame");
+        // Its end event is sometimes never signalled (libctru's note), so a timeout falls back to asking.
+        if (R_FAILED(svcWaitSynchronization(y2rDone, 100'000'000)))
+            for (bool busy = true; R_SUCCEEDED(Y2RU_IsBusyConversion(&busy)) && busy;) svcSleepThread(1'000'000);
+        return true;
+    }
+
     // THPGXYuv2RgbDraw: a decoded frame's planes (smg::decodeThpVideo) turned to RGB once, drawn over the EFB rectangle the
     // game's quad covers, its colour replacing what is there (no blending, depth or alpha written).
     void movieFrame(const std::uint8_t* y, const std::uint8_t* u, const std::uint8_t* v, unsigned width, unsigned height, unsigned generation,
@@ -2038,8 +2069,8 @@ struct Renderer {
         if (!inFrame) begin();
         flushBatch();
         if (m.key != y || m.generation != generation) {
-            thpTiles565(y, u, v, width, height, static_cast<std::uint16_t*>(m.texture.data), tw, th);
-            C3D_TexFlush(&m.texture);
+            m.topFirst = convertByY2r(y, u, v, width, height, m.texture);
+            if (!m.topFirst) thpTiles565(y, u, v, width, height, static_cast<std::uint16_t*>(m.texture.data), tw, th), C3D_TexFlush(&m.texture);
             m.key = y, m.generation = generation;
         }
         roomFor(6);
@@ -2052,7 +2083,8 @@ struct Renderer {
             vertex.texcoord[0][0] = s, vertex.texcoord[0][1] = t;
             return vertex;
         };
-        const GxDrawVertex a = corner(x, top, 0, 0), b = corner(x + w, top, s1, 0), c = corner(x + w, top + h, s1, t1), d = corner(x, top + h, 0, t1);
+        const float tTop = m.topFirst ? 1 : 0, tBottom = m.topFirst ? 1 - t1 : t1;
+        const GxDrawVertex a = corner(x, top, 0, tTop), b = corner(x + w, top, s1, tTop), c = corner(x + w, top + h, s1, tBottom), d = corner(x, top + h, 0, tBottom);
         unsigned n = 0;
         for (const GxDrawVertex& vertex : {a, b, c, a, c, d}) out[n++] = vertex;
         for (int stage = 0; stage < int(CombinerProgram::MaxStages); ++stage) C3D_TexEnvInit(C3D_GetTexEnv(stage));
