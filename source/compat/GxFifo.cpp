@@ -1,6 +1,7 @@
 // Where the SDK's own GX writes: its register blocks are memory it reads back, and its FIFO feeds the port's command
 // processor, whose pixel-engine events raise the Wii's interrupts; anything it cannot take yet stops by name.
 #include <3ds.h>
+#include <smg/FreeStore.hpp>
 #include <smg/GxCommands.hpp>
 #include <smg/GxFifoWrite.h>
 #include <smg/GxRender.hpp>
@@ -395,15 +396,14 @@ extern "C" void smgWaitDrawSyncs() {
     OSRestoreInterrupts(OSDisableInterrupts());
 }
 
-// Display copies (a frame's last command) the game has sent and the render thread has read. A drawn step waits until
-// every frame before it is out, so the render thread is at most a frame behind and draws it while the game runs the
-// next two logic steps; what those steps rewrite that a frame reads goes into the FIFO when sent (J3D's matrices and
-// display lists) or is double-buffered by drawn frame (smgSwapSinceDrawn).
+// A drawn step waits only for the frames before it, so a frame draws while the game runs the next two steps: what those
+// rewrite goes into the FIFO when sent (J3D's matrices and lists) or is double-buffered by drawn frame.
 namespace {
 std::atomic<s32> sCopiesIssued{0}, sCopiesRead{0};
 u32 sDrawnFrames = 0;
 LightLock sStampLock = 1;
-std::unordered_map<const void*, u32> sStamps;
+// From the free store: plain new would take the scene's heap, gone at the next scene while the map kept its nodes.
+std::unordered_map<const void*, u32, std::hash<const void*>, std::equal_to<const void*>, smg::FreeStoreAllocator<std::pair<const void* const, u32>>> sStamps;
 }
 void smgDisplayCopyIssued() { sCopiesIssued.fetch_add(1, std::memory_order_relaxed); }
 void smgDisplayCopyRead() {
