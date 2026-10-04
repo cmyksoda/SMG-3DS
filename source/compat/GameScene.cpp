@@ -25,22 +25,22 @@ CollisionCode* getSceneCollisionCode() {
     return MR::getCollisionDirector()->mCode;
 }
 
-// Where the game's state machines are, every few seconds, for runs that no longer stop: the nerves are static objects
-// that tools/heartbeat-names.sh names from the ELF. Called from the game thread at every 300th frame (smgFramePhase).
 extern "C" BOOL smgDevWarp(float* to, int* seconds);  // source/compat/Kpad.cpp
 
-// dev.warp: once a run, the given seconds after Mario first appears, he's moved to the given place.
+// dev.warp: once a run, the given seconds after Mario first appears (smgFramePhase calls this every logic step).
 extern "C" void smgDevWarpStep() {
-    static int frames = 0;
+    static int steps = 0;
     float to[3];
     int seconds = 0;
-    if (frames < 0 || !smgDevWarp(to, &seconds) || !MR::isExistSceneObj(SceneObj_MarioHolder)) return;
-    if (!MR::getSceneObj< MarioHolder >(SceneObj_MarioHolder)->getMarioActor() || ++frames < seconds * 30) return;
+    if (steps < 0 || !smgDevWarp(to, &seconds) || !MR::isExistSceneObj(SceneObj_MarioHolder)) return;
+    if (!MR::getSceneObj< MarioHolder >(SceneObj_MarioHolder)->getMarioActor() || ++steps < seconds * 60) return;
     MR::setPlayerPos(TVec3f(to[0], to[1], to[2]));
     OSReport("dev.warp: Mario to (%.0f, %.0f, %.0f)\n", to[0], to[1], to[2]);
-    frames = -1;
+    steps = -1;
 }
 
+// Where the game's state machines are, every few seconds, for runs that no longer stop: the nerves are static objects
+// that tools/heartbeat-names.sh names from the ELF. Called from the game thread every 300th logic step (smgFramePhase).
 extern "C" void smgHeartbeat() {
     GameSystem* system = SingletonHolder< GameSystem >::get();
     if (!system || !system->mSpine) return;
