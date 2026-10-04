@@ -125,7 +125,7 @@ private:
     std::uint32_t execute(const std::uint8_t* at, std::uint32_t available);
     void run(const std::uint8_t* at, std::uint32_t size);
     std::uint32_t bpRun(const std::uint8_t* at, std::uint32_t available);
-    void loadBp(std::uint32_t value);
+    void loadEvent(std::uint32_t value);
     void loadXf(std::uint32_t address, std::uint32_t count, const std::uint8_t* from, bool native);
 
     Host host_;

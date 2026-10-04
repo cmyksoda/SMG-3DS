@@ -289,28 +289,13 @@ void GxCommandProcessor::loadXf(std::uint32_t address, std::uint32_t count, cons
     xfLightChanges += lights;
 }
 
-[[gnu::always_inline]] inline void GxCommandProcessor::loadBp(std::uint32_t value) {
+// A BP load that raises a pixel-engine event (draw done, a token, a copy), the state current for the event's handler.
+void GxCommandProcessor::loadEvent(std::uint32_t value) {
     const std::uint32_t address = value >> 24;
-    const std::uint8_t kind = bpKinds[address];
-    if (kind & BpMask) {  // the mask for the next load only
-        bpMask_ = value & 0xFFFFFF;
-        return;
-    }
     const std::uint32_t data = (bp[address] & ~bpMask_) | (value & bpMask_);
     bpMask_ = 0xFFFFFF;
-    const bool changed = (kind & BpDrawn) && bp[address] != data;
-    bpChanges += changed;
+    bpChanges += (bpKinds[address] & BpDrawn) && bp[address] != data;
     bp[address] = data;
-    if (!(kind & (BpColour | BpEvent))) return void(bpChangesBesideColors += changed);
-    if (kind & BpColour) {
-        const bool konst = data >> 23 & 1;
-        std::uint32_t& value = (konst ? tevKonst : tevColor)[address - 0xE0];
-        if (value != data) {
-            if (!konst && (address == 0xE4 || address == 0xE5)) ++color1Changes;
-            else if (konst || (address != 0xE2 && address != 0xE3)) ++bpChangesBesideColors;
-        }
-        value = data;
-    }
     if (address == 0x45) host_.drawDone();                                    // PE_DONE
     else if (address == 0x47 || address == 0x48) host_.token(static_cast<std::uint16_t>(data), address == 0x48);  // PE_TOKEN(_INT)
     else if (address == 0x52 && host_.copy) host_.copy(data);
@@ -345,31 +330,40 @@ void GxCommandProcessor::loadXf(std::uint32_t address, std::uint32_t count, cons
 }
 
 // BP loads, a run at a time (most of a material's display list): the mask and the change counts stay in registers, and
-// only colours and events, whose handling reads them, go through loadBp.
+// only events, whose handlers may read them, go through loadEvent.
 std::uint32_t GxCommandProcessor::bpRun(const std::uint8_t* at, std::uint32_t available) {
     const GxZoneScope zone(ZoneBp);
-    std::uint32_t used = 0, mask = bpMask_, changes = 0;
-    for (; available - used >= 5 && at[used] == 0x61; used += 5) {
-        const std::uint32_t value = word(at + used + 1), address = value >> 24;
+    const std::uint8_t* const end = at + available;
+    const std::uint8_t* from = at;
+    std::uint32_t mask = bpMask_, changes = 0, beside = 0, color1 = 0;
+    for (; end - from >= 5 && from[0] == 0x61; from += 5) {
+        const std::uint32_t value = word(from + 1), address = value >> 24;
         const std::uint8_t kind = bpKinds[address];
         if (kind & BpMask) {  // the mask for the next load only
             mask = value & 0xFFFFFF;
             continue;
         }
-        if (kind & (BpColour | BpEvent)) {
-            bpMask_ = mask, bpChanges += changes, bpChangesBesideColors += changes, changes = 0;
-            loadBp(value);
+        if (kind & BpEvent) {
+            bpMask_ = mask, bpChanges += changes, bpChangesBesideColors += beside, color1Changes += color1;
+            changes = beside = color1 = 0;
+            loadEvent(value);
             mask = bpMask_;
             continue;
         }
-        const std::uint32_t data = (bp[address] & ~mask) | (value & mask);
+        const std::uint32_t old = bp[address], data = mask == 0xFFFFFF ? value & 0xFFFFFF : (old & ~mask) | (value & mask);
         mask = 0xFFFFFF;
-        if (bp[address] == data) continue;
-        bp[address] = data;
-        changes += kind & BpDrawn;
+        if (old != data) bp[address] = data, changes += kind & BpDrawn, beside += !(kind & BpColour) && (kind & BpDrawn);
+        if (!(kind & BpColour)) continue;
+        // 0xE0-0xE7 hold a TEV colour register or a konst colour by their type bit: the last write of each kind.
+        const bool konst = data >> 23 & 1;
+        std::uint32_t& colour = (konst ? tevKonst : tevColor)[address - 0xE0];
+        if (colour == data) continue;
+        if (!konst && (address == 0xE4 || address == 0xE5)) ++color1;
+        else if (konst || (address != 0xE2 && address != 0xE3)) ++beside;
+        colour = data;
     }
-    bpMask_ = mask, bpChanges += changes, bpChangesBesideColors += changes;
-    return used;
+    bpMask_ = mask, bpChanges += changes, bpChangesBesideColors += beside, color1Changes += color1;
+    return std::uint32_t(from - at);
 }
 
 void GxCommandProcessor::run(const std::uint8_t* at, std::uint32_t size) {
