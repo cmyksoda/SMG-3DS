@@ -18,6 +18,7 @@ extern "C" void smgRaiseInterrupt(__OSInterrupt interrupt);
 extern "C" void smgDrawSyncRead();
 extern "C" void smgDisplayCopyRead();
 extern "C" int smgDevGxInline();  // source/compat/Kpad.cpp
+extern "C" void smgMarkGameThread();  // source/compat/Os.cpp
 // GX words written so far, for the renderer's perf line (source/compat/GxRender.cpp).
 extern "C" {
 unsigned smgFifoWrites = 0;
@@ -244,6 +245,7 @@ void startRenderThread() {
 
 void begin(void* self) {
     smgFifoThread = self;
+    smgMarkGameThread();
     sMainStream = streamOf(reinterpret_cast<u32>(self));
     startRenderThread();
     if (sRenderThread) smgFifoAt = sPublishFrom = sRing, smgFifoEnd = sRing + Chunk;

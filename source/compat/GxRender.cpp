@@ -33,6 +33,7 @@
 extern "C" void smgHeartbeat();          // source/compat/GameScene.cpp
 extern "C" void smgDevWarpStep();       // source/compat/GameScene.cpp
 extern "C" unsigned smgMovieDecodes();  // source/compat/Thp.cpp
+extern "C" void smgCpuWaits(unsigned long long* game, unsigned long long* others);  // source/compat/Os.cpp
 extern "C" unsigned smgFifoWrites;       // source/compat/GxFifo.cpp
 extern "C" int smgDevGxDump();           // source/compat/Kpad.cpp
 extern "C" int smgDevGxNull();
@@ -1773,6 +1774,10 @@ struct Renderer {
                      "key mismatches %.1f, flushes queued %.1f; GX FIFO writes %.0f per frame; textures %zu, %lu invalidated\n", refusals.c_str(),
                      perf.meshInvalidated / n, perf.meshOverflows / n, perf.meshBudgetDrops / n, perf.meshMismatches / n, perf.flushesQueued / n,
                      (smgFifoWrites - perf.writesBefore) / n, textures.size(), static_cast<unsigned long>(perf.texturesInvalidated));
+        unsigned long long gameWaits = 0, otherWaits = 0;
+        smgCpuWaits(&gameWaits, &otherWaits);
+        std::fprintf(stderr, "gx perf: waits to turn interrupts off, per frame: the game's thread %.2f ms, the others %.2f ms\n",
+                     gameWaits * 1000.0 / SYSCLOCK_ARM11 / n, otherWaits * 1000.0 / SYSCLOCK_ARM11 / n);
         perf = Perf{};
         perf.since = now, perf.listsBefore = lastGpu->displayListCalls, perf.listBytesBefore = lastGpu->displayListBytes;
     }

@@ -57,7 +57,8 @@ using CpuLock = std::mutex;
 // Interrupts off is the Wii's one CPU held: nothing else ran meanwhile, so a thread turning them off waits out any
 // other thread's off-section, handler or alarm. Each thread has its own state, as each Wii thread had its MSR.
 CpuLock sCpu;
-thread_local bool tOff = false;
+thread_local bool tOff = false, tGame = false;
+std::atomic<unsigned long long> sCpuWaits[2];  // ticks spent waiting to turn interrupts off: the game's thread, the others
 s32 sSchedulerDisabled = 0;
 void deliverPendingInterrupts();
 } // namespace
@@ -65,9 +66,25 @@ void deliverPendingInterrupts();
 // The previous state comes back, as the SDK returns it, so nested sections restore what they found.
 BOOL OSDisableInterrupts() {
     if (tOff) return FALSE;
+#if __has_include(<3ds.h>)
+    if (!sCpu.try_lock()) {
+        const u64 start = svcGetSystemTick();
+        sCpu.lock();
+        sCpuWaits[!tGame] += svcGetSystemTick() - start;
+    }
+#else
     sCpu.lock();
+#endif
     tOff = true;
     return TRUE;
+}
+
+// The game's own thread (GXInit's, source/compat/GxFifo.cpp), whose waits the perf line tells apart.
+extern "C" void smgMarkGameThread() { tGame = true; }
+
+// For the renderer's perf line: the ticks each side waited since the last call.
+extern "C" void smgCpuWaits(unsigned long long* game, unsigned long long* others) {
+    *game = sCpuWaits[0].exchange(0), *others = sCpuWaits[1].exchange(0);
 }
 
 // Turning interrupts back on delivers what was raised while they were off, as the Wii's CPU takes them.
