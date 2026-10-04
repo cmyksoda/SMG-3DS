@@ -665,6 +665,50 @@ void litMesh() {
     }
 }
 
+// A lit vertex whose color is its ambient (GX_SRC_VTX for the ambient): the mesh carries the color and the shader's
+// sums start from it, as the CPU path's do; here the color's ambient comes from the vertex and the alpha's doesn't.
+void litMeshAmbientFromVertex() {
+    auto owned = std::make_unique<smg::GxCommandProcessor>(host());
+    smg::GxCommandProcessor& gpu = *owned;
+    Stream s;
+    clearState(s);
+    s.cp(0x50, 1 << 9 | 1 << 11 | 1 << 13), s.cp(0x60, 0), s.cp(0x70, 1 | 4 << 1 | 4 << 10 | 1 << 13 | 5 << 14);  // + color, RGBA8
+    s.xff(0x400, {1, 0, 0, 0, 1, 0, 0, 0, 1});
+    s.xf(0x103F, {0}), s.xf(0x1009, {1});
+    s.bp(0x00000010), s.bp(0x28000000), s.bp(0xC008FFFA), s.bp(0xC108FFD0);
+    s.xf(0x100C, {0xC0A08060}), s.xf(0x100A, {0x10203040});
+    s.xf(0x100E, {1 << 1 | 1 << 2 | 2 << 7 | 1 << 6}), s.xf(0x1010, {1 << 1 | 1 << 2 | 2 << 7});
+    s.xf(0x600 + 3, {0x40302010});
+    s.xff(0x600 + 4, {1, 0, 0, 1, 0, 0, 300, 100, 200, 0, 0, 0});
+    gpu.put(s.bytes.data(), static_cast<std::uint32_t>(s.bytes.size()));
+    const float vertices[3][6] = {{100, 100, -0.5f, 0, 0, 1}, {500, 100, -0.5f, 0.3f, 0.4f, 0.866f}, {300, 400, -0.5f, -0.6f, 0, 0.8f}};
+    const std::uint8_t colors[3][4] = {{0x20, 0x40, 0x60, 0x80}, {0x50, 0x10, 0x30, 0x70}, {0x05, 0x60, 0x15, 0x30}};
+    Stream list;
+    list.u8(0x90), list.u16(3);
+    for (int i = 0; i < 3; ++i) {
+        for (float f : vertices[i]) list.f32(f);
+        for (std::uint8_t c : colors[i]) list.u8(c);
+    }
+    while (list.bytes.size() % 32) list.u8(0);
+    smg::GxDraw cpu;
+    smg::buildGxDraw(gpu, 0x90, 0, 3, list.bytes.data() + 3, {}, cpu);
+    smg::GxDrawState state;
+    smg::readGxDrawState(gpu, state);
+    smg::GxVertexPipeline pipeline;
+    smg::GxMesh mesh;
+    smg::GxMeshUniforms u;
+    const bool built = pipeline.prepare(gpu, state, {}, 0x90, 0) && pipeline.meshEligible() == smg::GxVertexPipeline::MeshOk &&
+                       pipeline.buildMesh(list.bytes.data(), static_cast<std::uint32_t>(list.bytes.size()), mesh) == smg::GxVertexPipeline::MeshOk;
+    bool same = built && cpu.triangles.size() == 3 && mesh.vertices.size() == 3;
+    if (same) pipeline.meshUniforms(mesh.slots, mesh.groups[0], u);
+    for (unsigned i = 0; same && i < 3; ++i) {
+        float shaded[4];
+        shaderLighting(u, mesh.vertices[i], shaded);
+        for (int c = 0; same && c < 4; ++c) same = std::abs(int(std::lround(shaded[c] * 255)) - int(cpu.triangles[i].color[c])) <= 2;
+    }
+    check(same, "a lit mesh whose ambient is its vertex color shades as the CPU path does");
+}
+
 // A lit model with ten bones (GX's most): its mesh splits into groups of at most nine slots, and each vertex drawn
 // through its group's uniforms lands, and is lit, where the CPU path puts it.
 void litMeshGroups() {
@@ -966,6 +1010,7 @@ int runGxDrawTests() {
     meshFromDisplayList();
     litMesh();
     litMeshGroups();
+    litMeshAmbientFromVertex();
     litMeshSlotTexgens();
     linesAndPoints();
     meshRefresh();

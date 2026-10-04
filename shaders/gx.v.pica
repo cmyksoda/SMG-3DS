@@ -29,6 +29,8 @@
 .bool slotgen0
 .bool slotgen1
 .bool slotgen2
+.bool ambrgb
+.bool ambalpha
 .out outpos position
 .out outclr color
 .out outtc0 texcoord0
@@ -143,6 +145,12 @@
     rsq r4.w, r4.w
     mul r4.xyz, r4.xyz, r4.www
     mov r5, ambient
+    ifu ambrgb
+        mul r5.xyz, scale.xxx, inclr.xyz
+    .end
+    ifu ambalpha
+        mul r5.w, scale.x, inclr.w
+    .end
     ifu anylight
         for lightloop
             mov r10, light[aL+4]

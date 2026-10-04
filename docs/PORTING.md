@@ -817,6 +817,13 @@ now keeps such a texgen when its vertices all pick the same kind: the shader tak
 transform alone (with two rows, the third output's column folded into the offset, since GX makes it one). A paired
 unit adds three rows to each slot, so a group holds six slots, or four with two.
 
+**Ambient from the vertex.** A lit channel can take its ambient from the vertex color instead of a register (GX_SRC_VTX
+for the ambient). Those lists took the CPU path: at Dusty Dune about 16,900 lit vertices a frame, and 8 to 11 fps. The
+mesh now carries the color whenever a lit part's ambient comes from it, and the shader starts that part's sum from
+it (`ambrgb`, `ambalpha`), as `GxLighting::apply` does; Dusty Dune runs at 24 to 30. `dev.gx_check` compares positions
+against w, as the screen sees them: a far mesh's rounding (0.015 at a w of 48,000) is large in clip units but far
+below a pixel.
+
 **Mesh memory, and meshes that move.** Meshes live in linear memory under a 12 MB budget. A new one past it evicts
 the meshes drawn least recently (never one drawn this frame or the last, which the GPU may still read), and a list
 refused for room is not tried again for 15 frames. Some lists keep their bytes while their arrays move: J3D's deformed

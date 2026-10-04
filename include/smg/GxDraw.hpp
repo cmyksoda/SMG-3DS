@@ -148,7 +148,7 @@ struct GxMeshUniforms {
     // light entry (up to four) its colour (0-1, zero in a part it doesn't light); position prescaled, a0; direction,
     // a1; a2, k0, k1, k2 (one and zeros unattenuated); -prescale, 1/prescale (a far light's position scaled to about
     // one); spot (else specular), diffuse, the cosine's floor (0 clamped, -2 signed).
-    bool lit = false, rgbLit = false, alphaLit = false;
+    bool lit = false, rgbLit = false, alphaLit = false, rgbAmbientFromVertex = false, alphaAmbientFromVertex = false;
     unsigned lights = 0;
     float light[4][6][4];
     float toClip[16];
@@ -200,14 +200,13 @@ public:
     // After prepare: whether display lists under this state can take the GPU path (unlit or riding colour, folded
     // texgens with a matrix for the whole primitive, no depth texture), and the mesh a list decodes to (false when it
     // holds anything but primitives, or a matrix index that doesn't name a whole slot of the ten).
-    // Why a mesh can't be used (0 when it can): the state (1 unsupported, 2 depth texture, 3 lit with ambient from the
-    // vertex, 4 lit with C0 riding in the vertex colour, 5 more than four light entries, 6 a texgen's matrix chosen per
-    // vertex, other than its slot's modelview or paired matrix on a lit, skinned list, 12 a texgen normalized before its
-    // second matrix) or the list (7 a command other than a primitive, 8 a
-    // matrix index naming no whole slot, 9 more vertices than 16-bit indices reach, 10 nothing drawn), or the renderer's
-    // choice (11 small enough to join the CPU path's batch, 13 no mesh memory left beside the last two frames' meshes, 14
-    // a moving mesh's refresh finding no room in the frame's arena).
-    enum MeshRefusal : unsigned { MeshOk, MeshUnsupported, MeshDepthTexture, MeshLit, MeshLitColor0, MeshLights, MeshTexgen, MeshCommand,
+    // Why a mesh can't be used (0 when it can): the state (1 unsupported, 2 depth texture, 3 lit with C0 riding in the
+    // vertex color, 4 more than four light entries, 5 a texgen's matrix chosen per vertex, other than its slot's
+    // modelview or paired matrix on a lit, skinned list, 11 a texgen normalized before its second matrix) or the list (6 a
+    // command other than a primitive, 7 a matrix index naming no whole slot, 8 more vertices than 16-bit indices reach, 9
+    // nothing drawn), or the renderer's choice (10 small enough to join the CPU path's batch, 12 no mesh memory left
+    // beside the last two frames' meshes, 13 a moving mesh's refresh finding no room in the frame's arena).
+    enum MeshRefusal : unsigned { MeshOk, MeshUnsupported, MeshDepthTexture, MeshLitColor0, MeshLights, MeshTexgen, MeshCommand,
                                   MeshMatrixIndex, MeshTooLarge, MeshEmpty, MeshSmall, MeshNormalize, MeshBudget, MeshMoving, MeshRefusals };
     unsigned meshEligible() const;
     unsigned buildMesh(const std::uint8_t* list, std::uint32_t size, GxMesh& mesh) const;

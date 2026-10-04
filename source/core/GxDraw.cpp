@@ -271,6 +271,8 @@ void gxMeshModel(const GxMeshUniforms& u, const GxMeshVertex& v, float clip[4], 
     const float nl = dot3(n, n) > 0 ? 1 / std::sqrt(dot3(n, n)) : 0;
     for (float& c : n) c *= nl;
     float sum[4] = {u.ambient[0], u.ambient[1], u.ambient[2], u.ambient[3]};
+    for (int c = 0; c < 4; ++c)
+        if (c < 3 ? u.rgbAmbientFromVertex : u.alphaAmbientFromVertex) sum[c] = v.color[c] / 255.0f;
     for (unsigned l = 0; l < u.lights; ++l) {
         const float(&L)[6][4] = u.light[l];
         float t[3];
@@ -878,7 +880,9 @@ unsigned lightEntries(const GxLighting& lighting, LightEntry out[4]) {
 } // namespace
 
 bool GxVertexPipeline::meshColorFromVertex() const {
-    return channel_ && !color0InVertex_ && (lighting_.parts[0].materialFromVertex || lighting_.parts[1].materialFromVertex);
+    const GxLighting::Part* parts = lighting_.parts;
+    return channel_ && !color0InVertex_ &&
+           (parts[0].materialFromVertex || parts[1].materialFromVertex || (lit_ && (parts[0].ambientFromVertex || parts[1].ambientFromVertex)));
 }
 
 unsigned GxVertexPipeline::meshEligible() const {
@@ -889,10 +893,7 @@ unsigned GxVertexPipeline::meshEligible() const {
     if (lit_) {
         // The shader runs up to four light entries, each a light under one part's settings (an actor lights its colour
         // with lights 0 and 1, its alpha with light 2 and other settings).
-        const GxLighting::Part& color = lighting_.parts[0];
-        const GxLighting::Part& alpha = lighting_.parts[1];
         if (color0InVertex_) return MeshLitColor0;
-        if ((color.lit && color.ambientFromVertex) || (alpha.lit && alpha.ambientFromVertex)) return MeshLit;
         LightEntry entries[4];
         if (lightEntries(lighting_, entries) > 4) return MeshLights;
     }
@@ -1119,6 +1120,7 @@ void GxVertexPipeline::meshUniforms(std::uint16_t slots, const GxMesh::Group& gr
     if (lit_) {
         meshSlotUniforms(group, out);
         out.rgbLit = lighting_.parts[0].lit, out.alphaLit = lighting_.parts[1].lit;
+        out.rgbAmbientFromVertex = lighting_.parts[0].ambientFromVertex, out.alphaAmbientFromVertex = lighting_.parts[1].ambientFromVertex;
         LightEntry entries[4];
         out.lights = std::min(lightEntries(lighting_, entries), 4u);
         for (unsigned e = 0; e < out.lights; ++e) {

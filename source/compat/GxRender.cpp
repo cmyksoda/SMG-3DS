@@ -185,7 +185,7 @@ struct Renderer {
     int clipUniform = -1, texrowUniform = -1, transformUniform = -1, projectUniform[3] = {-1, -1, -1};
     int materialUniform = -1, rgbRegUniform = -1, alphaRegUniform = -1;
     int ambientUniform = -1, lightUniform = -1, lightLoopUniform = -1, litUniform = -1, rgbLitUniform = -1, alphaLitUniform = -1, anyLightUniform = -1;
-    int slotRowUniform = -1, slotGenUniform[3] = {-1, -1, -1};
+    int slotRowUniform = -1, slotGenUniform[3] = {-1, -1, -1}, ambientRgbUniform = -1, ambientAlphaUniform = -1;
     struct CachedMesh {
         std::vector<u32> key;
         std::vector<std::pair<std::uint8_t, u32>> depends;  // the CP registers it was decoded under, and their values
@@ -292,6 +292,7 @@ struct Renderer {
         };
         ambientUniform = find("ambient"), lightUniform = find("light"), lightLoopUniform = find("lightloop"), litUniform = find("lit");
         rgbLitUniform = find("rgblit"), alphaLitUniform = find("alphalit"), anyLightUniform = find("anylight");
+        ambientRgbUniform = find("ambrgb"), ambientAlphaUniform = find("ambalpha");
         slotRowUniform = find("slotrow"), slotGenUniform[0] = find("slotgen0"), slotGenUniform[1] = find("slotgen1"), slotGenUniform[2] = find("slotgen2");
         if (clipUniform < 0 || texrowUniform < 0 || transformUniform < 0 || projectUniform[2] < 0 || materialUniform < 0 || alphaRegUniform < 0)
             stop("the GX shader's uniforms");
@@ -1555,8 +1556,10 @@ struct Renderer {
             float clip[4], color[4], tex[CombinerProgram::MaxUnits][2];
             gxMeshModel(u, mesh.vertices[j], clip, color, tex);
             const char* what = nullptr;
+            // Against w, as the screen sees it: a far mesh's rounding is large in clip units and far below a pixel.
             for (int r = 0; r < 4 && !what; ++r)
-                if (off(clip[r], want.position[r])) what = "position";
+                if (std::fabs(clip[r] - want.position[r]) > 1e-4f * std::max({1.0f, std::fabs(want.position[3]), std::fabs(want.position[r])}))
+                    what = "position";
             for (int c = 0; c < 4 && !what; ++c)
                 if (std::abs(int(std::lround(color[c] * 255)) - int(want.color[c])) > 2) what = "colour";
             for (unsigned t = 0; t < u.units && !what; ++t)
@@ -1600,6 +1603,8 @@ struct Renderer {
             boolean(anyLightUniform, u.lights != 0);
             boolean(rgbLitUniform, u.rgbLit);
             boolean(alphaLitUniform, u.alphaLit);
+            boolean(ambientRgbUniform, u.rgbAmbientFromVertex);
+            boolean(ambientAlphaUniform, u.alphaAmbientFromVertex);
         }
         for (unsigned unit = 0; unit < u.units; ++unit) {
             for (int r = 0; r < 3; ++r) {
