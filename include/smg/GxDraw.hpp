@@ -185,11 +185,12 @@ public:
     // texgens with a matrix for the whole primitive, no depth texture), and the mesh a list decodes to (false when it
     // holds anything but primitives, or a matrix index that doesn't name a whole slot of the ten).
     // Why a mesh can't be used (0 when it can): the state (1 unsupported, 2 depth texture, 3 lit with ambient from the
-    // vertex, 4 lit with C0 riding in the vertex colour, 5 more than four light entries, 6 texgen) or the list (7 a
-    // command other than a primitive, 8 a matrix index naming no whole slot, 9 more vertices than 16-bit indices reach,
-    // 10 nothing drawn), or the renderer's choice (11 small enough to join the CPU path's batch).
+    // vertex, 4 lit with C0 riding in the vertex colour, 5 more than four light entries, 6 a texgen's matrix chosen per
+    // vertex, 12 a texgen normalized before its second matrix) or the list (7 a command other than a primitive, 8 a
+    // matrix index naming no whole slot, 9 more vertices than 16-bit indices reach, 10 nothing drawn), or the renderer's
+    // choice (11 small enough to join the CPU path's batch).
     enum MeshRefusal : unsigned { MeshOk, MeshUnsupported, MeshDepthTexture, MeshLit, MeshLitColor0, MeshLights, MeshTexgen, MeshCommand,
-                                  MeshMatrixIndex, MeshTooLarge, MeshEmpty, MeshSmall, MeshRefusals };
+                                  MeshMatrixIndex, MeshTooLarge, MeshEmpty, MeshSmall, MeshNormalize, MeshRefusals };
     unsigned meshEligible() const;
     unsigned buildMesh(const std::uint8_t* list, std::uint32_t size, GxMesh& mesh) const;
     // The array memory a list's primitives index, [lo, hi), without decoding them: false for a list buildMesh refuses
@@ -207,6 +208,8 @@ public:
     // Prepares that read the state whole, folds made, and lighting read (for the perf line).
     std::uint32_t fullPrepares = 0, lightingReads = 0;
     mutable std::uint32_t foldsMade = 0;
+    // Unfolded texgens' vertices (for the perf line): a per-vertex matrix that is the position's, or another; normalized.
+    mutable std::uint32_t texMatrixShared = 0, texMatrixOwn = 0, texgensNormalized = 0;
 
 private:
     struct TexGen {

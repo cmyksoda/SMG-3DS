@@ -667,6 +667,8 @@ void GxVertexPipeline::texgen(const TexGen& t, const GxVertex& v, float st[2]) c
         return;
     }
     const std::uint32_t index = t.perVertexMatrix ? v.texMatrixIndex[t.coord] : t.matrix;
+    if (t.perVertexMatrix) ++(index == v.matrixIndex ? texMatrixShared : texMatrixOwn);
+    texgensNormalized += t.dual && t.normalize;
     c[0] = 0, c[1] = 0, c[2] = 1;
     for (int r = 0; r < t.rows; ++r)
         c[r] = matrix(index + r, 0) * in[0] + matrix(index + r, 1) * in[1] + matrix(index + r, 2) * in[2] + matrix(index + r, 3) * in[3];
@@ -815,7 +817,9 @@ unsigned GxVertexPipeline::meshEligible() const {
         if (lightEntries(lighting_, entries) > 4) return MeshLights;
     }
     for (unsigned u = 0; u < units_; ++u)
-        if (!texgens_[u].folded || texgens_[u].perVertexMatrix) return MeshTexgen;
+        if (texgens_[u].perVertexMatrix) return MeshTexgen;
+    for (unsigned u = 0; u < units_; ++u)
+        if (!texgens_[u].folded) return MeshNormalize;
     return MeshOk;
 }
 
