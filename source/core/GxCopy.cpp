@@ -24,7 +24,6 @@ std::uint8_t luma(const std::array<std::uint8_t, 4>& c) { return static_cast<std
 
 const char* readTextureCopy(const GxCommandProcessor& gpu, std::uint32_t command, GxTextureCopy& out) {
     if (PE_COPY_CMD_GET_OPCODE(command)) return "a display copy taken as a texture copy";
-    if (PE_CONTROL_GET_PIXTYPE(gpu.bp[0x43]) == 3) return "an EFB depth copy";
     const std::uint32_t source = gpu.bp[0x49], size = gpu.bp[0x4A], filter0 = gpu.bp[0x53], filter1 = gpu.bp[0x54];
     out = {};
     out.x = PE_COPY_SRC_ADDR_GET_X(source), out.y = PE_COPY_SRC_ADDR_GET_Y(source);
@@ -36,6 +35,7 @@ const char* readTextureCopy(const GxCommandProcessor& gpu, std::uint32_t command
     out.halfScale = PE_COPY_CMD_GET_MIP_MAP_FILTER(command);
     out.clear = PE_COPY_CMD_GET_CLEAR(command);
     out.clampTop = PE_COPY_CMD_GET_CLAMP_TOP(command), out.clampBottom = PE_COPY_CMD_GET_CLAMP_BOTTOM(command);
+    out.depth = PE_CONTROL_GET_PIXTYPE(gpu.bp[0x43]) == 3;
     const std::uint32_t taps[7] = {PE_COPY_VFILTER0_GET_COEFF0(filter0), PE_COPY_VFILTER0_GET_COEFF1(filter0), PE_COPY_VFILTER0_GET_COEFF2(filter0),
                                    PE_COPY_VFILTER0_GET_COEFF3(filter0), PE_COPY_VFILTER1_GET_COEFF4(filter1), PE_COPY_VFILTER1_GET_COEFF5(filter1),
                                    PE_COPY_VFILTER1_GET_COEFF6(filter1)};
@@ -43,7 +43,10 @@ const char* readTextureCopy(const GxCommandProcessor& gpu, std::uint32_t command
     out.texWidth = out.halfScale ? out.width / 2 : out.width, out.texHeight = out.halfScale ? out.height / 2 : out.height;
     if (!out.texWidth || !out.texHeight) return "an empty texture copy";
     if (out.format > 12) return "an EFB copy to an unknown format";
-    if (out.intensity && out.format == 6) return "an EFB copy to YUVA8";
+    if (out.intensity && out.format == 6 && !out.depth) return "an EFB copy to YUVA8";
+    // Z4, Z8 (twice), Z16, Z24X8, Z8M, Z8L and Z16L; the rest have no depth meaning.
+    if (out.depth && (out.format == 2 || out.format == 4 || out.format == 5 || out.format == 7 || out.format == 11))
+        return "an EFB depth copy to a colour format";
     const Tiling t = tiling(out.format);
     if (out.stride < (out.texWidth + t.width - 1) / t.width * t.bytes) return "a texture copy whose rows of tiles overlap";
     return nullptr;
@@ -71,6 +74,17 @@ void encodeTextureCopy(const GxTextureCopy& copy, EfbPixel pixel, const void* co
                 out = pixel(context, int(copy.x + column), int(copy.y) + from);
                 continue;
             }
+            if (copy.depth) {  // a depth's bytes average as one number
+                std::uint32_t z = 0;
+                for (int dy = 0; dy < 2; ++dy)
+                    for (int dx = 0; dx < 2; ++dx) {
+                        const auto p = pixel(context, int(copy.x + 2 * column) + dx, int(copy.y) + 2 * from + dy);
+                        z += std::uint32_t(p[0]) << 16 | p[1] << 8 | p[2];
+                    }
+                z = (z + 2) / 4;
+                out = {static_cast<std::uint8_t>(z >> 16), static_cast<std::uint8_t>(z >> 8), static_cast<std::uint8_t>(z), 255};
+                continue;
+            }
             unsigned sum[4] = {};
             for (int dy = 0; dy < 2; ++dy)
                 for (int dx = 0; dx < 2; ++dx) {
@@ -81,6 +95,7 @@ void encodeTextureCopy(const GxTextureCopy& copy, EfbPixel pixel, const void* co
         }
     }
     const auto texel = [&](unsigned column, unsigned row) {
+        if (copy.depth) return boxed[std::size_t(row + 3) * columns + column];  // the copy filter blends colour only
         unsigned sum[4] = {};
         for (int tap = 0; tap < 7; ++tap) {
             if (!copy.filter[tap]) continue;
@@ -98,8 +113,23 @@ void encodeTextureCopy(const GxTextureCopy& copy, EfbPixel pixel, const void* co
             for (unsigned y = 0; y < t.height; ++y) {
                 for (unsigned x = 0; x < t.width; ++x) {
                     const auto c = texel(tileX * t.width + x, tileY * t.height + y);
-                    const std::uint8_t i = copy.intensity ? luma(c) : c[0];
+                    const std::uint8_t i = copy.intensity && !copy.depth ? luma(c) : c[0];
                     const unsigned n = y * t.width + x;
+                    if (copy.depth) {
+                        switch (copy.format) {
+                        case 0: tile[n / 2] = static_cast<std::uint8_t>(n & 1 ? (tile[n / 2] & 0xF0) | c[0] >> 4 : (tile[n / 2] & 0x0F) | (c[0] & 0xF0)); break;
+                        case 1: case 8: tile[n] = c[0]; break;              // Z8: the top byte
+                        case 9: tile[n] = c[1]; break;                      // Z8M
+                        case 10: tile[n] = c[2]; break;                     // Z8L
+                        case 3: tile[2 * n] = c[0], tile[2 * n + 1] = c[1]; break;   // Z16, big-endian as the Wii reads it
+                        case 12: tile[2 * n] = c[1], tile[2 * n + 1] = c[2]; break;  // Z16L
+                        case 6:                                             // Z24X8: an AR block (X, then z's top), a GB block
+                            tile[2 * n] = 255, tile[2 * n + 1] = c[0];
+                            tile[32 + 2 * n] = c[1], tile[32 + 2 * n + 1] = c[2];
+                            break;
+                        }
+                        continue;
+                    }
                     switch (copy.format) {
                     case 0: tile[n / 2] = static_cast<std::uint8_t>(n & 1 ? (tile[n / 2] & 0xF0) | i >> 4 : (tile[n / 2] & 0x0F) | (i & 0xF0)); break;
                     case 1: case 8: tile[n] = i; break;

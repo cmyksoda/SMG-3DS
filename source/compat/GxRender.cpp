@@ -1874,6 +1874,15 @@ struct Renderer {
         return c;
     }
 
+    // A depth copy's pixel: z's bytes, high first, as GX keeps z (the port keeps nearer as larger).
+    static std::array<std::uint8_t, 4> efbDepth(const void* context, int x, int y) {
+        const Efb& e = *static_cast<const Efb*>(context);
+        const int sx = std::clamp(static_cast<int>((static_cast<float>(x) + 0.5f) * e.toScreenX), 0, 399);
+        const int sy = std::clamp(static_cast<int>((static_cast<float>(y) + 0.5f) * e.toScreenY), 0, 239);
+        const u32 z = 0xFFFFFF - (e.pixels[sx * 240 + (239 - sy)] & 0xFFFFFF);
+        return {std::uint8_t(z >> 16), std::uint8_t(z >> 8), std::uint8_t(z), 255};
+    }
+
     void textureCopy(const GxCommandProcessor& gpu, std::uint32_t command) {
         static const bool null = smgDevGxNull();
         if (null) return;
@@ -1892,13 +1901,14 @@ struct Renderer {
             ++perf.cpuCopies;
             const u64 start = svcGetSystemTick();
             dropGpuCopy(copy.address);
-            const Efb efb = efbView(gpu);
-            encodeTextureCopy(copy, efbPixel, &efb, static_cast<std::uint8_t*>(OSPhysicalToCached(copy.address)));
+            const Efb efb = copy.depth ? Efb{readEfb(true), 400.0f / frame.width, 240.0f / frame.height, 3} : efbView(gpu);
+            encodeTextureCopy(copy, copy.depth ? efbDepth : efbPixel, &efb, static_cast<std::uint8_t*>(OSPhysicalToCached(copy.address)));
             perf.cpuCopyTicks += svcGetSystemTick() - start;
             static unsigned noted = 0;
             if (dumping || noted++ < 4)
-                std::fprintf(stderr, "gx perf: CPU copy (%u,%u %ux%u) to 0x%08lx format %u took %.2f ms\n", copy.x, copy.y, copy.width, copy.height,
-                             static_cast<unsigned long>(copy.address), copy.format, double(svcGetSystemTick() - start) * 1000.0 / SYSCLOCK_ARM11);
+                std::fprintf(stderr, "gx perf: CPU %scopy (%u,%u %ux%u) to 0x%08lx format %u took %.2f ms\n", copy.depth ? "depth " : "", copy.x, copy.y,
+                             copy.width, copy.height, static_cast<unsigned long>(copy.address), copy.format,
+                             double(svcGetSystemTick() - start) * 1000.0 / SYSCLOCK_ARM11);
         }
         forget(copy.address, textureCopySize(copy));
         stateValid = applied = false;  // its textures may be gone
@@ -1923,16 +1933,19 @@ struct Renderer {
     // vertical filter and its format's channels. The Wii's memory is not written, so only the GPU sees this copy.
     bool gpuCopy(const GxCommandProcessor& gpu, const GxTextureCopy& copy) {
         if (copy.format == 11 || copy.format == 12) return false;  // two channels a texel: the CPU's encoder packs them
-        int rows[3];
-        std::uint8_t weights[3];
-        unsigned taps = 0;
-        for (int i = 0; i < 7; ++i) {
+        // A depth copy to one of z's bytes: the depth target read as RGBA8. Halved, the bilinear sample at each 2x2 block's
+        // centre averages the byte alone, within one of z's own average's.
+        if (copy.depth && copy.format != 1 && copy.format != 8 && copy.format != 9 && copy.format != 10) return false;
+        int rows[3] = {};
+        std::uint8_t weights[3] = {};
+        unsigned taps = copy.depth ? 1 : 0;
+        for (int i = 0; i < 7 && !copy.depth; ++i) {
             if (!copy.filter[i]) continue;
             if (taps == 3) return false;  // the PICA samples three textures at once
             rows[taps] = i - 3, weights[taps++] = copy.filter[i];
         }
         const bool noAlpha = PE_CONTROL_GET_PIXTYPE(gpu.bp[0x43]) == 0;
-        if (!taps || copyStages(copy, taps, noAlpha) > CombinerProgram::MaxStages) return false;
+        if (!taps || (!copy.depth && copyStages(copy, taps, noAlpha) > CombinerProgram::MaxStages)) return false;
         const unsigned width = textureSide(std::min(float(copy.texWidth), copy.width * 400.0f / frame.width));
         const unsigned height = textureSide(std::min(float(copy.texHeight), copy.height * 240.0f / frame.height));
         GpuCopy& g = gpuCopies[copy.address];
@@ -1957,7 +1970,8 @@ struct Renderer {
         }
         roomFor(18);
         // Queued behind the draws so far (inside a frame citro3d's "sync" copy does not wait), as the pass is behind it.
-        C3D_SyncTextureCopy(static_cast<u32*>(target->frameBuf.colorBuf), GX_BUFFER_DIM(TargetTileRow / 16, 0), static_cast<u32*>(scratch.data),
+        C3D_SyncTextureCopy(static_cast<u32*>(copy.depth ? target->frameBuf.depthBuf : target->frameBuf.colorBuf), GX_BUFFER_DIM(TargetTileRow / 16, 0),
+                            static_cast<u32*>(scratch.data),
                             GX_BUFFER_DIM(TargetTileRow / 16, (ScratchTileRow - TargetTileRow) / 16), TargetTileRow * 50, GX_TRANSFER_RAW_COPY(1));
 
         // Three bands, so the taps that reach past the copy's first and last rows can be clamped as the PE clamps them.
@@ -1984,7 +1998,8 @@ struct Renderer {
         }
 
         C3D_FrameDrawOn(g.target);
-        copyCombiner(copy, taps, weights, noAlpha);
+        if (copy.depth) depthCombiner(copy.format), C3D_TexSetFilter(&scratch, copy.halfScale ? GPU_LINEAR : GPU_NEAREST, GPU_NEAREST);
+        else copyCombiner(copy, taps, weights, noAlpha);
         C3D_AlphaTest(false, GPU_ALWAYS, 0);
         C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
         C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
@@ -1996,21 +2011,36 @@ struct Renderer {
         C3D_DrawArrays(GPU_TRIANGLES, static_cast<int>(used), static_cast<int>(n));
         used += n;
         applied = false;
+        if (copy.depth) C3D_TexSetFilter(&scratch, GPU_LINEAR, GPU_LINEAR);  // the draw has taken the nearest already
         C3D_FrameDrawOn(target);
         noteGpuCopy(gpu, copy);
         return true;
     }
 
+    // z's byte from a D24S8 word read as RGBA8 (z's top byte in G, then B, then A), as GX keeps z: 1 less the port's
+    // nearer-is-larger, byte for byte.
+    void depthCombiner(std::uint8_t format) {
+        C3D_TexEnv* env = C3D_GetTexEnv(0);
+        C3D_TexEnvInit(env);
+        C3D_TexEnvSrc(env, C3D_Both, GPU_TEXTURE0);
+        C3D_TexEnvOpRgb(env, format == 9 ? GPU_TEVOP_RGB_ONE_MINUS_SRC_B : format == 10 ? GPU_TEVOP_RGB_ONE_MINUS_SRC_ALPHA : GPU_TEVOP_RGB_ONE_MINUS_SRC_G);
+        C3D_TexEnvOpAlpha(env, format == 9 ? GPU_TEVOP_A_ONE_MINUS_SRC_B : format == 10 ? GPU_TEVOP_A_ONE_MINUS_SRC_ALPHA : GPU_TEVOP_A_ONE_MINUS_SRC_G);
+        C3D_TexEnvFunc(env, C3D_Both, GPU_REPLACE);
+        for (int stage = 1; stage < int(CombinerProgram::MaxStages); ++stage) C3D_TexEnvInit(C3D_GetTexEnv(stage));
+        C3D_TexEnvBufUpdate(C3D_Both, 0);
+    }
+
     // Once per format and size, the GPU's copy is read back and set against encodeTextureCopy's from the same target,
     // as drawn and mirrored each way: the log shows the PICA's orientation and channels agree (or how they don't).
     void noteGpuCopy(const GxCommandProcessor& gpu, const GxTextureCopy& copy) {
-        const u64 kind = u64(copy.format) | u64(copy.intensity) << 4 | u64(copy.halfScale) << 5 | u64(copy.texWidth) << 8 | u64(copy.texHeight) << 24;
+        const u64 kind = u64(copy.format) | u64(copy.intensity) << 4 | u64(copy.halfScale) << 5 | u64(copy.depth) << 6 | u64(copy.texWidth) << 8 |
+                         u64(copy.texHeight) << 24;
         if (std::find(checkedKinds.begin(), checkedKinds.end(), kind) != checkedKinds.end()) return;
         checkedKinds.push_back(kind);
         pause(), resume();  // the GPU has drawn the copy's quad
-        const Efb efb = efbView(gpu);
+        const Efb efb = copy.depth ? Efb{readEfb(true), 400.0f / frame.width, 240.0f / frame.height, 3} : efbView(gpu);
         std::vector<std::uint8_t> bytes(textureCopySize(copy));
-        encodeTextureCopy(copy, efbPixel, &efb, bytes.data());
+        encodeTextureCopy(copy, copy.depth ? efbDepth : efbPixel, &efb, bytes.data());
         Image expected;
         std::string error;
         if (!decodeGxImage({bytes.data(), bytes.size()}, static_cast<GxFormat>(copyReadFormat(copy.format)), copy.texWidth, copy.texHeight, {},

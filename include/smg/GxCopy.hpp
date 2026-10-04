@@ -13,6 +13,7 @@ struct GxTextureCopy {
     unsigned texWidth = 0, texHeight = 0;  // half the source each way with the box filter
     std::uint8_t format = 0;               // the PE's 4-bit copy format
     bool intensity = false, halfScale = false, clear = false, clampTop = false, clampBottom = false;
+    bool depth = false;  // from the EFB's Z (its pixel type Z24): the pixel callback gives z's bytes, high first
     std::uint8_t filter[7]{};               // vertical taps over rows -3..3, in 64ths
     std::uint32_t stride = 0;               // bytes from one row of tiles to the next
 };
@@ -24,8 +25,9 @@ const char* readTextureCopy(const GxCommandProcessor& gpu, std::uint32_t command
 // Bytes the copy writes from its address: whole tiles, rows of them `stride` apart.
 std::size_t textureCopySize(const GxTextureCopy& copy);
 
-// Writes the copy's texels in its format's tiling. `pixel` gives an EFB pixel as RGBA; it is asked for pixels outside
-// the source rectangle (by the filters and the tiles' edges) and should clamp to the EFB itself.
+// Writes the copy's texels in its format's tiling. `pixel` gives an EFB pixel as RGBA (a depth copy's as z's three bytes,
+// high first); it is asked for pixels outside the source rectangle (by the filters and the tiles' edges) and should clamp
+// to the EFB itself.
 using EfbPixel = std::array<std::uint8_t, 4> (*)(const void* context, int x, int y);
 void encodeTextureCopy(const GxTextureCopy& copy, EfbPixel pixel, const void* context, std::uint8_t* destination);
 } // namespace smg

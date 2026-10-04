@@ -173,6 +173,44 @@ void twoChannels() {
     check(out[0] == 30 && out[1] == 20 && smg::textureCopySize(copy) == 2 * 128, "a GB8 copy writes blue, then green, in 4x4 tiles");
 }
 
+// A depth copy writes z's bytes as each Z format keeps them, unfiltered; halved, it averages z as one number.
+std::uint32_t depthAt(int x, int y) { return 0x123456u + std::uint32_t(x) * 0x010203u + std::uint32_t(y) * 0x000101u; }
+Pixel depthPattern(const void*, int x, int y) {
+    const std::uint32_t z = depthAt(x < 0 ? 0 : x, y < 0 ? 0 : y);
+    return {static_cast<std::uint8_t>(z >> 16), static_cast<std::uint8_t>(z >> 8), static_cast<std::uint8_t>(z), 255};
+}
+Pixel depthSeam(const void*, int x, int) { return x & 1 ? Pixel{0x01, 0x00, 0x00, 255} : Pixel{0x00, 0xFF, 0x00, 255}; }
+void depthCopies() {
+    auto owned = std::make_unique<smg::GxCommandProcessor>(smg::GxCommandProcessor::Host{});
+    smg::GxCommandProcessor& gpu = *owned;
+    gpu.bp[0x43] = 3;
+    smg::GxTextureCopy copy;
+    Copy c;
+    c.rowBytes = 64;
+    c.format = 1;  // Z8, 8x4 tiles of a byte
+    auto out = make(gpu, c, depthPattern, copy);
+    check(copy.depth && out[0] == (depthAt(0, 0) >> 16 & 0xFF) && out[9] == (depthAt(1, 1) >> 16 & 0xFF), "a Z8 copy keeps z's top byte, unfiltered");
+    c.format = 9;
+    out = make(gpu, c, depthPattern, copy);
+    check(out[9] == (depthAt(1, 1) >> 8 & 0xFF), "a Z8M copy its middle byte");
+    c.format = 10;
+    out = make(gpu, c, depthPattern, copy);
+    check(out[9] == (depthAt(1, 1) & 0xFF), "a Z8L copy its low byte");
+    c.format = 3, c.rowBytes = 128;  // Z16, 4x4 tiles of two bytes
+    out = make(gpu, c, depthPattern, copy);
+    check(out[10] == (depthAt(1, 1) >> 16 & 0xFF) && out[11] == (depthAt(1, 1) >> 8 & 0xFF), "a Z16 copy its top two, big-endian");
+    c.format = 12;
+    out = make(gpu, c, depthPattern, copy);
+    check(out[10] == (depthAt(1, 1) >> 8 & 0xFF) && out[11] == (depthAt(1, 1) & 0xFF), "a Z16L copy its low two");
+    c.format = 6, c.rowBytes = 256;  // Z24X8: an AR block, then a GB block
+    out = make(gpu, c, depthPattern, copy);
+    check(out[10] == 255 && out[11] == (depthAt(1, 1) >> 16 & 0xFF) && out[42] == (depthAt(1, 1) >> 8 & 0xFF) && out[43] == (depthAt(1, 1) & 0xFF),
+          "a Z24X8 copy all of z, in RGBA8's two blocks");
+    c.format = 3, c.rowBytes = 64, c.half = true;
+    out = make(gpu, c, depthSeam, copy);
+    check(out[0] == 0x00 && out[1] == 0xFF, "halved, z's bytes average as one number (0x00FF00 and 0x010000 make 0x00FF80)");
+}
+
 void refusals() {
     auto owned = std::make_unique<smg::GxCommandProcessor>(smg::GxCommandProcessor::Host{});
     smg::GxCommandProcessor& gpu = *owned;
@@ -181,8 +219,11 @@ void refusals() {
     c.rowBytes = 64;
     std::uint32_t command = issue(gpu, c, 0x1000);
     gpu.bp[0x43] = 3;  // PE_CONTROL's pixel type: Z
-    check(smg::readTextureCopy(gpu, command, copy), "a depth copy is refused by name");
+    c.format = 4;
+    check(smg::readTextureCopy(gpu, issue(gpu, c, 0x1000), copy), "a depth copy to a colour format is refused by name");
+    c.format = 7;
     gpu.bp[0x43] = 0;
+    (void)command;
     c.format = 13;
     check(smg::readTextureCopy(gpu, issue(gpu, c, 0x1000), copy), "so is a copy to a format the pixel engine has no encoder for");
     c.format = 7, c.rowBytes = 32;
@@ -197,6 +238,7 @@ int runGxCopyTests() {
     filters();
     roundTrips();
     twoChannels();
+    depthCopies();
     refusals();
     std::printf("%u GX copy checks passed\n", checks);
     return 0;

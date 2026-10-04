@@ -846,8 +846,18 @@ alpha. The adapted `drawIn` tests bit 31 - i. `MR::validateExCollisionParts` set
 
 **EFB copies to RG8 and GB8** keep two channels a texel, as the pixel engine writes them (green then red, blue then
 green: read back as IA8, alpha byte first); `GxCopyTests` checks both. A copy kept on the GPU goes to the CPU's encoder
-for these, as the PICA's copy pass has no two-channel packing. Still left: depth copies, equality compares (the water's
-masks), and the second colour channel, which the PICA's combiner has no second vertex colour for.
+for these, as the PICA's copy pass has no two-channel packing. **Depth copies** (the EFB's pixel type Z24) that stay on
+the GPU take one of z's bytes (Z8, Z8M, Z8L): the depth target is copied raw into the scratch texture, read as RGBA8
+(a D24S8 word puts z's top byte in G, then B, then A), and drawn through one stage of one-minus that byte, sampled
+nearest, or halved with the bilinear sample at each 2x2 block's centre (the byte averaged alone, within one of z's own
+average's; `ImageEffectLocalUtil::capture` hands its clear flag to `JUTTexture::capture`'s mipmap, so the game's Z8
+copies are all halved), as GX's z is 0xFFFFFF less the port's nearer-is-larger, byte for byte; they are checked once
+against the CPU's encoder like the colour copies. The rest go to the CPU's encoder from the depth target read back
+(raw D24S8): Z4 and Z8 take z's top byte, Z8M and Z8L its middle and low, Z16 its top two big-endian, Z16L its low two,
+Z24X8 all of it in RGBA8's two blocks; the copy filter blends colour only, and a halved copy averages z as one number,
+not byte by byte (`GxCopyTests`). A colour format stops by name. Flipswitch's depth-of-field blur takes one for its
+indirect offsets, which the port leaves out, so only the copy's clear reaches the screen there. Still left: equality
+compares (the water's masks), and the second colour channel, which the PICA's combiner has no second vertex colour for.
 
 ### Particles: the title and file select
 
