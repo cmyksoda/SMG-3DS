@@ -1021,7 +1021,14 @@ libjpeg's accurate integer IDCT, planes out). `tools/ThpAudit.cpp` decodes all 6
 `source/compat/Thp.cpp`; the planes go into the buffers the game hands over, which only the port's
 `THPGXYuv2RgbDraw` reads. The Wii turned YUV to RGB in four TEV stages whose signed sums the PICA's combiner clamps
 away, so the renderer turns each decoded frame into one RGB565 texture (full-range BT.601, which the Wii's TEV
-constants work out to exactly) and draws it where the game's quad goes. The game's `THPDraw.c` and the SDK's
+constants work out to exactly) and draws it where the game's quad goes. The 3DS's Y2R converter does that and writes
+the PICA's 8x8 tiles itself (a row of tiles per transfer, a gap for the texture's unused width, rows top first so
+the quad's t runs the other way); `thpTiles565` is the CPU's way when Y2R won't open, texel for texel `thpPixel`'s.
+The player decodes a frame every logic step, into the texture set it draws next, and the port draws every second
+step: `THPVideoDecode` only keeps a copy of the frame (the wrapper says its size; the read buffer is refilled before
+the draw) and `THPGXYuv2RgbDraw` decodes the last one, half the decodes. The decoder takes libjpeg's own shortcuts
+for blocks and rows without AC terms, which give the same samples. A movie is paced by logic steps, so it slows with
+the game: in Azahar's 268 MHz the opening's frames take ~80 ms to decode, about 11 fps. The game's `THPDraw.c` and the SDK's
 `THPAudio.c` build as they are otherwise; the player's headers and each frame's size words, and each audio record's
 header, turn native as they arrive. The player preloads 20 frames, each preload's callback restarting the read step; that
 step read before checking how many were left, so the last callback set off a 21st read into the first frame's buffer,
