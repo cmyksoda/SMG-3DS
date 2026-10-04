@@ -202,9 +202,10 @@ public:
     // vertex, other than its slot's modelview or paired matrix on a lit, skinned list, 12 a texgen normalized before its
     // second matrix) or the list (7 a command other than a primitive, 8 a
     // matrix index naming no whole slot, 9 more vertices than 16-bit indices reach, 10 nothing drawn), or the renderer's
-    // choice (11 small enough to join the CPU path's batch).
+    // choice (11 small enough to join the CPU path's batch, 13 no mesh memory left beside the last two frames' meshes, 14
+    // arrays that move every frame: double-buffered deformed vertices, no mesh of which is drawn twice).
     enum MeshRefusal : unsigned { MeshOk, MeshUnsupported, MeshDepthTexture, MeshLit, MeshLitColor0, MeshLights, MeshTexgen, MeshCommand,
-                                  MeshMatrixIndex, MeshTooLarge, MeshEmpty, MeshSmall, MeshNormalize, MeshRefusals };
+                                  MeshMatrixIndex, MeshTooLarge, MeshEmpty, MeshSmall, MeshNormalize, MeshBudget, MeshMoving, MeshRefusals };
     unsigned meshEligible() const;
     unsigned buildMesh(const std::uint8_t* list, std::uint32_t size, GxMesh& mesh) const;
     // The array memory a list's primitives index, [lo, hi), without decoding them: false for a list buildMesh refuses
