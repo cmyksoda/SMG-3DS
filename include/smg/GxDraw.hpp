@@ -62,6 +62,15 @@ struct GxDrawState {
     // particle's other colour no longer starts a draw either.
     bool color1InTexture = false;
     std::uint8_t paletteUnit = 0;
+    // Passes drawn after the program's over the same primitives, each added on (splitTev): a material one PICA pass
+    // can't hold, such as the game's water with its bright lines and more samples than units.
+    struct Pass {
+        CombinerProgram program;
+        bool alphaEqual = false;
+        std::uint8_t reference = 0;
+        bool sameUnits = false;  // its units sample what the program's do, unit by unit: the same vertices serve it
+    };
+    std::vector<Pass> passes;
     const char* unsupported = nullptr;
 };
 // palette: C1 may come from a palette unit (color1InTexture), for draws on the CPU path.
@@ -205,9 +214,10 @@ public:
     // modelview or paired matrix on a lit, skinned list, 11 a texgen normalized before its second matrix) or the list (6 a
     // command other than a primitive, 7 a matrix index naming no whole slot, 8 more vertices than 16-bit indices reach, 9
     // nothing drawn), or the renderer's choice (10 small enough to join the CPU path's batch, 12 no mesh memory left
-    // beside the last two frames' meshes, 13 a moving mesh's refresh finding no room in the frame's arena).
+    // beside the last two frames' meshes, 13 a moving mesh's refresh finding no room in the frame's arena), or 14 a state
+    // with a pass whose units differ from the program's, whose vertices only the CPU path makes again.
     enum MeshRefusal : unsigned { MeshOk, MeshUnsupported, MeshDepthTexture, MeshLitColor0, MeshLights, MeshTexgen, MeshCommand,
-                                  MeshMatrixIndex, MeshTooLarge, MeshEmpty, MeshSmall, MeshNormalize, MeshBudget, MeshMoving, MeshRefusals };
+                                  MeshMatrixIndex, MeshTooLarge, MeshEmpty, MeshSmall, MeshNormalize, MeshBudget, MeshMoving, MeshPasses, MeshRefusals };
     unsigned meshEligible() const;
     unsigned buildMesh(const std::uint8_t* list, std::uint32_t size, GxMesh& mesh) const;
     // A built mesh's vertices decoded again from the list's arrays as they are now (where they moved), into `out` by its

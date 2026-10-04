@@ -2,6 +2,7 @@
 #include <smg/Model.hpp>
 #include <array>
 #include <cstdint>
+#include <vector>
 
 namespace smg {
 // A PICA200 fragment combiner program, independent of citro3d so it can be tested on the host.
@@ -39,4 +40,21 @@ struct CombinerProgram {
 
 // color1FromUnit: C1 is read from a unit of its own (a texel per primitive) instead of as a constant.
 CombinerProgram compileTev(const ModelMaterial& material, bool color1FromUnit = false);
+
+// A material one PICA pass can't draw (an R8 equality compare, more texture samples than units) as passes whose blended
+// results add up to it: the first blended as the material says, each extra one added over it. Exact but where GX's
+// sum saturates once and the passes' do apart.
+struct TevPass {
+    ModelMaterial material;
+    // Drawn only where its alpha equals reference, its color added as it is; else under the material's alpha test, its
+    // color added times its alpha.
+    bool alphaEqual = false;
+    std::uint8_t reference = 0;
+};
+struct TevPasses {
+    ModelMaterial first;
+    std::vector<TevPass> extra;
+};
+// False when the material fits one pass, or isn't of a shape split here (its compare or the rest of it not additive).
+bool splitTev(const ModelMaterial& material, TevPasses& out);
 } // namespace smg

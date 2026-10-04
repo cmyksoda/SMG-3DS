@@ -455,8 +455,8 @@ std::size_t gxDrawStateKey(const GxCommandProcessor& gpu, std::uint32_t* out, bo
     return std::size_t(at - out);
 }
 
-void readGxDrawState(const GxCommandProcessor& gpu, GxDrawState& out, bool palette) {
-    out = GxDrawState{};
+namespace {
+void readProgram(const GxCommandProcessor& gpu, GxDrawState& out, bool palette) {
     readTev(gpu, out);
     readPixel(gpu, out);
     std::uint8_t identitySwap = 0;
@@ -486,6 +486,32 @@ void readGxDrawState(const GxCommandProcessor& gpu, GxDrawState& out, bool palet
     if (!both.exact && program.exact) return;
     for (unsigned u = 0; u < both.unitCount; ++u)
         if (both.units[u].texture == CombinerProgram::Palette) out.program = both, out.color1InTexture = true, out.paletteUnit = static_cast<std::uint8_t>(u);
+}
+
+// A material one pass can't draw exactly is drawn in passes when it splits, each exact, with C0 and C1 read as constants.
+void readPasses(GxDrawState& out) {
+    TevPasses split;
+    if (out.program.exact || !splitTev(out.material, split)) return;
+    const CombinerProgram first = cachedTev(split.first);
+    if (!first.exact) return;
+    std::vector<GxDrawState::Pass> passes;
+    for (const TevPass& pass : split.extra) {
+        const CombinerProgram& program = cachedTev(pass.material);
+        if (!program.exact) return;
+        bool same = program.unitCount <= first.unitCount;
+        for (unsigned u = 0; same && u < program.unitCount; ++u)
+            same = program.units[u].texture == first.units[u].texture && program.units[u].texCoord == first.units[u].texCoord;
+        passes.push_back({program, pass.alphaEqual, pass.reference, same});
+    }
+    out.program = first, out.passes = std::move(passes);
+    out.color0InVertex = out.color1InTexture = false, out.paletteUnit = 0;
+}
+} // namespace
+
+void readGxDrawState(const GxCommandProcessor& gpu, GxDrawState& out, bool palette) {
+    out = GxDrawState{};
+    readProgram(gpu, out, palette);
+    readPasses(out);
 }
 
 float GxVertexPipeline::matrix(std::uint32_t row, int column) const { return asFloat(gpu_->xf[(row * 4 + column) & 0xFFF]); }
@@ -887,6 +913,8 @@ bool GxVertexPipeline::meshColorFromVertex() const {
 
 unsigned GxVertexPipeline::meshEligible() const {
     if (unsupported) return MeshUnsupported;
+    for (const GxDrawState::Pass& pass : state_->passes)
+        if (!pass.sameUnits) return MeshPasses;
     for (unsigned u = 0; u < units_; ++u)
         if (texgens_[u].palette) return MeshUnsupported;  // the palette's texel moves per primitive
     if (fixedDepth_) return MeshDepthTexture;

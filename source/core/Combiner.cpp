@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <set>
 #include <vector>
 
 namespace smg {
@@ -640,5 +641,168 @@ CombinerProgram compileTev(const ModelMaterial& material, bool color1FromUnit) {
     if (previous.exact) return previous;
     const auto constants = compile(material, true, color1FromUnit);
     return constants.exact ? constants : previous;
+}
+namespace {
+// GX inputs by number: color CPREV 0, APREV 1, C0-C2 2/4/6, A0-A2 3/5/7, TEXC 8, TEXA 9, RASC 10, RASA 11, ONE 12,
+// HALF 13, KONST 14, ZERO 15; alpha APREV 0, A0-A2 1-3, TEXA 4, RASA 5, KONST 6, ZERO 7.
+constexpr std::uint8_t ColorZero = 15, AlphaZero = 7;
+
+void passColor(TevStage& s) {
+    s.colorIn[0] = s.colorIn[1] = s.colorIn[2] = ColorZero, s.colorIn[3] = 0;
+    s.colorOp = s.colorBias = s.colorScale = 0;
+}
+
+// d + a term that reads nothing of PREV, unscaled: a stage the ones before it can be split from.
+bool additive(const TevStage& s) {
+    return s.colorIn[3] == 0 && s.colorOp == 0 && !s.colorBias && !s.colorScale &&
+           std::none_of(s.colorIn, s.colorIn + 3, [](std::uint8_t in) { return in <= 1; });
+}
+
+// Stages whose result nothing reads are cleared, so their textures take no unit.
+void clearDead(ModelMaterial& m) {
+    bool color = true, alpha = true;
+    for (int i = int(m.tevStageCount) - 1; i >= 0; --i) {
+        TevStage& s = m.stages[i];
+        if (!color) std::fill(s.colorIn, s.colorIn + 4, ColorZero), s.colorOp = s.colorBias = s.colorScale = 0;
+        if (!alpha) std::fill(s.alphaIn, s.alphaIn + 4, AlphaZero), s.alphaOp = s.alphaBias = s.alphaScale = 0;
+        color = std::count(s.colorIn, s.colorIn + 4, 0) > 0;
+        alpha = std::count(s.alphaIn, s.alphaIn + 4, 0) || std::count(s.colorIn, s.colorIn + 4, 1);
+    }
+}
+
+unsigned unitsRead(const ModelMaterial& m) {
+    std::set<std::pair<int, int>> read;
+    for (unsigned i = 0; i < m.tevStageCount; ++i) {
+        const TevStage& s = m.stages[i];
+        const bool texture = std::any_of(s.colorIn, s.colorIn + 4, [](std::uint8_t in) { return in == 8 || in == 9; }) ||
+                             std::count(s.alphaIn, s.alphaIn + 4, 4);
+        if (texture && s.texMap < 8 && m.textures[s.texMap] >= 0) read.insert({s.texMap, s.texCoord < 8 ? s.texCoord : 0});
+    }
+    return unsigned(read.size());
+}
+
+// Every pixel with alpha above zero passes: what the equality pass, which adds nothing where alpha is zero, needs.
+bool passesAllShown(const ModelMaterial& m) {
+    const auto all = [](std::uint8_t compare, std::uint8_t reference) {
+        return compare == 7 || (!reference && (compare == 4 || compare == 5 || compare == 6));
+    };
+    const auto& t = m.alphaTest;
+    const bool first = all(t.compare0, t.reference0), second = all(t.compare1, t.reference1);
+    return t.op == 1 ? first || second : t.op == 0 && first && second;
+}
+
+// The equality compare's pass: color and alpha trade places. Alpha runs the color stages before the compare on their
+// reds (texture and raster swapped so alpha reads red and color reads alpha), color runs every alpha stage and then
+// takes in the compare's c; drawn where alpha equals the compare's b.
+bool equalityPass(const ModelMaterial& m, unsigned k, TevPass& pass) {
+    const TevStage& compare = m.stages[k];
+    float b;
+    switch (compare.colorIn[1]) {
+    case 2: case 4: case 6: b = m.tevColors[compare.colorIn[1] / 2 - 1][0]; break;
+    case 3: case 5: case 7: b = m.tevColors[compare.colorIn[1] / 2 - 1][3]; break;
+    case 12: b = 1; break;
+    case 13: b = 0.5f; break;
+    case 14: b = konst(m, compare.konstColor, 0); break;
+    case 15: b = 0; break;
+    default: return false;
+    }
+    const std::uint8_t c = compare.colorIn[2];
+    if (!(c >= 2 && c <= 7) && c != 12 && c != 14) return false;
+    if (m.tevStageCount == 16) return false;
+    ModelMaterial e = m;
+    const std::uint8_t identity[4]{0, 1, 2, 3};
+    e.swapTables[1][0] = e.swapTables[1][1] = e.swapTables[1][2] = 3, e.swapTables[1][3] = 0;
+    for (unsigned i = 0; i < m.tevStageCount; ++i) {
+        const TevStage& o = m.stages[i];
+        TevStage& s = e.stages[i];
+        if (std::memcmp(m.swapTables[o.texSwap], identity, 4) || std::memcmp(m.swapTables[o.rasSwap], identity, 4) || o.alphaOp > 1)
+            return false;
+        s.texSwap = s.rasSwap = 1;
+        static constexpr std::uint8_t toColor[8]{0, 3, 5, 7, 8, 10, 14, 15};
+        for (int j = 0; j < 4; ++j) s.colorIn[j] = toColor[o.alphaIn[j]];
+        s.colorOp = o.alphaOp, s.colorBias = o.alphaBias, s.colorScale = o.alphaScale, s.colorClamp = o.alphaClamp;
+        s.konstColor = o.konstAlpha;
+        if (i >= k) {
+            s.alphaIn[0] = s.alphaIn[1] = s.alphaIn[2] = AlphaZero, s.alphaIn[3] = 0;
+            s.alphaOp = s.alphaBias = s.alphaScale = 0;
+            continue;
+        }
+        if (o.colorOp > 1) return false;
+        int select = -1;
+        const auto konstFor = [&](int value) { return (select < 0 || select == value) && (select = value, true); };
+        for (int j = 0; j < 4; ++j) {
+            const std::uint8_t in = o.colorIn[j];
+            std::uint8_t& out = s.alphaIn[j];
+            if (in == 0) out = 0;
+            else if (in == 3 || in == 5 || in == 7) out = std::uint8_t((in - 1) / 2);
+            else if (in == 8) out = 4;
+            else if (in == 10) out = 5;
+            else if (in == 15) out = AlphaZero;
+            else if (in == 12 && konstFor(0)) out = 6;
+            else if (in == 13 && konstFor(4)) out = 6;
+            else if (in == 14 && konstFor(o.konstColor >= 0x0c && o.konstColor < 0x10 ? 0x10 + (o.konstColor - 0x0c) : o.konstColor)) out = 6;
+            else return false;
+        }
+        if (select >= 0) s.konstAlpha = std::uint8_t(select);
+        s.alphaOp = o.colorOp, s.alphaBias = o.colorBias, s.alphaScale = o.colorScale, s.alphaClamp = o.colorClamp;
+    }
+    TevStage& last = e.stages[e.tevStageCount++];
+    last = {};
+    last.colorIn[0] = ColorZero, last.colorIn[1] = c, last.colorIn[2] = 0, last.colorIn[3] = ColorZero;
+    last.alphaIn[0] = last.alphaIn[1] = last.alphaIn[2] = AlphaZero, last.alphaIn[3] = 0;
+    last.konstColor = compare.konstColor;
+    clearDead(e);
+    pass.material = e, pass.alphaEqual = true, pass.reference = std::uint8_t(std::lround(std::clamp(b, 0.0f, 1.0f) * 255));
+    return true;
+}
+
+// Stage j's term alone, under the whole alpha chain: added times alpha, it is what the stage added to the blend.
+TevPass termPass(const ModelMaterial& m, unsigned j) {
+    TevPass pass;
+    pass.material = m;
+    for (unsigned i = 0; i < m.tevStageCount; ++i) {
+        TevStage& s = pass.material.stages[i];
+        if (i < j) std::fill(s.colorIn, s.colorIn + 4, ColorZero), s.colorOp = s.colorBias = s.colorScale = 0;
+        else if (i == j) s.colorIn[3] = ColorZero;
+        else passColor(s);
+    }
+    clearDead(pass.material);
+    return pass;
+}
+} // namespace
+
+bool splitTev(const ModelMaterial& m, TevPasses& out) {
+    if (m.blend.type != 1 || m.blend.source != 4) return false;  // GX_BM_BLEND from GX_BL_SRCALPHA
+    int k = -1;
+    for (unsigned i = 0; i < m.tevStageCount; ++i) {
+        const TevStage& s = m.stages[i];
+        if ((s.colorReg & 3) || (s.alphaReg & 3)) return false;
+        if (s.colorOp == 9 && k < 0) k = int(i);
+        else if (s.colorOp > 1 || s.alphaOp > 1) return false;
+    }
+    out.first = m, out.extra.clear();
+    if (k >= 0) {
+        const TevStage& s = m.stages[k];
+        if (s.colorIn[0] || s.colorIn[3] || s.colorBias || s.colorScale || !passesAllShown(m)) return false;
+        for (unsigned i = unsigned(k) + 1; i < m.tevStageCount; ++i)
+            if (!additive(m.stages[i])) return false;
+        TevPass equal;
+        if (!equalityPass(m, unsigned(k), equal)) return false;
+        passColor(out.first.stages[k]);
+        out.extra.push_back(equal);
+    }
+    clearDead(out.first);
+    for (int j = int(m.tevStageCount) - 1; j > k && unitsRead(out.first) > CombinerProgram::MaxUnits; --j) {
+        const TevStage& s = m.stages[j];
+        if (!additive(s)) break;
+        if (std::none_of(s.colorIn, s.colorIn + 3, [](std::uint8_t in) { return in == 8 || in == 9; })) continue;
+        out.extra.push_back(termPass(m, unsigned(j)));
+        passColor(out.first.stages[j]);
+        clearDead(out.first);
+    }
+    if (out.extra.empty() || unitsRead(out.first) > CombinerProgram::MaxUnits) return false;
+    for (const TevPass& pass : out.extra)
+        if (unitsRead(pass.material) > CombinerProgram::MaxUnits) return false;
+    return true;
 }
 } // namespace smg

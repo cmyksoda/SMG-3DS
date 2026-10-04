@@ -808,6 +808,25 @@ particles spread the texture across them (`GX_TO_ONE`): where a coordinate takes
 transformed into the tail of the room the renderer gives the primitive (four a vertex for these) and the quads written
 from its front, each before the sources it would cover are read. Flipswitch was the first galaxy to stop on them.
 
+**Water in passes.** The game draws its own water (`OceanBowl`, `OceanRingDrawer`, `OceanSphere`, `WaterRoad`,
+`WhirlPool`) with GX calls, not models: two scrolling samples of one texture multiplied, C0 added where that
+product's red equals A0 (an R8 equality compare: the bright wavy lines), then the screen behind, warped, times C1.
+Beach Bowl's (`OceanBowl`) also takes its alpha from a mask: four samples for three PICA units, so the screen was read
+as white and the water came out the mint of C1. An exact 8-bit equality needs more combiner stages than the PICA has.
+`splitTev` turns such a material into passes whose blended results add up to it, since the blend is linear in the
+color: the first is the material without the compare (and without additive terms moved out while it needs more than
+three units); a moved term is drawn alone under the whole alpha chain, added times its alpha (blend source alpha,
+one); the compare's pass trades color for alpha: its alpha runs the stages before the compare on their reds (a swap
+table makes alpha read red and color read alpha), its color runs the alpha chain and takes in the compare's c, and an
+EQUAL alpha test keeps only the lines (blend one, one). Only where GX's sum saturates do the passes differ, as they
+saturate apart. `CombinerTests` checks Beach Bowl's water this way against the TEV, on and off the lines. A pass that
+samples what the program does (the lines' pass) draws the same vertices again, a batch's or a mesh's; one that samples
+other coordinates (Beach Bowl's screen term) takes the CPU path, each primitive's vertices made again under its program
+beside the program's, its indices drawn once with the batch. Beach Bowl's water costs about 5 ms a frame more this
+way; at 400x240 its lines come out as scattered bright pixels (how closely they match the Wii's is unchecked).
+`OceanSphere` stays without its lines: its last stage blends between two colors by the product instead of adding to
+it, which no added pass reproduces.
+
 **Environment maps on skinned models.** J3D's shiny skinned models give a texgen a matrix per vertex: the vertex's own
 modelview, or the texture matrix paired with its slot (30 rows on, which J3D loads per draw matrix), then the dual
 transform. Those lists took the CPU path; at the Comet Observatory 27 a frame, 8,400 lit vertices, most of the

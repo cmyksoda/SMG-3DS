@@ -39,8 +39,12 @@ Rgba gx(const smg::ModelMaterial& m, const Inputs& in) {
     for (unsigned i = 0; i < m.tevStageCount; ++i) {
         const auto& s = m.stages[i];
         const bool hasTexture = s.texMap < 8 && m.textures[s.texMap] >= 0;
-        const Rgba tex = hasTexture ? in.texture[m.textures[s.texMap]] : Rgba{1, 1, 1, 1};
-        const Rgba ras = s.channel == 0xff || s.channel == 6 ? Rgba{} : in.raster;
+        const auto swap = [&](const Rgba& v, std::uint8_t table) {
+            const std::uint8_t* t = m.swapTables[table];
+            return Rgba{v[t[0]], v[t[1]], v[t[2]], v[t[3]]};
+        };
+        const Rgba tex = swap(hasTexture ? in.texture[m.textures[s.texMap]] : Rgba{1, 1, 1, 1}, s.texSwap);
+        const Rgba ras = swap(s.channel == 0xff || s.channel == 6 ? Rgba{} : in.raster, s.rasSwap);
         const auto colorIn = [&](int input, int c) -> float {
             switch (input) {
             case 0: case 2: case 4: case 6: return reg[input / 2][c];
@@ -72,7 +76,8 @@ Rgba gx(const smg::ModelMaterial& m, const Inputs& in) {
             v += bias == 1 ? 0.5f : bias == 2 ? -0.5f : 0;
             v *= scale == 1 ? 2 : scale == 2 ? 4 : scale == 3 ? 0.5f : 1;
             if (op == 8 || op == 9) a = wrapByte(redA), b = wrapByte(redB);
-            if (op >= 8) v = d + ((op & 1 ? a == b : a > b) ? c : 0);  // no GR16 or BGR24
+            // Equality is of the bytes the TEV holds.
+            if (op >= 8) v = d + ((op & 1 ? std::lround(a * 255) == std::lround(b * 255) : a > b) ? c : 0);  // no GR16 or BGR24
             return clamp ? std::clamp(v, 0.0f, 1.0f) : std::clamp(v, -1024 / 255.0f, 1023 / 255.0f);
         };
         Rgba out;
@@ -490,6 +495,73 @@ void randomMaterials(std::mt19937& rng) {
 }
 } // namespace
 
+// OceanBowl::loadMaterial (Beach Bowl's water), as the decomp sets it: two samples of the water multiplied and halved,
+// C0 added where that product's red equals A0 (R8_EQ: the bright lines), the screen behind (warped) times C1 added,
+// alpha the vertex's times a mask's. Four samples and the compare are more than one PICA pass holds.
+smg::ModelMaterial oceanBowl() {
+    smg::ModelMaterial m;
+    m.textures[0] = 0, m.textures[1] = 1, m.textures[3] = 3, m.textures[4] = 4;  // map 4: the second sample, apart
+    m.tevColors[0] = {40 / 255.0f, 40 / 255.0f, 40 / 255.0f, 20 / 255.0f};
+    m.tevColors[1] = {200 / 255.0f, 230 / 255.0f, 210 / 255.0f, 1};
+    m.tevStageCount = 4;
+    const std::uint8_t color[4][4]{{8, 15, 15, 15}, {15, 8, 0, 15}, {0, 3, 2, 0}, {15, 8, 4, 0}};
+    const std::uint8_t alpha[4][4]{{4, 7, 7, 7}, {7, 4, 0, 7}, {7, 5, 4, 7}, {0, 7, 7, 7}};
+    const std::uint8_t op[4]{0, 0, 9, 0}, colorScale[4]{0, 3, 0, 0}, alphaScale[4]{0, 1, 0, 0}, clamp[4]{0, 0, 0, 1};
+    const std::uint8_t map[4]{0, 4, 3, 1}, coord[4]{0, 1, 4, 3}, channel[4]{0xff, 0xff, 4, 0xff};
+    for (int i = 0; i < 4; ++i) {
+        auto& t = m.stages[i];
+        t = {};
+        std::copy(color[i], color[i] + 4, t.colorIn), std::copy(alpha[i], alpha[i] + 4, t.alphaIn);
+        t.colorOp = op[i], t.colorScale = colorScale[i], t.alphaScale = alphaScale[i], t.colorClamp = t.alphaClamp = clamp[i];
+        t.texMap = map[i], t.texCoord = coord[i], t.channel = channel[i];
+    }
+    m.blend = {1, 4, 5, 0};  // source alpha over the rest
+    m.alphaTest = {4, 0, 1, 4, 0};  // alpha above zero
+    return m;
+}
+
+void waterPasses(std::mt19937& rng) {
+    const auto m = oceanBowl();
+    smg::TevPasses passes;
+    check(!smg::compileTev(m).exact && smg::splitTev(m, passes) && passes.extra.size() == 2,
+          "water no pass holds splits into a first pass, its bright lines and its screen term");
+    std::vector<smg::CombinerProgram> programs{smg::compileTev(passes.first)};
+    for (const auto& pass : passes.extra) programs.push_back(smg::compileTev(pass.material));
+    bool exact = true;
+    for (const auto& p : programs) exact &= p.exact && p.stageCount <= smg::CombinerProgram::MaxStages;
+    check(exact, "and each pass translates exactly");
+    std::uniform_int_distribution<int> byte(0, 255), near(38, 42);
+    unsigned compared = 0, lines = 0;
+    for (int i = 0; i < 2000; ++i) {
+        auto in = byteInputs(rng);
+        if (i & 1) in.texture[4] = {1, 1, 1, byte(rng) / 255.0f}, in.texture[0][0] = near(rng) / 255.0f;  // near the lines
+        const Rgba dst{byte(rng) / 255.0f, byte(rng) / 255.0f, byte(rng) / 255.0f, 1};
+        const Rgba g = gx(m, in);
+        if (std::max({g[0], g[1], g[2]}) >= 1 - 1e-6f) continue;  // GX's sum saturated once; the passes' would apart
+        Rgba want = dst, got = dst;
+        if (g[3] > 0)
+            for (int c = 0; c < 3; ++c) want[c] = g[c] * g[3] + dst[c] * (1 - g[3]);
+        const Rgba first = pica(programs[0], in);
+        if (first[3] > 0)
+            for (int c = 0; c < 3; ++c) got[c] = first[c] * first[3] + dst[c] * (1 - first[3]);
+        for (std::size_t e = 0; e < passes.extra.size(); ++e) {
+            const auto& pass = passes.extra[e];
+            const Rgba x = pica(programs[e + 1], in);
+            const bool drawn = pass.alphaEqual ? std::lround(x[3] * 255) == pass.reference : x[3] > 0;
+            lines += drawn && pass.alphaEqual;
+            if (drawn)
+                for (int c = 0; c < 3; ++c) got[c] = std::min(1.0f, got[c] + (pass.alphaEqual ? x[c] : x[c] * x[3]));
+        }
+        ++compared;
+        if (std::abs(got[0] - want[0]) <= 2 / 255.0f && std::abs(got[1] - want[1]) <= 2 / 255.0f && std::abs(got[2] - want[2]) <= 2 / 255.0f) continue;
+        dump(m, programs[0], in);
+        std::printf("want %.3f %.3f %.3f got %.3f %.3f %.3f\n", want[0], want[1], want[2], got[0], got[1], got[2]);
+        check(false, "and the passes blended match GX's water blended");
+        break;
+    }
+    check(compared > 1000 && lines > 50, "over inputs on and off the bright lines");
+}
+
 int runCombinerTests() {
     std::mt19937 rng(1234);
     realMaterial(rng);
@@ -499,6 +571,7 @@ int runCombinerTests() {
     compareWithoutC(rng);
     compareAddsC(rng);
     sixTapBlur(rng);
+    waterPasses(rng);
     randomMaterials(rng);
     std::printf("%u TEV combiner checks passed\n", checks);
     return 0;

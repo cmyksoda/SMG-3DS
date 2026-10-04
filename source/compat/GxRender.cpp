@@ -221,7 +221,7 @@ struct Renderer {
         u32 meshDraws = 0, meshTriangles = 0, meshesMade = 0, citroDraws = 0;
         u32 pendingWhy[9] = {};  // mesh draws through citro3d after each kind of change (Pending)
         u32 meshInvalidated = 0, meshOverflows = 0, meshBudgetDrops = 0, meshMismatches = 0, flushesQueued = 0, texturesInvalidated = 0;
-        u32 meshesEvicted = 0, meshesDroppedForRoom = 0, leftOutDraws = 0, meshesRefreshed = 0, meshVerticesRefreshed = 0;
+        u32 meshesEvicted = 0, meshesDroppedForRoom = 0, leftOutDraws = 0, passDraws = 0, meshesRefreshed = 0, meshVerticesRefreshed = 0;
         u32 mismatchWhy[5] = {};  // the key's words, the descriptor (CP 0x50/0x60), a format table, an array base, a stride
         u64 timed[6] = {};  // dev.gx_timing: CPU-path primitives (immediate, in lists), display lists (mesh draws), texture copies, movie, frame ends
         u64 cpuCopyTicks = 0;  // of the texture copies, those read back and encoded on the CPU
@@ -600,7 +600,8 @@ struct Renderer {
         if (!prepared) stop(pipeline.unsupported);
         if (scissorEmpty || !count) return;
         if (!inFrame) begin();
-        roomFor(GxVertexPipeline::maxVertices(kind, count));
+        const std::size_t remade = std::size_t(std::count_if(state_->passes.begin(), state_->passes.end(), [](const GxDrawState::Pass& p) { return !p.sameUnits; }));
+        roomFor(GxVertexPipeline::maxVertices(kind, count) * (1 + remade), DrawCommandWords * u32(1 + state_->passes.size()));
         if (state_->color1InTexture) choosePaletteTexel(gpu);
         const Step step(perf, 6);
         const auto first = static_cast<std::uint16_t>(used);
@@ -613,6 +614,7 @@ struct Renderer {
         }
         indexUsed += written;
         used += pipeline.verticesWritten;
+        if (remade) stagePasses(gpu, kind, format, count, data, decoded);
         fresh[0] = fresh[1] = fresh[2] = false;  // a readback must flush what's pending first
     }
 
@@ -669,6 +671,7 @@ struct Renderer {
         u32 colors[4];  // C0 and C1 as read, for a marked key whose state kept them
         PicaPixel pixel;  // preparePixel's, of the state's material and program
         bool pixelReady = false;
+        std::vector<PicaPixel> passPixels;  // its further passes', their blends made to add
         // CPU path, one map on one unit: a hash of the key without that map's size and address (shared by states that
         // differ only in which texture they sample), the texture, and its place in an atlas.
         bool oneMap = false;
@@ -755,7 +758,7 @@ struct Renderer {
 
     void describeForAtlas(CachedState& e, bool palette) {
         e.oneMap = false, e.atlas = -1, e.atlasGeneration = 0;
-        if (!palette || e.state.unsupported) return;
+        if (!palette || e.state.unsupported || !e.state.passes.empty()) return;
         int unit = -1, map = -1;
         for (unsigned u = 0; u < e.state.program.unitCount; ++u) {
             const int t = e.state.program.units[u].texture;
@@ -1685,23 +1688,27 @@ struct Renderer {
         // GX culls in the EFB, its y down; the PICA sees the same triangles turned for the screen.
         sendCull(u.reject == 1 ? GPU_CULL_FRONT_CCW : u.reject == 2 ? GPU_CULL_BACK_CCW : GPU_CULL_NONE);
         const auto* indices = reinterpret_cast<const std::uint16_t*>(static_cast<std::uint8_t*>(mesh.block) + mesh.vertexCount * sizeof(GxMeshVertex));
-        for (std::size_t g = 0; g < mesh.groups.size(); ++g) {
-            if (g) pipeline.meshSlotUniforms(mesh.groups[g], u), slotUniforms(u);
-            static const bool noRaw = smgDevGxNoRaw();
-            if (noRaw) pending = true;
-            const bool viaCitro3d = pending;
-            sendUniforms();
-            if (viaCitro3d) {
-                C3D_BufInfo* buffers = C3D_GetBufInfo();
-                BufInfo_Init(buffers);
-                BufInfo_Add(buffers, mesh.vertices, sizeof(GxMeshVertex), sent.meshComponents, sent.meshPermutation);
-                C3D_DrawElements(GPU_TRIANGLES, int(mesh.groups[g].indexCount), C3D_UNSIGNED_SHORT, indices + mesh.groups[g].firstIndex);
-                for (unsigned why = 0; why <= PendingList; ++why) perf.pendingWhy[why] += pendingWhy >> why & 1;
-                pending = false, pendingWhy = 0, ++perf.citroDraws;
-            } else {
-                writeMeshDraw(mesh, mesh.groups[g], g == 0);
+        const auto drawGroups = [&](bool again) {
+            for (std::size_t g = 0; g < mesh.groups.size(); ++g) {
+                if (g || (again && mesh.groups.size() > 1)) pipeline.meshSlotUniforms(mesh.groups[g], u), slotUniforms(u);
+                static const bool noRaw = smgDevGxNoRaw();
+                if (noRaw) pending = true;
+                const bool viaCitro3d = pending;
+                sendUniforms();
+                if (viaCitro3d) {
+                    C3D_BufInfo* buffers = C3D_GetBufInfo();
+                    BufInfo_Init(buffers);
+                    BufInfo_Add(buffers, mesh.vertices, sizeof(GxMeshVertex), sent.meshComponents, sent.meshPermutation);
+                    C3D_DrawElements(GPU_TRIANGLES, int(mesh.groups[g].indexCount), C3D_UNSIGNED_SHORT, indices + mesh.groups[g].firstIndex);
+                    for (unsigned why = 0; why <= PendingList; ++why) perf.pendingWhy[why] += pendingWhy >> why & 1;
+                    pending = false, pendingWhy = 0, ++perf.citroDraws;
+                } else {
+                    writeMeshDraw(mesh, mesh.groups[g], g == 0);
+                }
             }
-        }
+        };
+        drawGroups(false);
+        if (!state_->passes.empty()) drawSharedPasses([&] { drawGroups(true); });
         u32* buffer;
         u32 size, offset;
         GPUCMD_GetBuffer(&buffer, &size, &offset);
@@ -1754,11 +1761,90 @@ struct Renderer {
         ensureCpuBuffers();
         sendCull(GPU_CULL_NONE);  // culled in EFB space already
         C3D_DrawElements(GPU_TRIANGLES, static_cast<int>(indexUsed - batchStart), C3D_UNSIGNED_SHORT, indices + batchStart);
+        if (!state_->passes.empty())
+            drawSharedPasses([&] { C3D_DrawElements(GPU_TRIANGLES, static_cast<int>(indexUsed - batchStart), C3D_UNSIGNED_SHORT, indices + batchStart); });
+        if (passIndicesWaiting) drawWaitingPasses();
         pending = false, pendingWhy = 0;
         ++perf.draws, perf.triangles += (indexUsed - batchStart) / 3;
         batchStart = indexUsed;
         fresh[0] = fresh[1] = fresh[2] = false;
         if (wholeScreen) dumpEfbAverage("after it");
+    }
+
+    // A pass's pixel state: its program, under the material's tests, its color added on and the EFB's alpha kept.
+    const PicaPixel& passPixel(std::size_t i) {
+        if (stateEntry->passPixels.size() != state_->passes.size()) {
+            stateEntry->passPixels.clear();
+            for (const auto& pass : state_->passes) {
+                PicaPixel p = preparePixel(state_->material, pass.program);
+                p.equation = p.alphaEquation = GPU_BLEND_ADD;
+                p.source = pass.alphaEqual ? GPU_ONE : GPU_SRC_ALPHA, p.destination = GPU_ONE;
+                p.alphaSource = GPU_ZERO, p.alphaDestination = GPU_ONE;
+                if (pass.alphaEqual) p.alphaTest = true, p.alphaFunc = GPU_EQUAL, p.alphaReference = pass.reference;
+                stateEntry->passPixels.push_back(p);
+            }
+        }
+        return stateEntry->passPixels[i];
+    }
+
+    // The passes that sample what the program does, over the triangles just drawn (a batch's, or a mesh group's through
+    // `draw`), the EFB's depth kept.
+    template <class Draw> void drawSharedPasses(Draw draw) {
+        const PicaPixel own = pixel;
+        const auto ownMask = writeMask;
+        for (std::size_t i = 0; i < state_->passes.size(); ++i) {
+            if (!state_->passes[i].sameUnits) continue;
+            pixel = passPixel(i), writeMask = ownMask & ~GPU_WRITE_DEPTH;
+            sendPixel();
+            draw();
+            ++perf.passDraws;
+        }
+        pixel = own, writeMask = ownMask;
+        applied = false;  // the state's own pixel goes back on with its next draw
+    }
+
+    // The other passes: such a pass samples other coordinates than the program, so each primitive's vertices are made again
+    // under its program, beside the program's, and its indices wait in passIndices until the batch is drawn. A state each,
+    // as prepare() knows a state it has seen by its address.
+    std::vector<GxDrawState> passStates;
+    std::vector<std::vector<std::uint16_t>> passIndices;
+    std::size_t passIndicesWaiting = 0;
+    void stagePasses(const GxCommandProcessor& gpu, std::uint8_t kind, std::uint8_t format, std::uint16_t count, const std::uint8_t* data,
+                     const GxVertex* decoded) {
+        passStates.resize(state_->passes.size()), passIndices.resize(state_->passes.size());
+        for (std::size_t i = 0; i < state_->passes.size(); ++i) {
+            const GxDrawState::Pass& pass = state_->passes[i];
+            if (pass.sameUnits) continue;
+            GxDrawState& passState = passStates[i];
+            passState = *state_, passState.passes.clear(), passState.program = pass.program;
+            if (!pipeline.prepare(gpu, passState, frame, kind, format)) stop(pipeline.unsupported);
+            std::vector<std::uint16_t>& waiting = passIndices[i];
+            const std::size_t at = waiting.size();
+            waiting.resize(at + GxVertexPipeline::maxIndices(kind, count));
+            const auto first = static_cast<std::uint16_t>(used);
+            const std::size_t written = decoded ? pipeline.runDecoded(decoded, count, vertices + used, first, waiting.data() + at)
+                                                : pipeline.run(data, count, vertices + used, first, waiting.data() + at);
+            waiting.resize(at + written), used += pipeline.verticesWritten, passIndicesWaiting += written;
+        }
+    }
+    void drawWaitingPasses() {
+        const PicaPixel own = pixel;
+        const auto ownMask = writeMask;
+        for (std::size_t i = 0; i < passIndices.size(); ++i) {
+            std::vector<std::uint16_t>& waiting = passIndices[i];
+            if (waiting.empty()) continue;
+            const GxDrawState::Pass& pass = state_->passes[i];
+            std::copy(waiting.begin(), waiting.end(), indices + indexUsed);
+            pixel = passPixel(i), writeMask = ownMask & ~GPU_WRITE_DEPTH;
+            sendPixel();
+            for (unsigned unit = 0; unit < pass.program.unitCount; ++unit) sendTexture(unit, texture(state_->textures[pass.program.units[unit].texture]));
+            C3D_DrawElements(GPU_TRIANGLES, static_cast<int>(waiting.size()), C3D_UNSIGNED_SHORT, indices + indexUsed);
+            indexUsed += waiting.size(), waiting.clear();
+            ++perf.passDraws;
+        }
+        passIndicesWaiting = 0;
+        pixel = own, writeMask = ownMask;
+        applied = false;  // the state's own textures go back on with the next batch
     }
 
     void applyState() {
@@ -1793,7 +1879,8 @@ struct Renderer {
         u32* buffer;
         u32 size, offset;
         GPUCMD_GetBuffer(&buffer, &size, &offset);
-        if (size - offset >= words && used + vertexCount <= MaxVertices && indexUsed + GxVertexPipeline::maxIndices(vertexCount) <= MaxIndices)
+        if (size - offset >= words && used + vertexCount <= MaxVertices &&
+            indexUsed + passIndicesWaiting + GxVertexPipeline::maxIndices(vertexCount) <= MaxIndices)
             return;
         if (vertexCount > MaxVertices) stop("a primitive with more vertices than the port's buffer");
         pause();
@@ -1909,9 +1996,9 @@ struct Renderer {
                          static_cast<unsigned long>(perf.meshesDiffering), static_cast<unsigned long>(perf.refreshesChecked),
                          static_cast<unsigned long>(perf.refreshesDiffering));
         std::fprintf(stderr, "gx perf: display lists refused by reason (per frame):%s; meshes invalidated %.1f, overflows %.1f, over budget %.1f, "
-                     "evicted %.1f, drops for room %lu, key mismatches %.1f, refreshed %.1f (%.0f vertices), primitives left out %.1f, flushes queued %.1f; GX FIFO writes %.0f per frame; textures %zu, %lu invalidated\n", refusals.c_str(),
+                     "evicted %.1f, drops for room %lu, key mismatches %.1f, refreshed %.1f (%.0f vertices), primitives left out %.1f, pass draws %.1f, flushes queued %.1f; GX FIFO writes %.0f per frame; textures %zu, %lu invalidated\n", refusals.c_str(),
                      perf.meshInvalidated / n, perf.meshOverflows / n, perf.meshBudgetDrops / n, perf.meshesEvicted / n, static_cast<unsigned long>(perf.meshesDroppedForRoom), perf.meshMismatches / n, perf.meshesRefreshed / n,
-                     perf.meshVerticesRefreshed / n, perf.leftOutDraws / n, perf.flushesQueued / n,
+                     perf.meshVerticesRefreshed / n, perf.leftOutDraws / n, perf.passDraws / n, perf.flushesQueued / n,
                      (smgFifoWrites - perf.writesBefore) / n, textures.size(), static_cast<unsigned long>(perf.texturesInvalidated));
         if (perf.meshMismatches)
             std::fprintf(stderr, "gx perf: key mismatches by what changed (per frame): key %.1f, descriptor %.1f, format table %.1f, array base %.1f, "
