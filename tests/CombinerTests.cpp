@@ -591,6 +591,40 @@ void electricRail(std::mt19937& rng) {
     }
 }
 
+// Buoy Base's Gearmo body (caretaker.bdl BodyMat_v, C0 as bodycolor.brk's yellow): lit texture plus the tint, its
+// alpha's highlight added twice, the environment map, the soot taken off. The last alpha saturates whatever it reads,
+// so the alpha stages before it take no combiner stages; cut short at six, the body came out black.
+void gearmoBody(std::mt19937& rng) {
+    smg::ModelMaterial m;
+    for (int i = 0; i < 3; ++i) m.textures[i] = i;
+    m.tevColors[0] = {45 / 255.0f, 40 / 255.0f, -31 / 255.0f, -60 / 255.0f};
+    m.tevColors[1] = {0, 0, 0, -150 / 255.0f};
+    m.tevColors[2] = {1023 / 255.0f, 1023 / 255.0f, 1023 / 255.0f, 1};
+    m.konstColors[1] = m.konstColors[2] = m.konstColors[3] = {1, 1, 1, 1};
+    m.tevStageCount = 4;
+    const std::uint8_t color[4][4]{{4, 8, 10, 2}, {15, 10, 1, 0}, {15, 8, 10, 0}, {15, 6, 8, 0}};
+    const std::uint8_t alpha[4][4]{{4, 6, 5, 1}, {7, 6, 5, 1}, {0, 7, 7, 7}, {7, 6, 2, 0}};
+    const std::uint8_t map[4]{0, 0xff, 1, 2}, konst[4][2]{{0x0c, 0x07}, {0x07, 0x06}, {0x00, 0x1c}, {0x00, 0x00}};
+    for (int i = 0; i < 4; ++i) {
+        auto& s = m.stages[i];
+        s = {};
+        std::copy(color[i], color[i] + 4, s.colorIn), std::copy(alpha[i], alpha[i] + 4, s.alphaIn);
+        s.texMap = s.texCoord = map[i], s.channel = 4, s.konstColor = konst[i][0], s.konstAlpha = konst[i][1];
+    }
+    m.stages[0].alphaScale = m.stages[1].colorScale = m.stages[1].alphaScale = 1;
+    m.stages[2].alphaClamp = 0;
+    m.stages[3].colorOp = 1, m.stages[3].alphaScale = 2;
+    const auto program = smg::compileTev(m);
+    check(program.exact && program.stageCount <= smg::CombinerProgram::MaxStages, "the Gearmo's body translates exactly");
+    for (int i = 0; i < 300; ++i) {
+        const auto in = byteInputs(rng);
+        if (same(gx(m, in), pica(program, in))) continue;
+        dump(m, program, in);
+        check(false, "and matches GX on byte inputs");
+        break;
+    }
+}
+
 int runCombinerTests() {
     std::mt19937 rng(1234);
     realMaterial(rng);
@@ -602,6 +636,7 @@ int runCombinerTests() {
     sixTapBlur(rng);
     waterPasses(rng);
     electricRail(rng);
+    gearmoBody(rng);
     randomMaterials(rng);
     std::printf("%u TEV combiner checks passed\n", checks);
     return 0;

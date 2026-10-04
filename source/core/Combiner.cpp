@@ -69,10 +69,11 @@ bool inUnit(const Arg& a) {
     return true;
 }
 
-// TEV inputs a, b and c see only a register's low eight bits; d sees the whole signed value.
+// TEV inputs a, b and c see only a register's low eight bits; d sees the whole signed value. Modulo 256 steps, kept
+// continuous like the rest of this arithmetic (a computed value need not be a whole step).
 float wrapByte(float v) {
     if (v >= 0 && v <= 1) return v;
-    return static_cast<float>(static_cast<int>(std::lround(v * 255)) & 255) / 255;
+    return v - 256 / 255.0f * std::floor(v * 255 / 256 + 1e-6f);
 }
 
 struct Range {
@@ -580,6 +581,28 @@ struct Compiler {
         return true;
     }
 
+    // Rewrites in `out` (m's copy) each saturated part every input leaves at 0 or 1 to read that constant: what only it
+    // read is then dead. True when one was.
+    bool foldFixed(ModelMaterial& out) {
+        bool folded = false;
+        for (unsigned i = 0; i < m.tevStageCount; ++i) {
+            const auto& s = m.stages[i];
+            const Range results[2]{stageRange(s, false), stageRange(s, true)};
+            TevStage& t = out.stages[i];
+            if (s.colorClamp && results[0].lo == results[0].hi && (results[0].lo == 0 || results[0].lo == 1)) {
+                t.colorIn[0] = t.colorIn[1] = t.colorIn[2] = 15, t.colorIn[3] = results[0].lo ? 12 : 15;
+                t.colorOp = t.colorBias = t.colorScale = 0, folded = true;
+            }
+            if (s.alphaClamp && results[1].lo == results[1].hi && (results[1].lo == 0 || results[1].lo == 1)) {
+                t.alphaIn[0] = t.alphaIn[1] = t.alphaIn[2] = 7, t.alphaIn[3] = results[1].lo ? 6 : 7;
+                t.konstAlpha = 0, t.alphaOp = t.alphaBias = t.alphaScale = 0, folded = true;
+            }
+            const std::uint8_t outputs[2]{static_cast<std::uint8_t>(s.colorReg & 3), static_cast<std::uint8_t>(s.alphaReg & 3)};
+            for (int part = 0; part < 2; ++part) written[outputs[part]][part] = true, ranges[outputs[part]][part] = results[part];
+        }
+        return folded;
+    }
+
     CombinerProgram run() {
         if (leading) {
             auto& pass = program.stages[program.stageCount++];
@@ -639,6 +662,7 @@ CombinerProgram compile(const ModelMaterial& material, bool known, bool color1) 
     const auto shifted = Compiler(material, true, known, color1).run();
     return shifted.exact || std::strcmp(shifted.approximation, "more than two constants") ? shifted : program;
 }
+void clearDead(ModelMaterial& m);
 } // namespace
 
 CombinerProgram compileTev(const ModelMaterial& material, bool color1FromUnit) {
@@ -646,7 +670,14 @@ CombinerProgram compileTev(const ModelMaterial& material, bool color1FromUnit) {
     const auto previous = compile(material, false, color1FromUnit);
     if (previous.exact) return previous;
     const auto constants = compile(material, true, color1FromUnit);
-    return constants.exact ? constants : previous;
+    if (constants.exact) return constants;
+    // Stages that only fed a saturated result fixed whatever they give take no combiner stages.
+    ModelMaterial folded = material;
+    if (!Compiler(material, false, false, color1FromUnit).foldFixed(folded)) return previous;
+    clearDead(folded);
+    for (const bool known : {false, true})
+        if (const auto program = compile(folded, known, color1FromUnit); program.exact) return program;
+    return previous;
 }
 namespace {
 // GX inputs by number: color CPREV 0, APREV 1, C0-C2 2/4/6, A0-A2 3/5/7, TEXC 8, TEXA 9, RASC 10, RASA 11, ONE 12,
