@@ -959,7 +959,7 @@ reach a stage's later parts without walking there; it also stops the story's que
 queued on landing would freeze the opening's arrival cutscene and be frozen by it); `dev.galaxy=GALAXY N` makes the first galaxy after the file select that
 galaxy's scenario N (`GameSequenceProgress::requestGalaxyMove`, once the story has named the stage: a new file's first
 move names it only in `moveGalaxy`, which also queues the castle's prologue, so the story is stopped there). `dev.warp=X Y Z [SECONDS]` moves Mario there (`MR::setPlayerPos`) once a run, after that much play (2 s unless given), counted only outside the file select (whose Mario is a
-stand-in) and outside demos, movies and the scenario's opening, which place Mario themselves. The heartbeat
+stand-in), movies and the scenario's opening; demos count, as some are played (Bowser's attack). The heartbeat
 (every 300th frame) logs where Mario is, for planning a run's route. Azahar runs the 3DS CPU at its base 268 MHz although the port switches a New 3DS to 804
 MHz (`osSetSpeedupEnable`), so every millisecond figure here is a slow-clock one; how much faster hardware is can only
 be measured on hardware.
