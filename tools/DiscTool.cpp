@@ -1,9 +1,5 @@
-// disc_tool IMAGE KEY [EXTRACTED]: opens a Wii disc image (ISO, WBFS or RVZ) with the port's reader. KEY is the common
-// key, or with a "title:" prefix the data partition's decrypted title key (as wit dump shows it), in hex; "-" for an
-// RVZ, which needs none. With EXTRACTED (a folder wit extracted from the same disc), every file in the image is read
-// and compared with it.
-// disc_tool --rvz EXTRACTED OUT: an RVZ of the data partition rebuilt from wit's folder (its files laid out where the
-// file table puts them, zeros between), for trying the port's RVZ path; no hashes, ticket or junk, so not a dump.
+// disc_tool IMAGE KEY|title:KEY|- [EXTRACTED]: reads every file of an ISO, WBFS or RVZ against wit's extraction.
+// disc_tool --rvz EXTRACTED OUT: an RVZ rebuilt from wit's folder for trying the port's RVZ path; not a real dump.
 #include <smg/WiiDisc.hpp>
 #include <algorithm>
 #include <cstdio>
@@ -49,8 +45,6 @@ std::vector<std::uint8_t> squeeze(const std::vector<std::uint8_t>& in) {
 }
 
 int writeRvz(const std::string& folder, const char* outPath) {
-    // The partition's data as pieces: boot.bin, bi2.bin and the apploader where the Wii keeps them, main.dol and the
-    // file table where boot.bin says, then every file where the table says.
     struct Piece {
         std::uint64_t at;
         std::uint32_t size;
@@ -90,8 +84,7 @@ int writeRvz(const std::string& folder, const char* outPath) {
     for (const Piece& p : pieces) end = std::max(end, p.at + p.size);
     const std::uint64_t clusters = (end + 0x7BFF) / 0x7C00, dataSize = clusters * 0x7C00;
 
-    // The disc outside the partition's data: header, one partition table entry, and the partition's header saying
-    // where its data lies (the ticket's key and signatures left empty: an RVZ keeps the data decrypted).
+    // The ticket's key and signatures stay empty: an RVZ keeps the partition decrypted.
     constexpr std::uint64_t Partition = 0x50000, DataAt = Partition + 0x20000;
     constexpr std::uint32_t Chunk = 0x20000, DataChunk = Chunk / 0x8000 * 0x7C00;
     std::vector<std::uint8_t> disc(DataAt, 0);
@@ -197,7 +190,6 @@ int main(int argc, char** argv) {
     const std::uint32_t count = big32(&table[8]);
     std::printf("%s: %s, game %s, %u file table entries\n", argv[1], disc.format(), disc.gameId().c_str(), count);
     if (argc < 4) return 0;
-    // Each entry's path from the directories holding it, then each file read from the image and from the folder.
     std::vector<std::string> paths(count);
     std::vector<std::uint32_t> ends(count, count);
     const auto* names = reinterpret_cast<const char*>(&table[12 * count]);

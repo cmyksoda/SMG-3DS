@@ -1,6 +1,5 @@
-// The Wii's disc drive, over the game on the SD card: a disc image (DiscImage.cpp) or the files extracted from it.
-// Entry numbers are the disc's own, from its file table (the image's, or sys/fst.bin); asynchronous reads finish on
-// a worker thread, which calls the game back as the drive's interrupt did.
+// The Wii's disc drive over the game on the SD card, a disc image or its extracted files, with the disc's own entry
+// numbers; asynchronous reads finish on a worker thread that calls back as the drive's interrupt did.
 #include <3ds.h>
 #include <revolution/dvd.h>
 #include <smg/DiscImage.hpp>

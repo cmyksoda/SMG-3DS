@@ -1,6 +1,5 @@
-// The Wii's NAND (its flash, through IOS's file system) as files on the SD card: sdmc:/3ds/SMG-3DS/nand mirrors the
-// NAND's tree, and the game's home directory is its title's data folder there, named from the disc's game code
-// (boot.bin, in the disc image or sys). Paths without a leading slash are the home directory's, as NANDInit leaves the current directory.
+// The Wii's NAND as files in sdmc:/3ds/SMG-3DS/nand; the game's home is its title's data folder there, named by the
+// disc's game code, and paths without a leading slash are the home's, as NANDInit leaves the current directory.
 #include <3ds.h>
 #include <revolution/nand.h>
 #include <smg/DiscImage.hpp>

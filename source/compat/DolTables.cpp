@@ -26,7 +26,7 @@ const DolTables& tables() {
     if (read) return found;
     std::vector<std::uint8_t> dol;
     if (disc::fromImage()) {
-        // Where boot.bin says, as long as its furthest section reaches (18 offsets, then their addresses, then sizes).
+        // A DOL's size is its furthest section's end.
         const std::uint8_t* boot = disc::bootBin();
         const std::uint64_t at = std::uint64_t(big32(boot + 0x420)) << 2;
         std::uint8_t head[0x100];

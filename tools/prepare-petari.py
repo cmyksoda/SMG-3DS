@@ -1185,9 +1185,8 @@ adapt("include/Game/LiveActor/ShadowVolumeDrawer.hpp", "include/Game/LiveActor/S
     ("    virtual void loadModelDrawMtx() const override;\n    virtual void drawShape() const override;",
      "    virtual void loadModelDrawMtx() const;\n    virtual void drawShape() const;", 1),
 ])
-# The game asks for an area manager by name many times a frame (is Mario in water, a death area, a camera area...),
-# each a strstr against every manager in turn. The managers come from cCreateTable in its order, so a name's index is
-# fixed by its text: the game's own thread remembers it by the name's address and text.
+# The game asks for area managers by name many times a frame, each a strstr through every manager; a name's index is
+# fixed by cCreateTable, so the game's own thread remembers it by the name's address and text.
 adapt("src/Game/AreaObj/AreaObjContainer.cpp", "Game/AreaObj/AreaObjContainer.cpp", [
     ("AreaObjMgr* AreaObjContainer::getManager(const char* pName) const {\n"
      "    return *std::find_if(mManagerArray, mManagerArray + mNumManagers, std::binder2nd< IsManagerName, const char* >(IsManagerName(), pName));\n}",
@@ -1376,13 +1375,8 @@ adapt("src/Game/System/GameEventFlagChecker.cpp", "Game/System/GameEventFlagChec
 adapt("src/Game/Animation/XanimeResource.cpp", "Game/Animation/XanimeResource.cpp", [], cases=["    case 1:"])
 adapt("src/Game/Ride/SurfRay.cpp", "Game/Ride/SurfRay.cpp", [], cases=["    case 11:"])
 
-# The Wii's entry point, kept whole under a name the port's own main can call (source/probe/MarioProbe.cpp).
-# Each frame's phases are timed for the renderer's perf line (source/compat/GxRender.cpp): drawing, the logic step
-# (update), animation, the wait for the GPU's draw done (endFrame), then the wait for the retrace. The framework's own
-# render interval draws every second logic step (smgRenderInterval): the frame is drawn only when it says so. A drawn
-# step first waits until the frame before it is out (smgWaitFramesOut), so the render thread draws a frame through
-# the next two logic steps, its draw-sync callbacks running beside them as the Wii's interrupts ran beside its logic.
-# A scene is destroyed only once they have all run (GameSystemSceneController, below).
+# The Wii's entry point under a name the port's main calls, its phases timed for the perf line. A drawn step waits only
+# for the frame before it (smgWaitFramesOut), so a frame draws through the next two steps, its draw syncs beside them.
 adapt("src/Game/System/GameSystem.cpp", "Game/System/GameSystem.cpp", [
     ("void main(void) {\n    OSInitFastCast();", "void smgGameMain() {\n    OSInitFastCast();", 1),
     ('#include "Game/System/GameSystem.hpp"\n', '#include "Game/System/GameSystem.hpp"\n\nextern "C" void smgFramePhase(int phase);\nextern "C" int smgRenderInterval();\nextern "C" void smgAvSyncFrame();\nextern "C" void smgWaitFramesOut();\nextern "C" void smgFrameDrawn();\nextern "C" bool smgViewNeeded;\n', 1),
@@ -1411,9 +1405,8 @@ adapt("src/Game/System/GameSequenceProgress.cpp", "Game/System/GameSequenceProgr
     ('#include "Game/System/GameSequenceProgress.hpp"\n',
      '#include "Game/System/GameSequenceProgress.hpp"\n\nextern "C" const char* smgDevGalaxy(int* scenario);  // source/compat/Kpad.cpp\n'
      'extern "C" int smgDevMarioStart(const char* galaxy);\n', 1),
-    # A new file's first move names its stage only in moveGalaxy, which also queues the prologue's demos: the stage is
-    # taken after it, and the story stopped, as leaving the story stops it. dev.start stops it too: a start point the
-    # story never pairs with its demos (the garden's 1, after the attack) would otherwise meet them.
+    # A new file's stage is named only in moveGalaxy, which also queues the prologue: both dev settings stop the story so
+    # its demos never meet another galaxy or a start point it never pairs them with.
     ("    mGalaxyCometScheduler->syncWithFlags();\n\n    updateGameDataBeforeChangeScene();\n",
      "    mGalaxyCometScheduler->syncWithFlags();\n\n    static bool sDevGalaxyTaken = false;\n    int devScenario = 0;\n"
      "    if (const char* devGalaxy = smgDevGalaxy(&devScenario); devGalaxy && !sDevGalaxyTaken && moveArg.mStageName != nullptr &&\n"
@@ -1442,9 +1435,8 @@ adapt("src/Game/Scene/StageDataHolder.cpp", "Game/Scene/StageDataHolder.cpp", [
      "            if (pInfo->mData == rIter.mInfo->mData) {\n                return this;\n            }\n        }\n    }\n", 1),
 ])
 
-# A model's view matrices (J3DModel::viewCalc) are only drawn with: a step whose next step draws nothing has them
-# computed again by that next step before anything draws them, so the frame loop leaves them out of its calcAnim
-# (smgViewNeeded false only there). Their data reaches the GPU when drawn, so J3D's swap needs no fixed rhythm.
+# View matrices a step computes are computed again by the next before anything draws them when that step draws
+# nothing, so the frame loop leaves them out there (smgViewNeeded).
 adapt("src/Game/LiveActor/ModelManager.cpp", "Game/LiveActor/ModelManager.cpp", [
     ('#include "Game/LiveActor/ModelManager.hpp"\n', '#include "Game/LiveActor/ModelManager.hpp"\n\nextern "C" bool smgViewNeeded;  // source/compat/GameScene.cpp\n', 1),
     ("void ModelManager::calcView() {\n    getJ3DModel()->viewCalc();",

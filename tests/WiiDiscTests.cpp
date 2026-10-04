@@ -145,10 +145,8 @@ std::vector<std::uint8_t> describedJunk(const std::uint8_t seed[68], std::size_t
     return std::vector<std::uint8_t>(out.begin() + std::ptrdiff_t(skip), out.begin() + std::ptrdiff_t(skip + count));
 }
 
-// The same disc as an RVZ with 32 KiB chunks: one raw stretch (the disc up to the partition's data, empty blocks as
-// empty groups), then the partition's three clusters of data as three groups, each stored another way: compressed with
-// one hash exception; stored with none (its list padded to a word); compressed and packed as 0x100 literal bytes and
-// junk. The disc's last cluster is that junk, as the RVZ gives it.
+// The same disc as an RVZ, its partition's three groups stored the three ways: compressed with a hash exception, stored
+// with its exception list padded, and packed as literal bytes then junk (which becomes the disc's last cluster).
 constexpr std::uint32_t JunkFrom = 2 * 0x7C00 + 0x100, JunkSize = 0x7C00 - 0x100;
 std::vector<std::uint8_t> rvzImage(const std::vector<std::uint8_t>& disc, const std::uint8_t seed[68]) {
     const std::vector<std::uint8_t> plain = partitionData();
