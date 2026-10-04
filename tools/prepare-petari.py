@@ -1956,6 +1956,10 @@ adapt("src/Game/RhythmLib/AudChordInfo.cpp", "Game/RhythmLib/AudChordInfo.cpp", 
 # THP movies (docs/PORTING.md, "Movies"): SCGetSoundMode needs sc.h. The player copies the file's big-endian headers into its structs, and each frame
 # starts with big-endian sizes; they turn native as each read lands. Audio records turn as they're decoded.
 adapt("src/Game/Screen/THPSimplePlayerWrapper.cpp", "Game/Screen/THPSimplePlayerWrapper.cpp", [
+    # The last preload's callback restarts this step, which read once more, into the first frame's buffer, after
+    # which no callback turned it native; the Wii's slow drive mostly lost that race, the SD card never does.
+    ("void THPSimplePlayerWrapper::exeReadPreLoad() {\n    if (MR::isFirstStep(this)) {\n",
+     "void THPSimplePlayerWrapper::exeReadPreLoad() {\n    if (MR::isFirstStep(this) && _314) {\n", 1),
     ('#include <cstring>\n', '#include <cstring>\n#include <revolution/sc.h>\n#include <smg/NativeResources.hpp>\n', 1),
     ("    memcpy(&mHeader, WorkBuffer, sizeof(mHeader));\n", "    memcpy(&mHeader, WorkBuffer, sizeof(mHeader));\n    smgNativeWords(&mHeader.version, 11);\n", 1),
     ("    memcpy(&mFrameComp, WorkBuffer, sizeof(mFrameComp));\n",

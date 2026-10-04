@@ -1014,7 +1014,10 @@ libjpeg's accurate integer IDCT, planes out). `tools/ThpAudit.cpp` decodes all 6
 away, so the renderer turns each decoded frame into one RGB565 texture (full-range BT.601, which the Wii's TEV
 constants work out to exactly) and draws it where the game's quad goes. The game's `THPDraw.c` and the SDK's
 `THPAudio.c` build as they are otherwise; the player's headers and each frame's size words, and each audio record's
-header, turn native as they arrive.
+header, turn native as they arrive. The player preloads 20 frames, each preload's callback restarting the read step; that
+step read before checking how many were left, so the last callback set off a 21st read into the first frame's buffer,
+which no callback then turned native. The Wii's disc drive was usually slower than the first decode; the SD card never
+is, and the first frame's sizes were read big-endian. The step now reads only while frames are left to preload.
 
 **Camera animations.** An "ANDO" file of kind CANM or CKAN (`CameraAnim::loadBin`) is a 0x20-byte header, eight
 components' count, offset and (keyed) type words, then a byte count and the values, all big-endian. They turn native at
