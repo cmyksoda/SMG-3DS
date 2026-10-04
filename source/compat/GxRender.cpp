@@ -207,6 +207,7 @@ struct Renderer {
         u64 since = 0, syncTicks = 0;
         u32 frames = 0, primitives = 0, vertices = 0, triangles = 0, draws = 0, sameState = 0, color0Rides = 0;
         u32 meshDraws = 0, meshTriangles = 0, meshesMade = 0, citroDraws = 0;
+        u32 pendingWhy[9] = {};  // mesh draws through citro3d after each kind of change (Pending)
         u32 meshInvalidated = 0, meshOverflows = 0, meshBudgetDrops = 0, meshMismatches = 0, flushesQueued = 0, texturesInvalidated = 0;
         u64 timed[6] = {};  // dev.gx_timing: CPU-path primitives (immediate, in lists), display lists (mesh draws), texture copies, movie, frame ends
         u64 cpuCopyTicks = 0;  // of the texture copies, those read back and encoded on the CPU
@@ -332,11 +333,15 @@ struct Renderer {
         u64 meshPermutation = 0;
         int meshComponents = 0;
     } sent;
-    void forgetSent() { sent = Sent{}, pending = true; }
+    void forgetSent() { sent = Sent{}, pend(PendingList); }
     // Whether citro3d holds state of ours not yet sent (one of its setters since its last draw): then a draw goes through
     // citro3d, which sends it; otherwise a mesh draw writes its few registers itself (writeMeshDraw). Every command list
     // begins pending, so its first draw is citro3d's and citro3d submits the list.
     bool pending = true;
+    enum Pending : unsigned { PendingCombiner, PendingFragment, PendingCull, PendingScissor, PendingTexture, PendingFixed, PendingCpuBuffers,
+                              PendingMeshLayout, PendingList };
+    u32 pendingWhy = 1u << PendingList;
+    void pend(Pending why) { pending = true, pendingWhy |= 1u << why; }
 
     // A mesh draw's vertex shader uniforms, set in citro3d's copies (which then always match the GPU) and sent by citro3d
     // when it has state of ours pending anyway, else written here (sendUniforms).
@@ -417,35 +422,35 @@ struct Renderer {
         const bool all = !sent.pixel;
         const PicaPixel& was = sent.was;
         for (unsigned i = 0; i < CombinerProgram::MaxStages; ++i)
-            if (all || std::memcmp(&was.env[i], &pixel.env[i], sizeof(C3D_TexEnv))) *C3D_GetTexEnv(int(i)) = pixel.env[i], pending = true;
-        if (all || was.bufferColor != pixel.bufferColor) C3D_TexEnvBufColor(pixel.bufferColor), pending = true;
+            if (all || std::memcmp(&was.env[i], &pixel.env[i], sizeof(C3D_TexEnv))) *C3D_GetTexEnv(int(i)) = pixel.env[i], pend(PendingCombiner);
+        if (all || was.bufferColor != pixel.bufferColor) C3D_TexEnvBufColor(pixel.bufferColor), pend(PendingCombiner);
         if (all || was.bufferUpdate[0] != pixel.bufferUpdate[0] || was.bufferUpdate[1] != pixel.bufferUpdate[1])
-            C3D_TexEnvBufUpdate(C3D_RGB, pixel.bufferUpdate[0]), C3D_TexEnvBufUpdate(C3D_Alpha, pixel.bufferUpdate[1]), pending = true;
+            C3D_TexEnvBufUpdate(C3D_RGB, pixel.bufferUpdate[0]), C3D_TexEnvBufUpdate(C3D_Alpha, pixel.bufferUpdate[1]), pend(PendingCombiner);
         if (all || was.alphaTest != pixel.alphaTest || was.alphaFunc != pixel.alphaFunc || was.alphaReference != pixel.alphaReference)
-            C3D_AlphaTest(pixel.alphaTest, pixel.alphaFunc, pixel.alphaReference), pending = true;
+            C3D_AlphaTest(pixel.alphaTest, pixel.alphaFunc, pixel.alphaReference), pend(PendingFragment);
         if (all || was.equation != pixel.equation || was.alphaEquation != pixel.alphaEquation || was.source != pixel.source ||
             was.destination != pixel.destination || was.alphaSource != pixel.alphaSource || was.alphaDestination != pixel.alphaDestination)
-            C3D_AlphaBlend(pixel.equation, pixel.alphaEquation, pixel.source, pixel.destination, pixel.alphaSource, pixel.alphaDestination), pending = true;
+            C3D_AlphaBlend(pixel.equation, pixel.alphaEquation, pixel.source, pixel.destination, pixel.alphaSource, pixel.alphaDestination), pend(PendingFragment);
         if (all || was.depthTest != pixel.depthTest || was.depthFunc != pixel.depthFunc || sent.writeMask != writeMask)
-            C3D_DepthTest(pixel.depthTest, pixel.depthTest ? pixel.depthFunc : GPU_ALWAYS, static_cast<GPU_WRITEMASK>(writeMask)), pending = true;
+            C3D_DepthTest(pixel.depthTest, pixel.depthTest ? pixel.depthFunc : GPU_ALWAYS, static_cast<GPU_WRITEMASK>(writeMask)), pend(PendingFragment);
         sent.was = pixel, sent.writeMask = writeMask, sent.pixel = true;
     }
     void sendCull(GPU_CULLMODE mode) {
         if (sent.cull && sent.cullMode == mode) return;
         C3D_CullFace(mode);
-        sent.cull = true, sent.cullMode = mode, pending = true;
+        sent.cull = true, sent.cullMode = mode, pend(PendingCull);
     }
     void sendScissor() {
         if (sent.scissor && sent.scissorWhole == scissorWhole && (scissorWhole || !std::memcmp(sent.scissorBox, scissor, sizeof scissor))) return;
         if (scissorWhole) C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
         else C3D_SetScissor(GPU_SCISSOR_NORMAL, scissor[0], scissor[1], scissor[2], scissor[3]);
-        sent.scissor = true, sent.scissorWhole = scissorWhole, std::memcpy(sent.scissorBox, scissor, sizeof scissor), pending = true;
+        sent.scissor = true, sent.scissorWhole = scissorWhole, std::memcpy(sent.scissorBox, scissor, sizeof scissor), pend(PendingScissor);
     }
     // The same texture object with the same registers needs no binding again.
     void sendTexture(unsigned unit, C3D_Tex& texture) {
         if (sent.texture[unit] && sent.bound[unit] == &texture && !std::memcmp(&sent.boundWas[unit], &texture, sizeof texture)) return;
         C3D_TexBind(int(unit), &texture);
-        sent.texture[unit] = true, sent.bound[unit] = &texture, sent.boundWas[unit] = texture, pending = true;
+        sent.texture[unit] = true, sent.bound[unit] = &texture, sent.boundWas[unit] = texture, pend(PendingTexture);
     }
     // `attribute` is the attribute's index among the loaders and fixed ones, as AttrInfo_AddFixed returns it.
     void sendFixed(int attribute, float x, float y, float z, float w) {
@@ -453,7 +458,7 @@ struct Renderer {
         if (sent.fixed[attribute] && was.x == x && was.y == y && was.z == z && was.w == w) return;
         C3D_FVec* value = C3D_FixedAttribGetWritePtr(attribute);
         value->x = x, value->y = y, value->z = z, value->w = w;
-        sent.fixed[attribute] = true, was = *value, pending = true;
+        sent.fixed[attribute] = true, was = *value, pend(PendingFixed);
     }
 
     // The CPU path's vertices: transformed already, the shader passing them on. Bound again only when a draw from them
@@ -463,7 +468,7 @@ struct Renderer {
         if (!cpuBound) bindCpuBuffers();
     }
     void bindCpuBuffers() {
-        cpuBound = true, pending = true;
+        cpuBound = true, pend(PendingCpuBuffers);
         sent.meshLayout = -1;
         for (bool& known : sent.fixed) known = false;  // the vertex loaders' fixed values, not trusted past another layout
         C3D_BoolUnifSet(GPU_VERTEX_SHADER, transformUniform, false);
@@ -1536,7 +1541,7 @@ struct Renderer {
             else pad(0xE), AttrInfo_AddFixed(attributes, 6);
             if (mesh.slots) loader(5, GPU_FLOAT, 1);
             else AttrInfo_AddFixed(attributes, 5);
-            sent.meshLayout = layout, sent.meshPermutation = permutation, sent.meshComponents = components, pending = true;
+            sent.meshLayout = layout, sent.meshPermutation = permutation, sent.meshComponents = components, pend(PendingMeshLayout);
         }
         // A fixed value goes to its attribute's place among the seven (colour 1, texgen inputs 2-4, normal 5, slot 6), which
         // citro3d numbers in the order they were added, not to the shader register it feeds.
@@ -1558,7 +1563,8 @@ struct Renderer {
                 BufInfo_Init(buffers);
                 BufInfo_Add(buffers, mesh.block, sizeof(GxMeshVertex), sent.meshComponents, sent.meshPermutation);
                 C3D_DrawElements(GPU_TRIANGLES, int(mesh.groups[g].indexCount), C3D_UNSIGNED_SHORT, indices + mesh.groups[g].firstIndex);
-                pending = false, ++perf.citroDraws;
+                for (unsigned why = 0; why <= PendingList; ++why) perf.pendingWhy[why] += pendingWhy >> why & 1;
+                pending = false, pendingWhy = 0, ++perf.citroDraws;
             } else {
                 writeMeshDraw(mesh, mesh.groups[g], g == 0);
             }
@@ -1613,7 +1619,7 @@ struct Renderer {
         ensureCpuBuffers();
         sendCull(GPU_CULL_NONE);  // culled in EFB space already
         C3D_DrawElements(GPU_TRIANGLES, static_cast<int>(indexUsed - batchStart), C3D_UNSIGNED_SHORT, indices + batchStart);
-        pending = false;
+        pending = false, pendingWhy = 0;
         ++perf.draws, perf.triangles += (indexUsed - batchStart) / 3;
         batchStart = indexUsed;
         fresh[0] = fresh[1] = fresh[2] = false;
@@ -1732,6 +1738,16 @@ struct Renderer {
                          "uniforms %.1f ms (%.0f), draw calls %.1f ms (%.0f), first-use textures %.1f ms (%.1f)\n", perf.stepTicks[6] * ms,
                          perf.steps[6] / n, perf.stepTicks[7] * ms, perf.steps[7] / n, perf.stepTicks[8] * ms, perf.steps[8] / n, perf.stepTicks[9] * ms,
                          perf.steps[9] / n, perf.stepTicks[10] * ms, perf.steps[10] / n, perf.stepTicks[11] * ms, perf.steps[11] / n);
+            const u32* counts = lastGpu->commandCounts;
+            const u32* bytes = lastGpu->commandBytes;
+            std::fprintf(stderr, "gx perf: commands per frame (count/KB): BP %.0f/%.0f, CP %.0f/%.0f, XF %.0f/%.0f, XF indexed %.0f/%.0f, list calls %.0f/%.0f, "
+                         "primitives %.0f/%.0f, other %.0f/%.0f\n", counts[0] / n, bytes[0] / n / 1024, counts[1] / n, bytes[1] / n / 1024, counts[2] / n,
+                         bytes[2] / n / 1024, counts[3] / n, bytes[3] / n / 1024, counts[4] / n, bytes[4] / n / 1024, counts[5] / n, bytes[5] / n / 1024,
+                         counts[6] / n, bytes[6] / n / 1024);
+            const u32* why = perf.pendingWhy;
+            std::fprintf(stderr, "gx perf: mesh draws through citro3d after a change of: combiner %.0f, fragment ops %.0f, cull %.0f, scissor %.0f, "
+                         "textures %.0f, fixed attributes %.0f, CPU-path buffers %.0f, mesh layout %.0f, command list %.0f\n", why[0] / n, why[1] / n,
+                         why[2] / n, why[3] / n, why[4] / n, why[5] / n, why[6] / n, why[7] / n, why[8] / n);
             std::fprintf(stderr, "gx perf: pipeline per frame: %.0f prepares read whole, %.0f folds made, %.0f lighting reads; vertex layouts %.0f read, "
                          "%.0f reused; unfolded texgen vertices: matrix the position's %.0f, its pair %.0f, another %.0f, the last again %.0f, normalized %.0f\n",
                          pipeline.fullPrepares / n, pipeline.foldsMade / n, pipeline.lightingReads / n, lastGpu->layoutsRead / n,
@@ -1741,6 +1757,8 @@ struct Renderer {
         pipeline.fullPrepares = pipeline.foldsMade = pipeline.lightingReads = 0;
         pipeline.texMatrixShared = pipeline.texMatrixPaired = pipeline.texMatrixOwn = pipeline.texMatrixRepeated = pipeline.texgensNormalized = 0;
         lastGpu->layoutsRead = lastGpu->layoutsReused = 0;
+        std::fill(std::begin(lastGpu->commandCounts), std::end(lastGpu->commandCounts), 0u);
+        std::fill(std::begin(lastGpu->commandBytes), std::end(lastGpu->commandBytes), 0u);
         std::string approximations;
         for (const auto& [why, count] : perf.approximated)
             if (why) approximations += std::string(approximations.empty() ? " " : ", ") + why + " " + std::to_string(count);

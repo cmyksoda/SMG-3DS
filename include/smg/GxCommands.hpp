@@ -109,6 +109,9 @@ public:
     std::uint32_t bpChangesBesideColors = 0, color1Changes = 0;
     // Display lists called, and their bytes (for the renderer's perf line).
     std::uint32_t displayListCalls = 0, displayListBytes = 0;
+    // Commands read and their bytes by kind (CommandKind), inside called lists too (for the perf line).
+    enum CommandKind : unsigned { CommandBp, CommandCp, CommandXf, CommandXfIndexed, CommandCall, CommandPrimitive, CommandOther, CommandKinds };
+    mutable std::uint32_t commandCounts[CommandKinds] = {}, commandBytes[CommandKinds] = {};
     // Vertex layouts read from the registers, and taken from those read before (for the perf line).
     mutable std::uint32_t layoutsRead = 0, layoutsReused = 0;
     // How deep the processor is in called display lists (0: the FIFO itself).
@@ -117,6 +120,7 @@ public:
 private:
     // One command from `at` if all of it is there: its length, or 0 to wait for more bytes.
     std::uint32_t command(const std::uint8_t* at, std::uint32_t available);
+    std::uint32_t execute(const std::uint8_t* at, std::uint32_t available);
     void run(const std::uint8_t* at, std::uint32_t size);
     void loadBp(std::uint32_t value);
     void loadXf(std::uint32_t address, std::uint32_t count, const std::uint8_t* from, bool native);

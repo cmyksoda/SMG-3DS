@@ -328,6 +328,15 @@ void GxCommandProcessor::run(const std::uint8_t* at, std::uint32_t size) {
 
 std::uint32_t GxCommandProcessor::command(const std::uint8_t* at, std::uint32_t available) {
     const std::uint8_t opcode = at[0];
+    const std::uint32_t used = execute(at, available);
+    const unsigned kind = opcode == 0x61 ? CommandBp : opcode == 0x08 ? CommandCp : opcode == 0x10 ? CommandXf : opcode >= 0x20 && opcode < 0x40 ? CommandXfIndexed
+                        : opcode == 0x40 ? CommandCall : opcode >= 0x80 ? CommandPrimitive : CommandOther;
+    if (used) ++commandCounts[kind], commandBytes[kind] += used;
+    return used;
+}
+
+std::uint32_t GxCommandProcessor::execute(const std::uint8_t* at, std::uint32_t available) {
+    const std::uint8_t opcode = at[0];
     if (opcode == 0x61) {  // load a BP register: most of a material's display list
         if (available < 5) return 0;
         loadBp(word(at + 1));
