@@ -1956,7 +1956,12 @@ adapt("src/Game/Screen/THPSimplePlayerWrapper.cpp", "Game/Screen/THPSimplePlayer
     # which no callback turned it native; the Wii's slow drive mostly lost that race, the SD card never does.
     ("void THPSimplePlayerWrapper::exeReadPreLoad() {\n    if (MR::isFirstStep(this)) {\n",
      "void THPSimplePlayerWrapper::exeReadPreLoad() {\n    if (MR::isFirstStep(this) && _314) {\n", 1),
-    ('#include <cstring>\n', '#include <cstring>\n#include <revolution/sc.h>\n#include <smg/NativeResources.hpp>\n', 1),
+    ('#include <cstring>\n', '#include <cstring>\n#include <revolution/sc.h>\n#include <smg/NativeResources.hpp>\n\nextern "C" u32 smgThpFrameBytes;  // source/compat/Thp.cpp\n', 1),
+    # The port keeps a copy of each frame to decode when drawn (source/compat/Thp.cpp), so it needs the frame's size.
+    ("                    case 0:\n                        if (!videoDecode(ptr)) {",
+     "                    case 0:\n                        smgThpFrameBytes = *compSize;\n                        if (!videoDecode(ptr)) {", 1),
+    ("                case 0:\n                    if (!videoDecode(ptr)) {",
+     "                case 0:\n                    smgThpFrameBytes = *compSize;\n                    if (!videoDecode(ptr)) {", 1),
     ("    memcpy(&mHeader, WorkBuffer, sizeof(mHeader));\n", "    memcpy(&mHeader, WorkBuffer, sizeof(mHeader));\n    smgNativeWords(&mHeader.version, 11);\n", 1),
     ("    memcpy(&mFrameComp, WorkBuffer, sizeof(mFrameComp));\n",
      "    memcpy(&mFrameComp, WorkBuffer, sizeof(mFrameComp));\n    smgNativeWords(&mFrameComp.numComponents, 1);\n", 1),
