@@ -116,9 +116,7 @@ bool WiiDisc::openWbfs(std::string& error) {
     return true;
 }
 
-// An RVZ file: its own header, then a second holding the disc's first 0x80 bytes, the chunk size, the compression and
-// where its tables lie: the partitions (each the stretches of its data), the raw stretches (the rest of the disc) and
-// the groups. Its hashes, which only check the data, are not checked here.
+// The RVZ's hashes only check the data, so they're left unchecked here.
 bool WiiDisc::openRvz(std::string& error) {
     std::uint8_t head[0x48 + 0xD4];
     if (!reader_(0, head, sizeof head)) return error = "the RVZ header could not be read", false;
@@ -133,7 +131,9 @@ bool WiiDisc::openRvz(std::string& error) {
     if (rvzChunk_ < ClusterBytes || ((rvzChunk_ & (rvzChunk_ - 1)) && rvzChunk_ % 0x200000)) return error = "the RVZ's chunk size is not an RVZ's", false;
     std::memcpy(rvzHeader_, h + 0x10, sizeof rvzHeader_);
     const std::uint32_t partitions = big32(h + 0x90), partitionSize = big32(h + 0x94), raws = big32(h + 0xB4), groups = big32(h + 0xC4);
-    if (partitions > 16 || partitionSize < 0x30 || raws > 1024 || groups > (1u << 22)) return error = "the RVZ's tables are not an RVZ's", false;
+    if (partitions > 16 || partitionSize < 0x30 || partitionSize > 0x100 || raws > 1024 || groups > (1u << 22) || big32(h + 0xC0) > (16u << 20) ||
+        big32(h + 0xD0) > (64u << 20))
+        return error = "the RVZ's tables are not an RVZ's", false;
     // The raw and group tables are compressed as the groups are.
     const auto table = [&](std::uint64_t at, std::uint32_t stored, std::size_t size, std::vector<std::uint8_t>& out) {
         std::vector<std::uint8_t> in(stored);
@@ -190,6 +190,7 @@ bool WiiDisc::rvzGroup(std::uint32_t index, std::uint64_t bytes, unsigned lists,
     const RvzGroup& group = rvzGroups_[index];
     rvzGroupData_.resize(static_cast<std::size_t>(bytes));
     const std::uint32_t stored = group.size & 0x7FFFFFFF;
+    if (stored > 2 * rvzChunk_ + 0x20000) return false;  // more than any group holds
     if (!stored) {
         std::fill(rvzGroupData_.begin(), rvzGroupData_.end(), 0);
         return rvzCached_ = index, true;
@@ -248,8 +249,7 @@ bool WiiDisc::open(Reader reader, const std::uint8_t* commonKey, const std::uint
         }
     }
     if (!partition) return error = "the disc has no data partition", false;
-    // The partition begins with its ticket (the title key, encrypted under the common key with the title ID as IV),
-    // then where its data lies.
+    // The ticket's title key is encrypted under the common key with the title ID as IV.
     std::uint8_t ticket[0x2C0];
     if (!readImage(partition, ticket, sizeof ticket)) return error = "the partition's ticket could not be read", false;
     data_ = partition + (std::uint64_t(big32(ticket + 0x2B8)) << 2);
