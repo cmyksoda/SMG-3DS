@@ -117,6 +117,10 @@ void inverseDct(const int* in, std::uint8_t* out, std::size_t stride) {
             const int v = ((x + (1 << (ConstBits + Pass1Bits + 2))) >> (ConstBits + Pass1Bits + 3)) + 128;
             return static_cast<std::uint8_t>(std::clamp(v, 0, 255));
         };
+        if (!(row[1] | row[2] | row[3] | row[4] | row[5] | row[6] | row[7])) {
+            std::memset(o, pixel(row[0] * (1 << ConstBits)), 8);
+            continue;
+        }
         int z2 = row[2], z3 = row[6];
         int z1 = (z2 + z3) * F0_541;
         int tmp2 = z1 + z3 * -F1_847, tmp3 = z1 + z2 * F0_765;
@@ -207,6 +211,7 @@ const char* decodeThpVideo(Bytes frame, unsigned width, unsigned height, std::ui
                 if (dcSize < 0 || dcSize > 11) return "a THP frame with a bad DC code";
                 comp.predictor += extend(bits.take(dcSize), dcSize);
                 coefficients[0] = comp.predictor * quant[comp.quant][0];
+                bool anyAc = false;
                 for (int k = 1; k < 64;) {
                     const int symbol = decodeSymbol(bits, tables[2 + comp.ac]);
                     if (symbol < 0) return "a THP frame with a bad AC code";
@@ -219,10 +224,17 @@ const char* decodeThpVideo(Bytes frame, unsigned width, unsigned height, std::ui
                     k += run;
                     if (k > 63) return "a THP frame whose block runs past 64 coefficients";
                     coefficients[ZigZag[k]] = extend(bits.take(size), size) * quant[comp.quant][ZigZag[k]];
-                    ++k;
+                    ++k, anyAc = true;
                 }
                 const unsigned bx = c ? mx * 8 : mx * 16 + (block & 1) * 8, by = c ? my * 8 : my * 16 + (block >> 1) * 8;
-                inverseDct(coefficients, planes[c] + std::size_t(by) * strides[c] + bx, strides[c]);
+                std::uint8_t* out = planes[c] + std::size_t(by) * strides[c] + bx;
+                if (anyAc) {
+                    inverseDct(coefficients, out, strides[c]);
+                    continue;
+                }
+                // The accurate IDCT of a lone DC term, exactly.
+                const auto flat = static_cast<std::uint8_t>(std::clamp(((coefficients[0] + 4) >> 3) + 128, 0, 255));
+                for (int r = 0; r < 8; ++r) std::memset(out + r * strides[c], flat, 8);
             }
         }
     }
