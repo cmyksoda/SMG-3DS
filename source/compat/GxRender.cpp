@@ -373,6 +373,18 @@ struct Renderer {
                               PendingMeshLayout, PendingList };
     u32 pendingWhy = 1u << PendingList;
     void pend(Pending why) { pending = true, pendingWhy |= 1u << why; }
+    // The blocks a mesh draw writes into the command list itself when they are all that's pending (writeChangedBlocks),
+    // and what in them changed since the GPU last had them. citro3d's copies are set all the same, so its own next draw
+    // sends them again and its state stays the truth.
+    static constexpr u32 RawBlocks = 1u << PendingCombiner | 1u << PendingFragment | 1u << PendingCull | 1u << PendingTexture |
+                                     1u << PendingFixed | 1u << PendingMeshLayout | 1u << PendingCpuBuffers;
+    u32 stagesChanged = 0;  // combiner stages, and bit 6 the buffer's updates and colour
+    u32 testsChanged = 0;   // 1 the alpha test, 2 the blend, 4 the depth test and write mask
+    u32 unitsChanged = 0, fixedChanged = 0;
+    u32 unitsBound = 0;     // texture units citro3d has a texture for: it never unbinds one
+    C3D_AttrInfo meshAttributes;
+    // citro3d has sent everything: after one of its draws.
+    void sentAll() { pending = false, pendingWhy = 0, stagesChanged = testsChanged = unitsChanged = fixedChanged = 0; }
 
     // A mesh draw's vertex shader uniforms, set in citro3d's copies (which then always match the GPU) and sent by citro3d
     // when it has state of ours pending anyway, else written here (sendUniforms).
@@ -420,6 +432,63 @@ struct Renderer {
         rowsChanged[0] = rowsChanged[1] = rowsChanged[2] = 0, boolsChanged = intsChanged = false;
     }
 
+    // The pending blocks of state, written as citro3d's binders write them (C3Di_TexEnvBind, C3Di_EffectBind's registers
+    // that changed, C3Di_SetTex and the texture units' status, its fixed attributes, C3Di_AttrInfoBind).
+    void writeChangedBlocks() {
+        u32* at = gpuCmdBuf + gpuCmdBufOffset;
+        const PicaPixel& was = sent.was;
+        for (unsigned i = 0; i < CombinerProgram::MaxStages; ++i)
+            if (stagesChanged >> i & 1)
+                at = putCommand(at, 0x800F0000 | (GPUREG_TEXENV0_SOURCE + (i < 4 ? i : i + 2) * 8), reinterpret_cast<const u32*>(&was.env[i]), 5);
+        if (stagesChanged >> 6 & 1) {
+            at = putCommand(at, 0x00070000 | GPUREG_TEXENV_UPDATE_BUFFER, u32(was.bufferUpdate[0] & 0xF) << 8 | u32(was.bufferUpdate[1] & 0xF) << 12);
+            at = putCommand(at, 0x000F0000 | GPUREG_TEXENV_BUFFER_COLOR, was.bufferColor);
+        }
+        if (testsChanged & 1) at = putCommand(at, 0x000F0000 | GPUREG_FRAGOP_ALPHA_TEST, u32(was.alphaTest) | u32(was.alphaFunc & 7) << 4 | u32(was.alphaReference) << 8);
+        if (testsChanged & 2)
+            at = putCommand(at, 0x000F0000 | GPUREG_BLEND_FUNC, u32(was.equation) | u32(was.alphaEquation) << 8 | u32(was.source) << 16 | u32(was.destination) << 20 |
+                                                                     u32(was.alphaSource) << 24 | u32(was.alphaDestination) << 28);
+        if (testsChanged & 4) {
+            const u32 function = was.depthTest ? u32(was.depthFunc) & 7 : u32(GPU_ALWAYS);
+            at = putCommand(at, 0x000F0000 | GPUREG_DEPTH_COLOR_MASK, u32(was.depthTest) | function << 4 | u32(sent.writeMask) << 8);
+            at = putCommand(at, 0x00080000 | GPUREG_GAS_DELTAZ_DEPTH, u32(GPU_MAKEGASDEPTHFUNC(function)) << 24);
+        }
+        if (pendingWhy >> PendingCull & 1) at = putCommand(at, 0x000F0000 | GPUREG_FACECULLING_CONFIG, u32(sent.cullMode) & 3);
+        if (unitsChanged) {
+            static constexpr u32 border[3] = {GPUREG_TEXUNIT0_BORDER_COLOR, GPUREG_TEXUNIT1_BORDER_COLOR, GPUREG_TEXUNIT2_BORDER_COLOR};
+            static constexpr u32 type[3] = {GPUREG_TEXUNIT0_TYPE, GPUREG_TEXUNIT1_TYPE, GPUREG_TEXUNIT2_TYPE};
+            for (unsigned unit = 0; unit < 3; ++unit) {
+                if (!(unitsChanged >> unit & 1)) continue;
+                const C3D_Tex& t = *sent.bound[unit];
+                const u32 registers[5] = {t.border, t.dim, t.param, t.lodParam, osConvertVirtToPhys(t.data) >> 3};
+                at = putCommand(at, 0x800F0000 | border[unit], registers, 5);
+                at = putCommand(at, 0x000F0000 | type[unit], u32(t.fmt));
+            }
+            // citro3d's texConfig (BIT(12) from C3D_Init, the bound units), then the texture cache cleared.
+            at = putCommand(at, 0x000B0000 | GPUREG_TEXUNIT_CONFIG, BIT(12) | unitsBound);
+            at = putCommand(at, 0x00040000 | GPUREG_TEXUNIT_CONFIG, BIT(16));
+            at = putCommand(at, 0x000F0000 | GPUREG_TEXUNIT0_SHADOW, BIT(0));
+        }
+        for (unsigned i = 0; i < 7; ++i) {
+            if (!(fixedChanged >> i & 1)) continue;
+            const C3D_FVec& v = sent.fixedWas[i];
+            // C3D_ImmSendAttrib's packing: four 24-bit floats, w first.
+            const u32 x = f32tof24(v.x), y = f32tof24(v.y), z = f32tof24(v.z), w = f32tof24(v.w);
+            const u32 packed[3] = {w << 8 | z >> 16, z << 16 | y >> 8, y << 24 | x};
+            at = putCommand(at, 0x000F0000 | GPUREG_FIXEDATTRIB_INDEX, i);
+            at = putCommand(at, 0x800F0000 | GPUREG_FIXEDATTRIB_DATA0, packed, 3);
+        }
+        if (pendingWhy >> PendingMeshLayout & 1) {
+            const C3D_AttrInfo& a = meshAttributes;
+            at = putCommand(at, 0x800F0000 | GPUREG_ATTRIBBUFFERS_FORMAT_LOW, a.flags, 2);
+            at = putCommand(at, 0x000B0000 | GPUREG_VSH_INPUTBUFFER_CONFIG, 0xA0000000u | u32(a.attrCount - 1));
+            at = putCommand(at, 0x000F0000 | GPUREG_VSH_NUM_ATTR, u32(a.attrCount - 1));
+            at = putCommand(at, 0x800F0000 | GPUREG_VSH_ATTRIBUTES_PERMUTATION_LOW, reinterpret_cast<const u32*>(&a.permutation), 2);
+        }
+        gpuCmdBufOffset = u32(at - gpuCmdBuf);
+        sentAll();
+    }
+
     // A group's draw as C3D_DrawElements writes it for triangles of 16-bit indices, after buffer 0 aimed at the mesh.
     void writeMeshDraw(const CachedMesh& mesh, const GxMesh::Group& group, bool aimBuffer) {
         u32* at = gpuCmdBuf + gpuCmdBufOffset;
@@ -453,17 +522,23 @@ struct Renderer {
         const bool all = !sent.pixel;
         const PicaPixel& was = sent.was;
         for (unsigned i = 0; i < CombinerProgram::MaxStages; ++i)
-            if (all || std::memcmp(&was.env[i], &pixel.env[i], sizeof(C3D_TexEnv))) *C3D_GetTexEnv(int(i)) = pixel.env[i], pend(PendingCombiner);
-        if (all || was.bufferColor != pixel.bufferColor) C3D_TexEnvBufColor(pixel.bufferColor), pend(PendingCombiner);
-        if (all || was.bufferUpdate[0] != pixel.bufferUpdate[0] || was.bufferUpdate[1] != pixel.bufferUpdate[1])
-            C3D_TexEnvBufUpdate(C3D_RGB, pixel.bufferUpdate[0]), C3D_TexEnvBufUpdate(C3D_Alpha, pixel.bufferUpdate[1]), pend(PendingCombiner);
+            if (all || std::memcmp(&was.env[i], &pixel.env[i], sizeof(C3D_TexEnv)))
+                *C3D_GetTexEnv(int(i)) = pixel.env[i], stagesChanged |= 1u << i, pend(PendingCombiner);
+        if (all || was.bufferColor != pixel.bufferColor) C3D_TexEnvBufColor(pixel.bufferColor), stagesChanged |= 1u << 6, pend(PendingCombiner);
+        if (all || was.bufferUpdate[0] != pixel.bufferUpdate[0] || was.bufferUpdate[1] != pixel.bufferUpdate[1]) {
+            C3D_TexEnvBufUpdate(C3D_RGB, pixel.bufferUpdate[0]), C3D_TexEnvBufUpdate(C3D_Alpha, pixel.bufferUpdate[1]);
+            stagesChanged |= 1u << 6, pend(PendingCombiner);
+        }
         if (all || was.alphaTest != pixel.alphaTest || was.alphaFunc != pixel.alphaFunc || was.alphaReference != pixel.alphaReference)
-            C3D_AlphaTest(pixel.alphaTest, pixel.alphaFunc, pixel.alphaReference), pend(PendingFragment);
+            C3D_AlphaTest(pixel.alphaTest, pixel.alphaFunc, pixel.alphaReference), testsChanged |= 1, pend(PendingFragment);
         if (all || was.equation != pixel.equation || was.alphaEquation != pixel.alphaEquation || was.source != pixel.source ||
-            was.destination != pixel.destination || was.alphaSource != pixel.alphaSource || was.alphaDestination != pixel.alphaDestination)
-            C3D_AlphaBlend(pixel.equation, pixel.alphaEquation, pixel.source, pixel.destination, pixel.alphaSource, pixel.alphaDestination), pend(PendingFragment);
+            was.destination != pixel.destination || was.alphaSource != pixel.alphaSource || was.alphaDestination != pixel.alphaDestination) {
+            C3D_AlphaBlend(pixel.equation, pixel.alphaEquation, pixel.source, pixel.destination, pixel.alphaSource, pixel.alphaDestination);
+            testsChanged |= 2, pend(PendingFragment);
+        }
         if (all || was.depthTest != pixel.depthTest || was.depthFunc != pixel.depthFunc || sent.writeMask != writeMask)
-            C3D_DepthTest(pixel.depthTest, pixel.depthTest ? pixel.depthFunc : GPU_ALWAYS, static_cast<GPU_WRITEMASK>(writeMask)), pend(PendingFragment);
+            C3D_DepthTest(pixel.depthTest, pixel.depthTest ? pixel.depthFunc : GPU_ALWAYS, static_cast<GPU_WRITEMASK>(writeMask)), testsChanged |= 4,
+                pend(PendingFragment);
         sent.was = pixel, sent.writeMask = writeMask, sent.pixel = true;
     }
     void sendCull(GPU_CULLMODE mode) {
@@ -482,6 +557,7 @@ struct Renderer {
         if (sent.texture[unit] && sent.bound[unit] == &texture && !std::memcmp(&sent.boundWas[unit], &texture, sizeof texture)) return;
         C3D_TexBind(int(unit), &texture);
         sent.texture[unit] = true, sent.bound[unit] = &texture, sent.boundWas[unit] = texture, pend(PendingTexture);
+        unitsChanged |= 1u << unit, unitsBound |= 1u << unit;
     }
     // `attribute` is the attribute's index among the loaders and fixed ones, as AttrInfo_AddFixed returns it.
     void sendFixed(int attribute, float x, float y, float z, float w) {
@@ -489,7 +565,7 @@ struct Renderer {
         if (sent.fixed[attribute] && was.x == x && was.y == y && was.z == z && was.w == w) return;
         C3D_FVec* value = C3D_FixedAttribGetWritePtr(attribute);
         value->x = x, value->y = y, value->z = z, value->w = w;
-        sent.fixed[attribute] = true, was = *value, pend(PendingFixed);
+        sent.fixed[attribute] = true, was = *value, fixedChanged |= 1u << attribute, pend(PendingFixed);
     }
 
     // The CPU path's vertices: transformed already, the shader passing them on. Bound again only when a draw from them
@@ -1710,6 +1786,7 @@ struct Renderer {
             if (mesh.slots) loader(5, GPU_FLOAT, 1);
             else AttrInfo_AddFixed(attributes, 5);
             sent.meshLayout = layout, sent.meshPermutation = permutation, sent.meshComponents = components, pend(PendingMeshLayout);
+            meshAttributes = *attributes;
         }
         // A fixed value goes to its attribute's place among the seven (colour 1, texgen inputs 2-4, normal 5, slot 6), which
         // citro3d numbers in the order they were added, not to the shader register it feeds.
@@ -1725,7 +1802,8 @@ struct Renderer {
                 if (g || (again && mesh.groups.size() > 1)) pipeline.meshSlotUniforms(mesh.groups[g], u), slotUniforms(u);
                 static const bool noRaw = smgDevGxNoRaw();
                 if (noRaw) pending = true;
-                const bool viaCitro3d = pending;
+                const bool viaCitro3d = pending && (noRaw || (pendingWhy & ~RawBlocks));
+                if (pending && !viaCitro3d) writeChangedBlocks();
                 sendUniforms();
                 if (viaCitro3d) {
                     C3D_BufInfo* buffers = C3D_GetBufInfo();
@@ -1733,7 +1811,7 @@ struct Renderer {
                     BufInfo_Add(buffers, mesh.vertices, sizeof(GxMeshVertex), sent.meshComponents, sent.meshPermutation);
                     C3D_DrawElements(GPU_TRIANGLES, int(mesh.groups[g].indexCount), C3D_UNSIGNED_SHORT, indices + mesh.groups[g].firstIndex);
                     for (unsigned why = 0; why <= PendingList; ++why) perf.pendingWhy[why] += pendingWhy >> why & 1;
-                    pending = false, pendingWhy = 0, ++perf.citroDraws;
+                    sentAll(), ++perf.citroDraws;
                 } else {
                     writeMeshDraw(mesh, mesh.groups[g], g == 0);
                 }
@@ -1796,7 +1874,7 @@ struct Renderer {
         if (!state_->passes.empty())
             drawSharedPasses([&] { C3D_DrawElements(GPU_TRIANGLES, static_cast<int>(indexUsed - batchStart), C3D_UNSIGNED_SHORT, indices + batchStart); });
         if (passIndicesWaiting) drawWaitingPasses();
-        pending = false, pendingWhy = 0;
+        sentAll();
         ++perf.draws, perf.triangles += (indexUsed - batchStart) / 3;
         batchStart = indexUsed;
         fresh[0] = fresh[1] = fresh[2] = false;
@@ -2236,6 +2314,7 @@ struct Renderer {
         C3D_CullFace(GPU_CULL_NONE);
         C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
         for (int unit = 0; unit < 3; ++unit) C3D_TexBind(unit, &scratch);
+        unitsBound = 7;
         forgetSent();
         ensureCpuBuffers();
         C3D_DrawArrays(GPU_TRIANGLES, static_cast<int>(used), static_cast<int>(n));
@@ -2435,6 +2514,7 @@ struct Renderer {
         C3D_CullFace(GPU_CULL_NONE);
         C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
         C3D_TexBind(0, &m.texture);
+        unitsBound |= 1;
         forgetSent();
         ensureCpuBuffers();
         C3D_DrawArrays(GPU_TRIANGLES, static_cast<int>(used), static_cast<int>(n));
