@@ -239,8 +239,8 @@ private:
 
     // What the last prepare saw: a primitive with nothing changed since skips it (most of a model's do).
     bool prepared_ = false;
-    std::uint8_t preparedKind_ = 0, preparedFormat_ = 0;
-    std::uint32_t preparedBp_ = 0, preparedXf_ = 0, preparedCp_ = 0, preparedBeside_ = 0, preparedXfRegisters_ = 0;
+    std::uint8_t preparedFormat_ = 0;
+    std::uint32_t preparedBp_ = 0, preparedXf_ = 0, preparedDescriptor_ = 0, preparedBeside_ = 0, preparedXfRegisters_ = 0;
     GxFrame preparedFrame_;
     const GxCommandProcessor* gpu_ = nullptr;
     const GxDrawState* state_ = nullptr;

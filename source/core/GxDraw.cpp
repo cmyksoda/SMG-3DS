@@ -482,8 +482,9 @@ void readGxDrawState(const GxCommandProcessor& gpu, GxDrawState& out, bool palet
 float GxVertexPipeline::matrix(std::uint32_t row, int column) const { return asFloat(gpu_->xf[(row * 4 + column) & 0xFFF]); }
 
 bool GxVertexPipeline::prepare(const GxCommandProcessor& gpu, const GxDrawState& state, const GxFrame& frame, std::uint8_t kind, std::uint8_t format) {
-    if (prepared_ && &gpu == gpu_ && &state == state_ && kind == preparedKind_ && format == preparedFormat_ && gpu.cpChanges == preparedCp_ &&
-        frame == preparedFrame_ && gpu.bpChangesBesideColors == preparedBeside_ && gpu.xfRegisterChanges == preparedXfRegisters_) {
+    // Of the CP registers, only the descriptor's matrix-index bits are read; the kind and format are only kept.
+    if (prepared_ && &gpu == gpu_ && &state == state_ && kind < 0xA8 && gpu.cp[0x50] == preparedDescriptor_ && frame == preparedFrame_ &&
+        gpu.bpChangesBesideColors == preparedBeside_ && gpu.xfRegisterChanges == preparedXfRegisters_) {
         // Only TEV colours or XF matrix memory changed (a particle's): C0's bytes, the folds and the clip matrices again.
         if (gpu.bpChanges != preparedBp_) {
             if (color0InVertex_ && !gxColor0Bytes(gpu, color0_)) {
@@ -498,6 +499,7 @@ bool GxVertexPipeline::prepare(const GxCommandProcessor& gpu, const GxDrawState&
             if (channel_ && lightingLights_ != gpu.xfLightChanges) readLighting(gpu);
             preparedXf_ = xfSeen_ = gpu.xfChanges, clipReady_ = 0;
         }
+        kind_ = kind, preparedFormat_ = format;
         return true;
     }
     prepared_ = false, ++fullPrepares;
@@ -542,8 +544,8 @@ bool GxVertexPipeline::prepare(const GxCommandProcessor& gpu, const GxDrawState&
         refold(t);
     }
     if (channel_ && (lightingRegisters_ != gpu.xfRegisterChanges || lightingLights_ != gpu.xfLightChanges)) readLighting(gpu);
-    prepared_ = true, preparedKind_ = kind, preparedFormat_ = format, preparedFrame_ = frame;
-    preparedBp_ = gpu.bpChanges, preparedXf_ = gpu.xfChanges, preparedCp_ = gpu.cpChanges;
+    prepared_ = true, preparedFormat_ = format, preparedFrame_ = frame, preparedDescriptor_ = gpu.cp[0x50];
+    preparedBp_ = gpu.bpChanges, preparedXf_ = gpu.xfChanges;
     preparedBeside_ = gpu.bpChangesBesideColors, preparedXfRegisters_ = gpu.xfRegisterChanges;
     if (gpu.xfChanges == xfSeen_ && frame == frameSeen_) return true;
     xfSeen_ = gpu.xfChanges, clipReady_ = 0;
