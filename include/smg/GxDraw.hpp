@@ -171,12 +171,16 @@ class GxVertexPipeline {
 public:
     // Readies a primitive's kind and format under `state`; false (and `unsupported` set) when it can't be drawn.
     bool prepare(const GxCommandProcessor& gpu, const GxDrawState& state, const GxFrame& frame, std::uint8_t kind, std::uint8_t format);
-    // The prepared primitive's `count` vertices into `vertices`, and its triangles appended to `indices` as vertex numbers
-    // from `first`: how many indices that wrote, at most maxIndices(count).
+    // The prepared primitive's vertices into `vertices` (verticesWritten of them, at most maxVertices), and its triangles
+    // appended to `indices` as vertex numbers from `first`: how many indices that wrote, at most maxIndices. Lines and
+    // points become quads, as wide as GX draws them in EFB pixels.
     std::size_t run(const std::uint8_t* data, std::uint16_t count, GxDrawVertex* vertices, std::uint16_t first, std::uint16_t* indices);
     // The same from vertices read already (a small display list decoded once).
     std::size_t runDecoded(const GxVertex* decoded, std::uint16_t count, GxDrawVertex* vertices, std::uint16_t first, std::uint16_t* indices);
     static constexpr std::size_t maxIndices(std::size_t count) { return 3 * count; }
+    static constexpr std::size_t maxVertices(std::uint8_t kind, std::size_t count) { return kind >= 0xA8 ? 4 * count : count; }
+    static constexpr std::size_t maxIndices(std::uint8_t kind, std::size_t count) { return kind >= 0xA8 ? 6 * count : 3 * count; }
+    std::uint16_t verticesWritten = 0;
     // The state passed to prepare was read again: the next prepare reads everything.
     void stateChanged() { prepared_ = false; }
     // Where the palette unit samples for the next primitives (GX texture coordinates).
@@ -249,6 +253,8 @@ private:
     }
     void vertex(const GxVertex& v, GxDrawVertex& d);
     std::size_t triangles(GxDrawVertex* vertices, std::uint16_t count, std::uint16_t first, std::uint16_t* indices) const;
+    // Lines and points from their vertices, transformed into the last `count` of maxVertices, as quads from the first.
+    std::size_t widen(GxDrawVertex* vertices, std::uint16_t count, std::uint16_t first, std::uint16_t* indices);
     void texgen(const TexGen& t, const GxVertex& v, float st[2]) const;
     float matrix(std::uint32_t row, int column) const;
 

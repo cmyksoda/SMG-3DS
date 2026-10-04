@@ -488,7 +488,7 @@ float GxVertexPipeline::matrix(std::uint32_t row, int column) const { return asF
 
 bool GxVertexPipeline::prepare(const GxCommandProcessor& gpu, const GxDrawState& state, const GxFrame& frame, std::uint8_t kind, std::uint8_t format) {
     // Of the CP registers, only the descriptor's matrix-index bits are read; the kind and format are only kept.
-    if (prepared_ && &gpu == gpu_ && &state == state_ && kind < 0xA8 && gpu.cp[0x50] == preparedDescriptor_ && frame == preparedFrame_ &&
+    if (prepared_ && &gpu == gpu_ && &state == state_ && gpu.cp[0x50] == preparedDescriptor_ && frame == preparedFrame_ &&
         gpu.bpChangesBesideColors == preparedBeside_ && gpu.xfRegisterChanges == preparedXfRegisters_) {
         // Only TEV colours or XF matrix memory changed (a particle's): C0's bytes, the folds and the clip matrices again.
         if (gpu.bpChanges != preparedBp_) {
@@ -510,7 +510,6 @@ bool GxVertexPipeline::prepare(const GxCommandProcessor& gpu, const GxDrawState&
     prepared_ = false, ++fullPrepares;
     gpu_ = &gpu, state_ = &state, kind_ = kind;
     unsupported = state.unsupported;
-    if (kind >= 0xA8) unsupported = "lines and points";
     if (unsupported) return false;
     // GEN_MODE's reject bits as GXSetCullMode swaps them in: 1 culls what GX_CULL_BACK names, 2 GX_CULL_FRONT.
     reject_ = static_cast<std::uint8_t>(GEN_MODE_GET_REJECT_EN(gpu.bp[0x00]));
@@ -698,16 +697,87 @@ std::size_t GxVertexPipeline::run(const std::uint8_t* data, std::uint16_t count,
     const GxVertexLayout& layout = gpu_->layout(preparedFormat_);  // a mesh's draw never needs it, so prepare leaves it
     const std::uint32_t size = layout.size;
     GxVertex v;  // attributes the format lacks stay zero for every vertex
+    GxDrawVertex* const into = kind_ >= 0xA8 ? vertices + 3 * count : vertices;
     for (std::uint16_t i = 0; i < count; ++i) {
         layout.read(data + i * size, v);
-        vertex(v, vertices[i]);
+        vertex(v, into[i]);
     }
+    if (kind_ >= 0xA8) return widen(vertices, count, first, indices);
+    verticesWritten = count;
     return triangles(vertices, count, first, indices);
 }
 
 std::size_t GxVertexPipeline::runDecoded(const GxVertex* decoded, std::uint16_t count, GxDrawVertex* vertices, std::uint16_t first, std::uint16_t* indices) {
-    for (std::uint16_t i = 0; i < count; ++i) vertex(decoded[i], vertices[i]);
+    GxDrawVertex* const into = kind_ >= 0xA8 ? vertices + 3 * count : vertices;
+    for (std::uint16_t i = 0; i < count; ++i) vertex(decoded[i], into[i]);
+    if (kind_ >= 0xA8) return widen(vertices, count, first, indices);
+    verticesWritten = count;
     return triangles(vertices, count, first, indices);
+}
+
+std::size_t GxVertexPipeline::widen(GxDrawVertex* vertices, std::uint16_t count, std::uint16_t first, std::uint16_t* indices) {
+    const GxDrawVertex* const from = vertices + 3 * count;
+    const bool points = kind_ == 0xB8;
+    // SU_LPSIZE: line width and point size in sixths of an EFB pixel, and the texture offset each spreads across itself
+    // (GX_TO_ZERO to GX_TO_ONE); SU_SSIZE says per coordinate whether it takes the line's or the point's.
+    const std::uint32_t sizes = gpu_->bp[0x22];
+    const float half = static_cast<float>(points ? sizes >> 8 & 0xFF : sizes & 0xFF) / 12.0f;
+    constexpr float Offsets[8] = {0, 1.0f / 16, 1.0f / 8, 1.0f / 4, 1.0f / 2, 1, 0, 0};
+    const float offset = Offsets[points ? sizes >> 19 & 7 : sizes >> 16 & 7];
+    float spread[CombinerProgram::MaxUnits][2] = {};
+    for (unsigned u = 0; u < units_; ++u) {
+        if (texgens_[u].palette || !(gpu_->bp[0x30 + 2 * texgens_[u].coord] >> (points ? 19 : 18) & 1)) continue;
+        const bool atlas = static_cast<int>(u) == atlasUnit_;
+        spread[u][0] = offset * (atlas ? atlasPlace_[0] : 1), spread[u][1] = offset * (atlas ? atlasPlace_[1] : 1);
+    }
+    // A move of (dx, dy) EFB pixels (y down) in clip space, as the frame lays the EFB out.
+    const float toX = 2 / preparedFrame_.width, toY = 2 / preparedFrame_.height;
+    const auto moved = [&](GxDrawVertex v, float dx, float dy, float ds, float dt, unsigned side) {
+        const float w = v.position[3], nx = dx * toX * w, ny = -dy * toY * w;
+        if (preparedFrame_.quarterTurn) v.position[1] -= nx, v.position[0] += ny;
+        else v.position[0] += nx, v.position[1] += ny;
+        for (unsigned u = 0; u < units_; ++u)
+            v.texcoord[u][0] += spread[u][0] * ds * side, v.texcoord[u][1] += spread[u][1] * dt * side;
+        if (atlasUnit_ >= 0 && side) {
+            const float* st = v.texcoord[atlasUnit_];
+            const float s = (st[0] - atlasPlace_[2]) / atlasPlace_[0], t = (st[1] - atlasPlace_[3]) / atlasPlace_[1];
+            atlasOutside_ |= s < -1.0f / 4096 || s > 1 + 1.0f / 4096 || t < -1.0f / 4096 || t > 1 + 1.0f / 4096;
+        }
+        return v;
+    };
+    const auto efb = [&](const GxDrawVertex& v, float& x, float& y) {
+        const float* p = v.position;
+        const float ndcX = preparedFrame_.quarterTurn ? -p[1] / p[3] : p[0] / p[3], ndcY = preparedFrame_.quarterTurn ? p[0] / p[3] : p[1] / p[3];
+        x = (ndcX + 1) / toX, y = (1 - ndcY) / toY;
+    };
+    std::size_t n = 0;
+    std::uint16_t quads = 0;
+    const auto quad = [&](const GxDrawVertex (&c)[4]) {
+        for (int k = 0; k < 4; ++k) vertices[4 * quads + k] = c[k];
+        const auto at = static_cast<std::uint16_t>(first + 4 * quads);
+        for (int k : {0, 1, 2, 0, 2, 3}) indices[n++] = static_cast<std::uint16_t>(at + k);
+        ++quads;
+    };
+    if (points) {
+        for (std::uint16_t i = 0; i < count; ++i) {
+            const GxDrawVertex v = from[i];
+            if (v.position[3] <= 0) continue;
+            quad({moved(v, -half, -half, 0, 0, 1), moved(v, half, -half, 1, 0, 1), moved(v, half, half, 1, 1, 1), moved(v, -half, half, 0, 1, 1)});
+        }
+    } else {
+        // Widened across their minor axis, as GX rasterizes them; the texture offset goes to one side.
+        for (std::uint16_t i = 0; i + 1 < count; i = static_cast<std::uint16_t>(i + (kind_ == 0xB0 ? 1 : 2))) {
+            const GxDrawVertex a = from[i], b = from[i + 1];
+            if (a.position[3] <= 0 || b.position[3] <= 0) continue;
+            float ax, ay, bx, by;
+            efb(a, ax, ay), efb(b, bx, by);
+            const bool across = std::fabs(bx - ax) >= std::fabs(by - ay);
+            const float dx = across ? 0 : half, dy = across ? half : 0;
+            quad({moved(a, -dx, -dy, 0, 0, 0), moved(b, -dx, -dy, 0, 0, 0), moved(b, dx, dy, 1, 0, 1), moved(a, dx, dy, 1, 0, 1)});
+        }
+    }
+    verticesWritten = static_cast<std::uint16_t>(4 * quads);
+    return n;
 }
 
 inline void GxVertexPipeline::vertex(const GxVertex& v, GxDrawVertex& d) {
@@ -1075,8 +1145,8 @@ void buildGxDraw(const GxCommandProcessor& gpu, std::uint8_t kind, std::uint8_t 
     out.triangles = std::move(triangles);
     GxVertexPipeline pipeline;
     if (!pipeline.prepare(gpu, out, frame, kind, format)) return void(out.unsupported = pipeline.unsupported);
-    std::vector<GxDrawVertex> drawn(count);
-    std::vector<std::uint16_t> indices(GxVertexPipeline::maxIndices(count));
+    std::vector<GxDrawVertex> drawn(GxVertexPipeline::maxVertices(kind, count));
+    std::vector<std::uint16_t> indices(GxVertexPipeline::maxIndices(kind, count));
     const std::size_t n = pipeline.run(vertices, count, drawn.data(), 0, indices.data());
     for (std::size_t i = 0; i < n; ++i) out.triangles.push_back(drawn[indices[i]]);
 }

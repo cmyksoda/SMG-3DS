@@ -788,6 +788,14 @@ they had been swapped since the first lit meshes, harmlessly while both fixed va
 (Mario's hands, on one joint) needed its slot to be 4 and drew from the view-to-clip rows instead: a giant glove over
 the camera. The shader's C++ model reads the slot from the vertex, so the mesh check could not see it. `dev.av_sync=1` puts a white square in every 90th drawn frame and a click at the start of the next audio block NDSP takes, at one moment, and logs when each goes out: the port plays the click 38 to 51 ms after its frame goes out. Azahar's video dumper (`-d FILE`) writes the audio track about 675 ms early (clicks land 640 ms before their squares), so a recording's sound is moved back by that much before it is shown.
 
+**Lines and points.** GX draws them; the PICA draws only triangles. On the CPU path each becomes a quad as wide as
+GX makes it in EFB pixels (`SU_LPSIZE`, BP 0x22: line width and point size in sixths of a pixel): a point a square
+around its vertex, a line a band widened across its minor axis, as the Wii's rasterizer does. JPA's point and line
+particles spread the texture across them (`GX_TO_ONE`): where a coordinate takes the offset (`SU_SSIZE` bits 18 and 19,
+`GXEnableTexOffsets`) the point's right and bottom corners add it to s and t, a line's one side to s. The vertices are
+transformed into the tail of the room the renderer gives the primitive (four a vertex for these) and the quads written
+from its front, each before the sources it would cover are read. Flipswitch was the first galaxy to stop on them.
+
 **Environment maps on skinned models.** J3D's shiny skinned models give a texgen a matrix per vertex: the vertex's own
 modelview, or the texture matrix paired with its slot (30 rows on, which J3D loads per draw matrix), then the dual
 transform. Those lists took the CPU path; at the Comet Observatory 27 a frame, 8,400 lit vertices, most of the

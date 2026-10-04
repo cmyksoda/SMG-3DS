@@ -579,7 +579,7 @@ struct Renderer {
         if (!prepared) stop(pipeline.unsupported);
         if (scissorEmpty || !count) return;
         if (!inFrame) begin();
-        roomFor(count);
+        roomFor(GxVertexPipeline::maxVertices(kind, count));
         if (state_->color1InTexture) choosePaletteTexel(gpu);
         const Step step(perf, 6);
         const auto first = static_cast<std::uint16_t>(used);
@@ -591,7 +591,7 @@ struct Renderer {
             return draw(gpu, kind, format, count, data, decoded);
         }
         indexUsed += written;
-        used += count;
+        used += pipeline.verticesWritten;
         fresh[0] = fresh[1] = fresh[2] = false;  // a readback must flush what's pending first
     }
 

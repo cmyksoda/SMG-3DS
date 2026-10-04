@@ -674,6 +674,65 @@ void litMeshGroups() {
     check(same, "each vertex through its group's slot lands and is lit as on the CPU");
 }
 
+// A point is a square its size wide in EFB pixels, the texture spread across it where its coordinate takes the point
+// offset (JPA's sprites); a line is a band its width wide across its minor axis.
+void linesAndPoints() {
+    auto owned = std::make_unique<smg::GxCommandProcessor>(host());
+    smg::GxCommandProcessor& gpu = *owned;
+    Stream s;
+    clearState(s);
+    s.bp(0xC008FFF8);                                  // colour (0, 0, 0, TEXC): texture 0 takes a unit
+    s.bp(0x22000000 | 5u << 19 | 60u << 8 | 30u);      // points 10 px with GX_TO_ONE, lines 5 px
+    s.bp(0x30000003 | 1u << 19);                       // coordinate 0 takes the point offset
+    s.u8(0xB8), s.u16(1), s.u16(320), s.u16(240), s.u8(0), s.u8(0);
+    s.u8(0xA8), s.u16(2), s.u16(100), s.u16(100), s.u8(0), s.u8(0), s.u16(300), s.u16(120), s.u8(0), s.u8(0);
+    drawn.clear();
+    gpu.put(s.bytes.data(), static_cast<std::uint32_t>(s.bytes.size()));
+    const auto efb = [](const smg::GxDrawVertex& v, float& x, float& y) {
+        x = (v.position[0] / v.position[3] + 1) * 320, y = (1 - v.position[1] / v.position[3]) * 240;
+    };
+    smg::GxDraw point;
+    smg::buildGxDraw(gpu, drawn[0].kind, drawn[0].format, drawn[0].count, drawn[0].data.data(), {}, point);
+    bool square = point.triangles.size() == 6;
+    for (const smg::GxDrawVertex& v : point.triangles) {
+        float x, y;
+        efb(v, x, y);
+        square = square && (near(x, 315) || near(x, 325)) && (near(y, 235) || near(y, 245));
+        square = square && near(v.texcoord[0][0], x > 320 ? 1 : 0) && near(v.texcoord[0][1], y > 240 ? 1 : 0);
+    }
+    check(square, "a point is a ten-pixel square, the texture spread over it");
+    smg::GxDraw line;
+    smg::buildGxDraw(gpu, drawn[1].kind, drawn[1].format, drawn[1].count, drawn[1].data.data(), {}, line);
+    bool band = line.triangles.size() == 6;
+    for (const smg::GxDrawVertex& v : line.triangles) {
+        float x, y;
+        efb(v, x, y);
+        const float middle = x < 200 ? 100 : 120;
+        band = band && (near(x, 100) || near(x, 300)) && (near(y, middle - 2.5f) || near(y, middle + 2.5f)) && near(v.texcoord[0][0], 0);
+    }
+    check(band, "a line mostly across is a five-pixel band, widened up and down, with no offset where none is taken");
+    // The 3DS's frame turned a quarter (as the renderer draws): EFB x is -y / w and EFB y is x / w.
+    const smg::GxFrame turned{640, 480, true};
+    const auto turnedEfb = [](const smg::GxDrawVertex& v, float& x, float& y) {
+        x = (-v.position[1] / v.position[3] + 1) * 320, y = (1 - v.position[0] / v.position[3]) * 240;
+    };
+    smg::buildGxDraw(gpu, drawn[0].kind, drawn[0].format, drawn[0].count, drawn[0].data.data(), turned, point);
+    smg::buildGxDraw(gpu, drawn[1].kind, drawn[1].format, drawn[1].count, drawn[1].data.data(), turned, line);
+    bool same = point.triangles.size() == 6 && line.triangles.size() == 6;
+    for (const smg::GxDrawVertex& v : point.triangles) {
+        float x, y;
+        turnedEfb(v, x, y);
+        same = same && (near(x, 315) || near(x, 325)) && (near(y, 235) || near(y, 245)) && near(v.texcoord[0][0], x > 320 ? 1 : 0);
+    }
+    for (const smg::GxDrawVertex& v : line.triangles) {
+        float x, y;
+        turnedEfb(v, x, y);
+        const float middle = x < 200 ? 100 : 120;
+        same = same && (near(x, 100) || near(x, 300)) && (near(y, middle - 2.5f) || near(y, middle + 2.5f));
+    }
+    check(same, "turned a quarter for the 3DS's screen, both land on the same EFB pixels");
+}
+
 // J3D's environment maps on a skinned model: a texgen through each vertex's modelview and one through the texture
 // matrix paired with its slot, both then through the dual transform. The mesh keeps them, its groups holding fewer
 // slots for the paired rows, and each vertex's coordinates come out as the CPU path's.
@@ -857,6 +916,7 @@ int runGxDrawTests() {
     litMesh();
     litMeshGroups();
     litMeshSlotTexgens();
+    linesAndPoints();
     drawStateKey();
     std::printf("%u GX draw checks passed\n", checks);
     return 0;
