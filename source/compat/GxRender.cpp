@@ -190,6 +190,13 @@ struct Renderer {
         std::vector<u32> key;
         std::vector<std::pair<std::uint8_t, u32>> depends;  // the CP registers it was decoded under, and their values
         void* block = nullptr;  // vertices, then indices
+        void* vertices = nullptr;  // the vertices drawn now: block's own, or a moving mesh's latest refresh
+        // A mesh whose arrays move (double-buffered deformed vertices, and instances of one list each with their own) is
+        // decoded again whenever they move and once a frame, into the frame's refresh arena; origin maps each vertex to
+        // the list's.
+        bool moving = false;
+        u32 refreshedFrame = ~0u;
+        std::vector<std::uint32_t> origin;
         u32 vertexCount = 0, indexCount = 0;
         u32 vertexPhysical = 0, indexPhysical = 0;
         std::uint16_t slots = 0;
@@ -200,8 +207,6 @@ struct Renderer {
     std::unordered_map<std::uint64_t, CachedMesh> meshes;
     // Lists refused for want of mesh memory, by key hash, and when: not built again for a while, as building is the cost.
     std::unordered_map<std::uint64_t, u32> budgetRefused;
-    // Lists whose array bases have moved under their meshes, by key hash: three times and they stay on the CPU path.
-    std::unordered_map<std::uint64_t, u32> arraysMoved;
     std::unordered_set<std::uintptr_t> meshPages, texturePages;  // 4 KiB pages some mesh or texture was made from
     std::size_t meshBytes = 0;
     bool dumping = false;
@@ -215,7 +220,7 @@ struct Renderer {
         u32 meshDraws = 0, meshTriangles = 0, meshesMade = 0, citroDraws = 0;
         u32 pendingWhy[9] = {};  // mesh draws through citro3d after each kind of change (Pending)
         u32 meshInvalidated = 0, meshOverflows = 0, meshBudgetDrops = 0, meshMismatches = 0, flushesQueued = 0, texturesInvalidated = 0;
-        u32 meshesEvicted = 0, leftOutDraws = 0;
+        u32 meshesEvicted = 0, leftOutDraws = 0, meshesRefreshed = 0, meshVerticesRefreshed = 0;
         u32 mismatchWhy[5] = {};  // the key's words, the descriptor (CP 0x50/0x60), a format table, an array base, a stride
         u64 timed[6] = {};  // dev.gx_timing: CPU-path primitives (immediate, in lists), display lists (mesh draws), texture copies, movie, frame ends
         u64 cpuCopyTicks = 0;  // of the texture copies, those read back and encoded on the CPU
@@ -230,7 +235,7 @@ struct Renderer {
         u32 peeks = 0;
         u32 atlasJoins = 0, atlasesBuilt = 0, atlasTurns = 0;
         u64 peekTicks = 0;  // depth peeks: the frame paused, the GPU waited for, one tile read back
-        u32 meshesChecked = 0, meshesDiffering = 0;  // dev.gx_check
+        u32 meshesChecked = 0, meshesDiffering = 0, refreshesChecked = 0, refreshesDiffering = 0;  // dev.gx_check
         std::pair<const char*, u32> approximated[8] = {};  // new draw states whose combiner program is approximated, by reason
         u32 listVertices = 0;
         u32 refused[GxVertexPipeline::MeshRefusals] = {}, refusedOpcode[0x100] = {};
@@ -1126,7 +1131,7 @@ struct Renderer {
                          e, l[0][0], l[0][1], l[0][2], l[0][3], l[1][0] * l[4][1], l[1][1] * l[4][1], l[1][2] * l[4][1], l[2][0],
                          l[2][1], l[2][2], l[5][0], l[5][1]);
         }
-        const auto* vertices = static_cast<const GxMeshVertex*>(mesh.block);
+        const auto* vertices = static_cast<const GxMeshVertex*>(mesh.vertices);
         for (u32 i = 0; i < std::min<u32>(mesh.vertexCount, 3); ++i) {
             const GxMeshVertex& v = vertices[i];
             float clip[4], color[4], tex[CombinerProgram::MaxUnits][2];
@@ -1358,20 +1363,21 @@ struct Renderer {
         std::memcpy(&key[n], list, 4), std::memcpy(&key[n + 1], list + size - 4, 4), n += 2;
         std::uint64_t hash = 0xCBF29CE484222325ull;
         for (unsigned i = 0; i < n; ++i) hash = (hash ^ key[i]) * 0x100000001B3ull;
-        if (const auto moved = arraysMoved.find(hash); moved != arraysMoved.end() && moved->second >= 3)
-            return stepEnd(8, lookup), ++perf.refused[GxVertexPipeline::MeshMoving], GxVertexPipeline::MeshMoving;
         auto found = meshes.find(hash);
         bool stale = found != meshes.end() && (found->second.key.size() != n || std::memcmp(found->second.key.data(), key, n * 4));
         if (stale) ++perf.mismatchWhy[0];
+        bool moved = false;
         if (found != meshes.end() && !stale)
-            for (const auto& [reg, value] : found->second.depends)
+            for (auto& [reg, value] : found->second.depends)
                 if (gpu.cp[reg] != value && !stale) {
-                    stale = true, ++perf.mismatchWhy[reg < 0x70 ? 1 : reg < 0xA0 ? 2 : reg < 0xB0 ? 3 : 4];
-                    if (reg >= 0xA0 && reg < 0xB0) {
-                        if (arraysMoved.size() > 4096) arraysMoved.clear();
-                        ++arraysMoved[hash];
-                    }
+                    if (reg >= 0xA0 && reg < 0xB0) moved = true, value = gpu.cp[reg];  // where its arrays are: decoded again below
+                    else stale = true, ++perf.mismatchWhy[reg < 0x70 ? 1 : reg < 0xA0 ? 2 : 4];
                 }
+        if (moved && !stale) {
+            ++perf.mismatchWhy[3];
+            CachedMesh& m = found->second;
+            m.moving = true, m.range[1][0] = m.range[1][1] = 0;  // its arrays' writes no longer drop it: it is decoded each frame
+        }
         if (stale) dropMesh(found), found = meshes.end(), ++perf.meshMismatches;
         stepEnd(8, lookup);
         if (found == meshes.end()) {
@@ -1415,7 +1421,8 @@ struct Renderer {
             for (unsigned a = 0; a < 12; ++a)
                 if (arrays >> a & 1)
                     for (unsigned base : {0xA0u, 0xB0u}) cached.depends.emplace_back(std::uint8_t(base + a), gpu.cp[base + a]);
-            cached.block = block, cached.vertexCount = u32(mesh.vertices.size()), cached.indexCount = u32(mesh.indices.size());
+            cached.block = cached.vertices = block, cached.vertexCount = u32(mesh.vertices.size()), cached.indexCount = u32(mesh.indices.size());
+            cached.origin = std::move(mesh.origin);
             cached.vertexPhysical = osConvertVirtToPhys(block), cached.indexPhysical = osConvertVirtToPhys(static_cast<std::uint8_t*>(block) + vertexBytes);
             cached.slots = mesh.slots;
             cached.groups = std::move(mesh.groups);
@@ -1428,8 +1435,33 @@ struct Renderer {
             found = meshes.find(hash);
         }
         found->second.lastFrame = framesShown;
+        if (found->second.moving && (moved || found->second.refreshedFrame != framesShown) && !refreshMesh(found->second, list, size))
+            return dropMesh(found), ++perf.refused[GxVertexPipeline::MeshMoving], GxVertexPipeline::MeshMoving;
         drawMesh(found->second);
         return GxVertexPipeline::MeshOk;
+    }
+
+    // Refreshed vertices live a frame and the next (the GPU may still be drawing them): one arena a frame's parity, taken
+    // from the start again when its frame comes round.
+    static constexpr std::size_t RefreshArena = 1u << 20;
+    std::uint8_t* refreshArena[2] = {};
+    std::size_t refreshUsed[2] = {};
+    u32 refreshFrame[2] = {~0u, ~0u};
+    bool refreshMesh(CachedMesh& m, const std::uint8_t* list, std::uint32_t size) {
+        const std::size_t bytes = (m.vertexCount * sizeof(GxMeshVertex) + 15) & ~std::size_t(15);
+        const unsigned k = framesShown & 1;
+        if (!refreshArena[k] && !(refreshArena[k] = static_cast<std::uint8_t*>(linearAlloc(RefreshArena)))) return false;
+        if (refreshFrame[k] != framesShown) refreshFrame[k] = framesShown, refreshUsed[k] = 0;
+        if (refreshUsed[k] + bytes > RefreshArena) return false;
+        auto* into = reinterpret_cast<GxMeshVertex*>(refreshArena[k] + refreshUsed[k]);
+        refreshUsed[k] += bytes;
+        if (!pipeline.refreshMesh(list, size, m.origin.data(), static_cast<const GxMeshVertex*>(m.block), into, m.vertexCount)) return false;
+        static const bool checking = smgDevGxCheck();
+        if (checking) checkRefresh(list, size, m, into);
+        GSPGPU_FlushDataCache(into, bytes);
+        m.vertices = into, m.vertexPhysical = osConvertVirtToPhys(into), m.refreshedFrame = framesShown;
+        ++perf.meshesRefreshed, perf.meshVerticesRefreshed += m.vertexCount;
+        return true;
     }
 
     void markPages(std::uintptr_t lo, std::uintptr_t hi) { markPages(lo, hi, meshPages); }
@@ -1439,6 +1471,28 @@ struct Renderer {
             pages.insert(page);
             sMeshPageBits[page >> 5].fetch_or(1u << (page & 31), std::memory_order_relaxed);
         }
+    }
+
+    // dev.gx_check: a refresh against the mesh built anew from the list, which it must match bit for bit.
+    void checkRefresh(const std::uint8_t* list, std::uint32_t size, const CachedMesh& m, const GxMeshVertex* got) {
+        ++perf.refreshesChecked;
+        GxMesh rebuilt;
+        const char* why = pipeline.buildMesh(list, size, rebuilt) ? "the list no longer builds"
+                          : rebuilt.vertices.size() != m.vertexCount || rebuilt.origin != m.origin ? "the list builds other vertices"
+                                                                                                      : nullptr;
+        std::size_t j = 0;
+        for (; !why && j < m.vertexCount; ++j) {
+            const GxMeshVertex &a = got[j], &b = rebuilt.vertices[j];
+            if (std::memcmp(a.position, b.position, sizeof a.position)) why = "position";
+            else if (std::memcmp(a.color, b.color, sizeof a.color)) why = "color";
+            else if (std::memcmp(a.source, b.source, sizeof a.source)) why = "texgen inputs";
+            else if (std::memcmp(a.normal, b.normal, sizeof a.normal)) why = "normal";
+            else if (std::memcmp(&a.slot, &b.slot, sizeof a.slot)) why = "slot";
+        }
+        if (!why) return;
+        if (++perf.refreshesDiffering <= 4)
+            std::fprintf(stderr, "gx check: a refreshed mesh (%lu vertices) differs from its rebuild: %s (vertex %zu)\n",
+                         static_cast<unsigned long>(m.vertexCount), why, j ? j - 1 : 0);
     }
 
     // dev.gx_check: a new mesh against the CPU path, vertex by vertex, under the state it is first drawn with (each
@@ -1606,7 +1660,7 @@ struct Renderer {
             if (viaCitro3d) {
                 C3D_BufInfo* buffers = C3D_GetBufInfo();
                 BufInfo_Init(buffers);
-                BufInfo_Add(buffers, mesh.block, sizeof(GxMeshVertex), sent.meshComponents, sent.meshPermutation);
+                BufInfo_Add(buffers, mesh.vertices, sizeof(GxMeshVertex), sent.meshComponents, sent.meshPermutation);
                 C3D_DrawElements(GPU_TRIANGLES, int(mesh.groups[g].indexCount), C3D_UNSIGNED_SHORT, indices + mesh.groups[g].firstIndex);
                 for (unsigned why = 0; why <= PendingList; ++why) perf.pendingWhy[why] += pendingWhy >> why & 1;
                 pending = false, pendingWhy = 0, ++perf.citroDraws;
@@ -1814,11 +1868,14 @@ struct Renderer {
         for (unsigned why = 0; why < GxVertexPipeline::MeshRefusals; ++why)
             if (perf.refusedVertices[why]) listed += " " + std::to_string(why) + ":" + std::to_string(unsigned(perf.refusedVertices[why] / n));
         std::fprintf(stderr, "gx perf: CPU-path vertices in lists refused by reason (per frame):%s\n", listed.c_str());
-        if (perf.meshesChecked) std::fprintf(stderr, "gx perf: meshes checked %lu, differing %lu\n", static_cast<unsigned long>(perf.meshesChecked),
-                                             static_cast<unsigned long>(perf.meshesDiffering));
+        if (perf.meshesChecked || perf.refreshesChecked)
+            std::fprintf(stderr, "gx perf: meshes checked %lu, differing %lu; refreshes checked %lu, differing %lu\n", static_cast<unsigned long>(perf.meshesChecked),
+                         static_cast<unsigned long>(perf.meshesDiffering), static_cast<unsigned long>(perf.refreshesChecked),
+                         static_cast<unsigned long>(perf.refreshesDiffering));
         std::fprintf(stderr, "gx perf: display lists refused by reason (per frame):%s; meshes invalidated %.1f, overflows %.1f, over budget %.1f, "
-                     "evicted %.1f, key mismatches %.1f, primitives left out %.1f, flushes queued %.1f; GX FIFO writes %.0f per frame; textures %zu, %lu invalidated\n", refusals.c_str(),
-                     perf.meshInvalidated / n, perf.meshOverflows / n, perf.meshBudgetDrops / n, perf.meshesEvicted / n, perf.meshMismatches / n, perf.leftOutDraws / n, perf.flushesQueued / n,
+                     "evicted %.1f, key mismatches %.1f, refreshed %.1f (%.0f vertices), primitives left out %.1f, flushes queued %.1f; GX FIFO writes %.0f per frame; textures %zu, %lu invalidated\n", refusals.c_str(),
+                     perf.meshInvalidated / n, perf.meshOverflows / n, perf.meshBudgetDrops / n, perf.meshesEvicted / n, perf.meshMismatches / n, perf.meshesRefreshed / n,
+                     perf.meshVerticesRefreshed / n, perf.leftOutDraws / n, perf.flushesQueued / n,
                      (smgFifoWrites - perf.writesBefore) / n, textures.size(), static_cast<unsigned long>(perf.texturesInvalidated));
         if (perf.meshMismatches)
             std::fprintf(stderr, "gx perf: key mismatches by what changed (per frame): key %.1f, descriptor %.1f, format table %.1f, array base %.1f, "

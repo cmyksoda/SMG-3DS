@@ -817,6 +817,17 @@ now keeps such a texgen when its vertices all pick the same kind: the shader tak
 transform alone (with two rows, the third output's column folded into the offset, since GX makes it one). A paired
 unit adds three rows to each slot, so a group holds six slots, or four with two.
 
+**Mesh memory, and meshes that move.** Meshes live in linear memory under a 12 MB budget. A new one past it evicts
+the meshes drawn least recently (never one drawn this frame or the last, which the GPU may still read), and a list
+refused for room is not tried again for 15 frames. Some lists keep their bytes while their arrays move: J3D's deformed
+models (Honeyhive's swaying flowers and grass) draw from vertices written into one of two buffers in turn, and
+instances of one model share a list, each with its own deformed arrays. Such a mesh keeps its triangles and is decoded
+again (`GxVertexPipeline::refreshMesh`: each vertex taken from the list by the mesh's origin map, keeping its slot)
+whenever its arrays move and once a frame, into an arena owned by the frame's parity (1 MB each, outside the mesh
+budget, reused from the start two frames later). At Honeyhive that is 12 refreshes a frame (960 vertices), and the
+2,900 vertices a frame its moving lists sent to the CPU path stay on the GPU. `dev.gx_check=1` checks every refresh bit for bit against the mesh built
+anew.
+
 **The DSP on its own core.** The Wii's DSP ran JAudio2's microcode beside the CPU, answering its mail by interrupt;
 the port ran it inside `DSPSendMailToDSP`, on the game's core, about 5 to 7 ms of a plaza frame. Now a thread on the
 system core (`APT_SetAppCpuTimeLimit(80)`, core 1; the New 3DS's third core is the render thread's) takes the mails in

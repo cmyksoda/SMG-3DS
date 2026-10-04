@@ -543,6 +543,49 @@ void meshFromDisplayList() {
           "a list with state commands stays the CPU's");
 }
 
+// A list whose positions are indexed from an array that moves (deformed vertices, double-buffered): the mesh decoded
+// again from the new array keeps its triangles and slots and takes the new positions.
+void meshRefresh() {
+    auto owned = std::make_unique<smg::GxCommandProcessor>(host());
+    smg::GxCommandProcessor& gpu = *owned;
+    Stream s;
+    clearState(s);
+    s.bp(0xC008FFF8);
+    s.cp(0x50, 2 << 9), s.cp(0x70, 1 | 4 << 1 | 1 << 21);  // position: an 8-bit index into float XYZ; texture 0 direct
+    s.cp(0xA0, 0x100), s.cp(0xB0, 12);
+    gpu.put(s.bytes.data(), static_cast<std::uint32_t>(s.bytes.size()));
+    const auto place = [](std::uint32_t at, float scale) {
+        for (int i = 0; i < 4; ++i) {
+            const float p[3] = {scale * (i & 1), scale * (i >> 1), scale};
+            std::memcpy(memory.data() + at + 12 * i, p, 12);
+        }
+    };
+    place(0x100, 10), place(0x200, 20);
+    Stream list;
+    list.u8(0x80), list.u16(4);
+    for (unsigned c : {0u, 1u, 3u, 2u}) list.u8(c), list.u8(c & 1), list.u8(c >> 1);
+    while (list.bytes.size() % 32) list.u8(0);
+    smg::GxDrawState state;
+    smg::readGxDrawState(gpu, state);
+    smg::GxVertexPipeline pipeline;
+    smg::GxMesh mesh;
+    check(pipeline.prepare(gpu, state, {}, 0x90, 0) &&
+              pipeline.buildMesh(list.bytes.data(), static_cast<std::uint32_t>(list.bytes.size()), mesh) == smg::GxVertexPipeline::MeshOk &&
+              near(mesh.vertices[2].position[0], 10) && near(mesh.vertices[2].position[1], 10),
+          "a list indexing its positions decodes from the array where it is");
+    Stream moved;
+    moved.cp(0xA0, 0x200);  // as J3D sets an array before each shape
+    gpu.put(moved.bytes.data(), static_cast<std::uint32_t>(moved.bytes.size()));
+    std::vector<smg::GxMeshVertex> out(mesh.vertices.size());
+    const bool refreshed = pipeline.refreshMesh(list.bytes.data(), static_cast<std::uint32_t>(list.bytes.size()), mesh.origin.data(),
+                                                mesh.vertices.data(), out.data(), out.size());
+    bool same = refreshed;
+    for (std::size_t i = 0; same && i < out.size(); ++i)
+        same = near(out[i].position[0], 2 * mesh.vertices[i].position[0]) && near(out[i].position[2], 20) && out[i].slot == mesh.vertices[i].slot &&
+               near(out[i].source[0][0], mesh.vertices[i].source[0][0]);
+    check(same, "decoded again from the moved array, each vertex takes its new position and keeps the rest");
+}
+
 // What gx.v.pica works out for a lit mesh's vertex: the colour (0-1).
 void shaderLighting(const smg::GxMeshUniforms& u, const smg::GxMeshVertex& v, float out[4]) {
     float clip[4], tex[smg::CombinerProgram::MaxUnits][2];
@@ -925,6 +968,7 @@ int runGxDrawTests() {
     litMeshGroups();
     litMeshSlotTexgens();
     linesAndPoints();
+    meshRefresh();
     drawStateKey();
     std::printf("%u GX draw checks passed\n", checks);
     return 0;

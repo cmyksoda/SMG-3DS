@@ -206,11 +206,15 @@ public:
     // second matrix) or the list (7 a command other than a primitive, 8 a
     // matrix index naming no whole slot, 9 more vertices than 16-bit indices reach, 10 nothing drawn), or the renderer's
     // choice (11 small enough to join the CPU path's batch, 13 no mesh memory left beside the last two frames' meshes, 14
-    // arrays that move every frame: double-buffered deformed vertices, no mesh of which is drawn twice).
+    // a moving mesh's refresh finding no room in the frame's arena).
     enum MeshRefusal : unsigned { MeshOk, MeshUnsupported, MeshDepthTexture, MeshLit, MeshLitColor0, MeshLights, MeshTexgen, MeshCommand,
                                   MeshMatrixIndex, MeshTooLarge, MeshEmpty, MeshSmall, MeshNormalize, MeshBudget, MeshMoving, MeshRefusals };
     unsigned meshEligible() const;
     unsigned buildMesh(const std::uint8_t* list, std::uint32_t size, GxMesh& mesh) const;
+    // A built mesh's vertices decoded again from the list's arrays as they are now (where they moved), into `out` by its
+    // origin, each keeping its built slot: false if the list no longer gives that many vertices.
+    bool refreshMesh(const std::uint8_t* list, std::uint32_t size, const std::uint32_t* origin, const GxMeshVertex* built, GxMeshVertex* out,
+                     std::size_t count) const;
     // The array memory a list's primitives index, [lo, hi), without decoding them: false for a list buildMesh refuses
     // as holding something other than primitives.
     bool meshSpan(const std::uint8_t* list, std::uint32_t size, const std::uint8_t*& lo, const std::uint8_t*& hi) const;
@@ -256,6 +260,7 @@ private:
         lightingRegisters_ = gpu.xfRegisterChanges, lightingLights_ = gpu.xfLightChanges;
     }
     void vertex(const GxVertex& v, GxDrawVertex& d);
+    void meshAttributes(const GxVertex& v, bool fromVertex, GxMeshVertex& m) const;
     std::size_t triangles(GxDrawVertex* vertices, std::uint16_t count, std::uint16_t first, std::uint16_t* indices) const;
     // Lines and points from their vertices, transformed into the last `count` of maxVertices, as quads from the first.
     std::size_t widen(GxDrawVertex* vertices, std::uint16_t count, std::uint16_t first, std::uint16_t* indices);

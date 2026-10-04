@@ -946,17 +946,7 @@ unsigned GxVertexPipeline::buildMesh(const std::uint8_t* list, std::uint32_t siz
             layout.read(list + at + 3 + std::uint32_t(i) * layout.size, v);
             layout.indexedSpan(list + at + 3 + std::uint32_t(i) * layout.size, mesh.arraysLo, mesh.arraysHi);
             GxMeshVertex m{};
-            std::memcpy(m.position, v.position, sizeof m.position);
-            if (fromVertex) std::memcpy(m.color, v.color[0], 4);
-            for (unsigned u = 0; u < units_; ++u) {
-                const TexGen& t = texgens_[u];
-                float* in = m.source[u];
-                if (t.source == 0) std::memcpy(in, v.position, 12);
-                else if (t.source == 1) std::memcpy(in, v.normal, 12);
-                else in[0] = v.texcoord[t.source - 5][0], in[1] = v.texcoord[t.source - 5][1], in[2] = 1;
-                if (!t.threeInputs) in[2] = 1;
-            }
-            std::memcpy(m.normal, v.normal, sizeof m.normal);
+            meshAttributes(v, fromVertex, m);
             if (perVertexMatrix_) {
                 if (v.matrixIndex % 3 || v.matrixIndex >= 30) return MeshMatrixIndex;
                 const unsigned slot = v.matrixIndex / 3;
@@ -1045,6 +1035,48 @@ unsigned GxVertexPipeline::buildMesh(const std::uint8_t* list, std::uint32_t siz
     mesh.groups.push_back(group);
     mesh.vertices = std::move(vertices), mesh.indices = std::move(indices);
     return MeshOk;
+}
+
+void GxVertexPipeline::meshAttributes(const GxVertex& v, bool fromVertex, GxMeshVertex& m) const {
+    std::memcpy(m.position, v.position, sizeof m.position);
+    if (fromVertex) std::memcpy(m.color, v.color[0], 4);
+    for (unsigned u = 0; u < units_; ++u) {
+        const TexGen& t = texgens_[u];
+        float* in = m.source[u];
+        if (t.source == 0) std::memcpy(in, v.position, 12);
+        else if (t.source == 1) std::memcpy(in, v.normal, 12);
+        else in[0] = v.texcoord[t.source - 5][0], in[1] = v.texcoord[t.source - 5][1], in[2] = 1;
+        if (!t.threeInputs) in[2] = 1;
+    }
+    std::memcpy(m.normal, v.normal, sizeof m.normal);
+}
+
+bool GxVertexPipeline::refreshMesh(const std::uint8_t* list, std::uint32_t size, const std::uint32_t* origin, const GxMeshVertex* built,
+                                   GxMeshVertex* out, std::size_t count) const {
+    const bool fromVertex = meshColorFromVertex();
+    std::vector<GxMeshVertex> fresh;
+    for (std::uint32_t at = 0; at < size;) {
+        const std::uint8_t op = list[at];
+        if (op == 0x00) {
+            ++at;
+            continue;
+        }
+        if (op < 0x80 || op >= 0xA8 || at + 3 > size) return false;
+        const std::uint16_t vertices = static_cast<std::uint16_t>(list[at + 1] << 8 | list[at + 2]);
+        const GxVertexLayout& layout = gpu_->layout(op & 7);
+        if (at + 3 + std::uint32_t(vertices) * layout.size > size) return false;
+        GxVertex v;
+        for (std::uint16_t i = 0; i < vertices; ++i) {
+            layout.read(list + at + 3 + std::uint32_t(i) * layout.size, v);
+            meshAttributes(v, fromVertex, fresh.emplace_back());
+        }
+        at += 3 + std::uint32_t(vertices) * layout.size;
+    }
+    for (std::size_t i = 0; i < count; ++i) {
+        if (origin[i] >= fresh.size()) return false;
+        out[i] = fresh[origin[i]], out[i].slot = built[i].slot;
+    }
+    return true;
 }
 
 std::uint32_t GxVertexPipeline::meshSources() const {
