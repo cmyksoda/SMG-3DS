@@ -954,8 +954,9 @@ use; each clock read costs Azahar 150 cycles, so it slows what it measures, by u
 vertices of refused lists by reason (the perf line names new draw states whose TEV program is approximated, by reason,
 without it); `dev.gx_check=1` checks each new mesh against the CPU path; `dev.gx_inline=1` draws on the game's thread
 instead of the render thread; `dev.start=GALAXY N` starts that galaxy at its start point N (StartInfo's `MarioNo`), to
-reach a stage's later parts without walking there (a start point inside a switch area fires it while the scene is still
-starting, which isn't how the story meets it); `dev.galaxy=GALAXY N` makes the first galaxy after the file select that
+reach a stage's later parts without walking there; it also stops the story's queued demos there, as `dev.galaxy` does
+(a new file's opening would otherwise meet the garden's start point 1, the after-the-attack spawn, and the attack movie
+queued on landing would freeze the opening's arrival cutscene and be frozen by it); `dev.galaxy=GALAXY N` makes the first galaxy after the file select that
 galaxy's scenario N (`GameSequenceProgress::requestGalaxyMove`, once the story has named the stage: a new file's first
 move names it only in `moveGalaxy`, which also queues the castle's prologue, so the story is stopped there). The heartbeat (every 300th frame) logs where Mario is, for planning
 a run's route. Azahar runs the 3DS CPU at its base 268 MHz although the port switches a New 3DS to 804
