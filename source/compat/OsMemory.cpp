@@ -1,6 +1,6 @@
 // The Wii's two memory arenas, which JKRHeap carves into the game's heaps (HeapMemoryWatcher). Each is one block
 // of the 3DS heap, as large as the Wii left SMG: MEM1 from the end of main.dol (0x806ADF90, rounded up past the
-// OS's stacks) to 0x81800000, MEM2 from 0x90000800 to where IOS begins at 0x933E0000.
+// OS's stacks) to 0x81800000, MEM2 from 0x90000800 to 0x935E0000, where the disc's IOS33 keeps its IPC buffer.
 #include <revolution/os.h>
 #include <revolution/os/OSAlloc.h>
 #include <revolution/os/OSBootInfo.h>
@@ -9,7 +9,7 @@
 
 namespace {
 constexpr u32 sMem1Size = 0x81800000 - 0x806C0000;
-constexpr u32 sMem2Size = 0x933E0000 - 0x90000800;
+constexpr u32 sMem2Size = 0x935E0000 - 0x90000800;
 
 struct Arena {
     u8 *lo = nullptr, *hi = nullptr;  // what is left, as the SDK tracks it

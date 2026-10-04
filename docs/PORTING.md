@@ -390,7 +390,7 @@ so only programs without the game (the preview, tests, tools) ever take one.
 | Library | File | What it is on the 3DS |
 | --- | --- | --- |
 | OS threads, mutexes, messages, clock | `OsThreads.cpp` | libctru threads on the app core, Wii priorities mapped in order (16 = 0x30); recursive mutexes on LightLocks; blocking queues; time base at 60.75 MHz from the system tick, dated from 2000-01-01 |
-| Arenas | `OsMemory.cpp` | MEM1 (0x806C0000-0x81800000, from main.dol's end) and MEM2 (0x90000800-0x933E0000) as two blocks of the 3DS heap; boot info with the Wii's 24 MB |
+| Arenas | `OsMemory.cpp` | MEM1 (0x806C0000-0x81800000, from main.dol's end) and MEM2 (0x90000800-0x935E0000, the arena IOS33, the disc's IOS, leaves) as two blocks of the 3DS heap; boot info with the Wii's 24 MB |
 | Allocation | `GameHeap.cpp` | plain `new` from the game's current JKRHeap once the root heap exists (as the original), the free store before; `delete` by address. The port's own long-lived containers use `compat/smg/FreeStore.hpp`'s allocator, and port code the game calls into opens an `smg::PortMemory` scope, so its scratch never spends a game heap (a solid heap would never get it back) |
 | Disc | `Dvd.cpp`, `DiscImage.cpp` | entry numbers from the disc's file table, the RVZ image's or `sys/fst.bin` (not reproducible by sorting: MovieData precedes ModuleData); reads from the image or the extracted files; async reads finish on a worker that calls back like the drive's interrupt |
 | Video | `Video.cpp` | a retrace thread on the 3DS VBlank runs the game's retrace callbacks, latches flushed buffers |
@@ -529,6 +529,13 @@ the end of its highest. That held on the Wii, where each zone's tables sat toget
 spans can overlap (a galaxy's tables come from more than one archive, which load in the port's own order, and a
 repacked table lives in a block of its own; which of the two did it wasn't pinned down): Gateway's rails were then looked up by ID in the galaxy's own path table, found nothing, and
 `BezierRail` read the row past its end. The holder is now the one that has the row's table among its own.
+
+**MEM2 as IOS33 leaves it.** Good Egg stopped while loading: its scene heap in MEM2 (`MR::getSceneHeapGDDR3`, the rest of
+MEM2 after the 14 MB dummy ARAM, the resident heap, the HOME Button and WPAD heaps and the 16.25 MB file cache) had
+1.9 MB, and its image effects' screen textures and water filter need 2.45 MB. The resident heap's contents match the
+game's tables to the byte; the arena didn't: the disc boots IOS33 (its TMD's system version), whose MEM2 arena ends at
+0x935E0000 (Dolphin's per-IOS table), and the port had the older IOSes' 0x933E0000. With the 2 MB back the scene heap has
+4.0 MB and Good Egg plays.
 
 **Japanese names.** Petari's sources are UTF-8, and the game's 5,081 non-ASCII string literals (demo, part, position,
 joint and object names) compiled as UTF-8 bytes, while the disc spells the same names in Shift-JIS: every lookup by such
