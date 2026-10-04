@@ -62,7 +62,10 @@ completion does not make those interfaces portable to ARM11/PICA200.
   limit, the wrap is folded into its constant d and the program stays exact. Mario's eyelid depends on
   it: 1 + texA/4 + 1/2 wraps to 127 where the lid's texture is clear, just under its alpha test's 128,
   so the eye shows through. A register whose value every input fixed can be read as a constant; that is
-  tried when reading the previous value is not exact, since it costs a constant slot.
+  tried when reading the previous value is not exact, since it costs a constant slot. An op places only
+  the arguments its function reads: a two-argument op's unused third, a zero, once took the constant slot
+  too: 314 materials stopped at "more than two constants", now 20, and 268 more translate exactly (the
+  electric rails' spark among them).
 - The original `MathUtil`, `MtxUtil` and nine gravity shapes (point, parallel, cube, disk,
   disk torus, cone, segment, wire and the `PlanetGravity` base) compile for ARM from
   generated copies that include only what each file uses. Three helpers whose only bodies
@@ -848,7 +851,8 @@ stays free for textures and movies. At Toy Time they reached 14.5 MB, free memor
 most of it); held to 12 MB, 128,000 vertices a frame had gone to the CPU path there, in frames of 550 ms. A new mesh
 with no room evicts the meshes drawn least recently (never one drawn this frame or the last, which the GPU may still
 read), and a list refused for room keeps its mesh's size, so it is built again as soon as there is room and no
-sooner: a cut to a new room costs Toy Time one slow stretch (four seconds at 6 fps) instead of three. A texture, movie
+sooner: Toy Time's restart after a fall (the test route drops Mario into a black hole) costs one slow stretch
+(four seconds at 6 fps) instead of three. A texture, movie
 frame or copy target that finds no linear memory lets go the meshes the GPU no longer reads, then (unless it comes
 inside a draw, whose mesh or batch that would pull out from under it) every mesh, trying again after each, before it
 stops by name; no run so far has needed that. Some lists keep their bytes while their arrays move: J3D's deformed
@@ -1272,7 +1276,7 @@ the walk stops at the first block with any hit although that hit lies beyond it.
 One file has no attribute table (`CocoTree`) and one triangle of `BigBigFly` names a missing row; the
 game ignores both.
 
-All 1,758 BMD/BDL models load under ASan and UBSan (5,053,844 triangles), and 6,987 of their
+All 1,758 BMD/BDL models load under ASan and UBSan (5,053,844 triangles), and 7,266 of their
 7,780 materials translate to the combiner exactly. Good Egg scenario 1 places 296 objects
 across 12 zones; the preview draws 56 rigid models in 172 placements.
 

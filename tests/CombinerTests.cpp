@@ -562,6 +562,35 @@ void waterPasses(std::mt19937& rng) {
     check(compared > 1000 && lines > 50, "over inputs on and off the bright lines");
 }
 
+// ElectricRailMoving's SparkMat, from the disc: (C0 + TEXC x C2 - 1/2) x 4, then A1 > the second map's red ? that : 0.
+// Its first op multiplies a texture by a constant; the zero it leaves unused once took the other constant's slot.
+void electricRail(std::mt19937& rng) {
+    smg::ModelMaterial m;
+    m.textures[0] = 0, m.textures[1] = 1;
+    m.tevColors[0] = {0.471f, 0.251f, 0, 1};
+    m.tevColors[1] = {1, 1, 1, 1};
+    m.tevColors[2] = {0.392f, 0.392f, 0.314f, 1};
+    m.tevStageCount = 2;
+    const std::uint8_t color[2][4]{{15, 8, 6, 2}, {5, 8, 0, 15}}, alpha[2][4]{{4, 7, 7, 7}, {7, 7, 7, 7}};
+    for (int i = 0; i < 2; ++i) {
+        auto& s = m.stages[i];
+        s = {};
+        std::copy(color[i], color[i] + 4, s.colorIn), std::copy(alpha[i], alpha[i] + 4, s.alphaIn);
+        s.texMap = s.texCoord = std::uint8_t(i);
+    }
+    m.stages[0].colorBias = 2, m.stages[0].colorScale = 2;
+    m.stages[1].colorOp = 8, m.stages[1].colorBias = 3;  // R8_GT, as J3D keeps a compare
+    const auto program = smg::compileTev(m);
+    check(program.exact && program.stageCount <= smg::CombinerProgram::MaxStages, "the electric rail's spark translates exactly");
+    for (int i = 0; i < 300; ++i) {
+        const auto in = byteInputs(rng);
+        if (same(gx(m, in), pica(program, in))) continue;
+        dump(m, program, in);
+        check(false, "and matches GX on byte inputs");
+        break;
+    }
+}
+
 int runCombinerTests() {
     std::mt19937 rng(1234);
     realMaterial(rng);
@@ -572,6 +601,7 @@ int runCombinerTests() {
     compareAddsC(rng);
     sixTapBlur(rng);
     waterPasses(rng);
+    electricRail(rng);
     randomMaterials(rng);
     std::printf("%u TEV combiner checks passed\n", checks);
     return 0;

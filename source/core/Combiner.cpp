@@ -497,9 +497,15 @@ struct Compiler {
             stage.alphaFunc = alpha.func;
             stage.colorScale = color.scale;
             stage.alphaScale = alpha.scale;
+            // Only the arguments a function reads: an unused one, a zero, would take a constant slot.
+            const auto arity = [](CombineFunc f) {
+                return f == CombineFunc::Replace ? 1 : f == CombineFunc::Interpolate || f == CombineFunc::MultiplyAdd ? 3 : 2;
+            };
             for (int k = 0; k < 3; ++k) {
-                place(color.args[k], false, index, first, stage, colorSlot, colorBuffer, stage.colorSource[k], stage.colorOperand[k]);
-                place(alpha.args[k], true, index, first, stage, alphaSlot, alphaBuffer, stage.alphaSource[k], stage.alphaOperand[k]);
+                if (k < arity(color.func))
+                    place(color.args[k], false, index, first, stage, colorSlot, colorBuffer, stage.colorSource[k], stage.colorOperand[k]);
+                if (k < arity(alpha.func))
+                    place(alpha.args[k], true, index, first, stage, alphaSlot, alphaBuffer, stage.alphaSource[k], stage.alphaOperand[k]);
             }
         }
     }
