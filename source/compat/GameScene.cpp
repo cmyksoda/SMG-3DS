@@ -10,7 +10,11 @@
 #include <Game/LiveActor/Spine.hpp>
 #include <Game/Util/SingletonHolder.hpp>
 #include <revolution/os.h>
+#include <Game/Util/DemoUtil.hpp>
 #include <Game/Util/PlayerUtil.hpp>
+#include <Game/Util/SceneUtil.hpp>
+#include <Game/Util/ScreenUtil.hpp>
+#include <Game/Util/SequenceUtil.hpp>
 
 NameObjHolder* getSceneNameObjHolder() {
     return SingletonHolder< GameSystem >::get()->mSceneController->mObjHolder;
@@ -27,13 +31,16 @@ CollisionCode* getSceneCollisionCode() {
 
 extern "C" BOOL smgDevWarp(float* to, int* seconds);  // source/compat/Kpad.cpp
 
-// dev.warp: once a run, the given seconds after Mario first appears (smgFramePhase calls this every logic step).
+// dev.warp: once a run, after the given seconds of play, counted in logic steps outside the file select (whose Mario is
+// a stand-in) and outside demos, movies and the scenario's opening, any of which may place Mario itself.
 extern "C" void smgDevWarpStep() {
     static int steps = 0;
     float to[3];
     int seconds = 0;
-    if (steps < 0 || !smgDevWarp(to, &seconds) || !MR::isExistSceneObj(SceneObj_MarioHolder)) return;
-    if (!MR::getSceneObj< MarioHolder >(SceneObj_MarioHolder)->getMarioActor() || ++steps < seconds * 60) return;
+    if (steps < 0 || !smgDevWarp(to, &seconds) || !MR::isExistSceneObj(SceneObj_MarioHolder) || MR::isStageFileSelect()) return;
+    if (!MR::getSceneObj< MarioHolder >(SceneObj_MarioHolder)->getMarioActor() || MR::isDemoActive() || MR::isActiveMoviePlayer() ||
+        MR::isExecScenarioStarter() || ++steps < seconds * 60)
+        return;
     MR::setPlayerPos(TVec3f(to[0], to[1], to[2]));
     OSReport("dev.warp: Mario to (%.0f, %.0f, %.0f)\n", to[0], to[1], to[2]);
     steps = -1;
