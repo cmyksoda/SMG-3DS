@@ -1015,7 +1015,10 @@ the name's address and text on the game's thread.
 **Work no frame shows.** With every second logic step drawn, the step right after a drawn one computes view matrices
 (`J3DModel::viewCalc`, through `ModelManager::calcView`) that the next step computes again before anything draws them:
 the frame loop now leaves them out there (`smgViewNeeded`), as their data reaches the GPU when a model is drawn and
-J3D's buffers no longer need a fixed rhythm. JMath's inline vector functions (`JMathInlineVEC`) are inline again (the
+J3D's buffers no longer need a fixed rhythm. The same holds for each model's material display lists
+(`ModelManager::updateDL`: material controllers, animated colors and texture matrices, the lists patched): the
+controllers set values and never add to them, and the animations' frames advance in `calc`, which still runs. At the
+Comet Observatory, Mario standing still, a step's animation went from 8.3 ms to 6.1. JMath's inline vector functions (`JMathInlineVEC`) are inline again (the
 port had them as calls; inside the namespace they must be called by their full name, or argument-dependent lookup also
 finds the SDK's global `PSVEC*` and the call is ambiguous). An inline matrix load is written into the stream in one
 pass rather than a word at a time.

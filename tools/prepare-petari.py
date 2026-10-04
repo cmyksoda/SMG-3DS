@@ -1435,12 +1435,15 @@ adapt("src/Game/Scene/StageDataHolder.cpp", "Game/Scene/StageDataHolder.cpp", [
      "            if (pInfo->mData == rIter.mInfo->mData) {\n                return this;\n            }\n        }\n    }\n", 1),
 ])
 
-# View matrices a step computes are computed again by the next before anything draws them when that step draws
-# nothing, so the frame loop leaves them out there (smgViewNeeded).
+# View matrices and material display lists a step makes are made again by the next before anything draws them when that
+# step draws nothing, so the frame loop leaves them out there (smgViewNeeded). The material controllers set values,
+# never add to them, so a step left out loses nothing.
 adapt("src/Game/LiveActor/ModelManager.cpp", "Game/LiveActor/ModelManager.cpp", [
     ('#include "Game/LiveActor/ModelManager.hpp"\n', '#include "Game/LiveActor/ModelManager.hpp"\n\nextern "C" bool smgViewNeeded;  // source/compat/GameScene.cpp\n', 1),
     ("void ModelManager::calcView() {\n    getJ3DModel()->viewCalc();",
      "void ModelManager::calcView() {\n    if (!smgViewNeeded) {\n        return;\n    }\n\n    getJ3DModel()->viewCalc();", 1),
+    ("void ModelManager::updateDL(bool isDiffDL) {\n    OSLockMutex",
+     "void ModelManager::updateDL(bool isDiffDL) {\n    if (!smgViewNeeded) {\n        return;\n    }\n\n    OSLockMutex", 1),
 ])
 
 # A scene is destroyed (on another thread) once the GPU is done with it: the Wii's frame loop had waited for each frame
