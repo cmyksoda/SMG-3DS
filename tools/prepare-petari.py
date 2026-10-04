@@ -1473,6 +1473,11 @@ adapt("src/Game/NPC/NPCActor.cpp", "Game/NPC/NPCActor.cpp", [
     ("MR::createJointDelegatorWithNullChildFunc(this, &calcJointScale, rCaps._70)",
      "MR::createJointDelegatorWithNullChildFunc(this, &NPCActor::calcJointScale, rCaps._70)", 1),
 ])
+# A built collision's one octree word is a leaf (the top bit) whose prism list follows two bytes on. The game writes it
+# as two halves, 0x8000 then 2, which read back as that word only big-endian: the 3DS read a node 0x28000 bytes away.
+adapt("src/Game/MapObj/DynamicCollisionObj.cpp", "Game/MapObj/DynamicCollisionObj.cpp", [
+    ("    u16array[0] = 0x8000;\n    u16array[1] = 2;\n", "    *reinterpret_cast< s32* >(u16array) = static_cast< s32 >(0x80000002);\n", 1),
+])
 # Tested as a bare member function name, Metrowerks checked the pointer to member (__ptmf_test), which is never
 # null: the condition always holds. Spelled out so GCC keeps that.
 adapt("src/Game/MapObj/MapPartsRailPosture.cpp", "Game/MapObj/MapPartsRailPosture.cpp", [

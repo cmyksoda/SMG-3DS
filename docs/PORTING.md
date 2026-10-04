@@ -436,6 +436,14 @@ glyph sheets (the GPU's bytes), sequence bytecode (JAudio2's reader reads bytes,
 them big-endian, as the Wii's did), and the sequence collection's group tables, which sit at odd addresses.
 Still to come as the boot reaches them: J3D models and animations, collision (KCL), particles, streams (AST).
 
+Byte order also hides in code that builds data: words written as halves, or halves read as words, are right only on
+the CPU they were written for. `DynamicCollisionObj` builds a one-leaf KCL octree by writing 0x8000 then 2 as two
+`u16`s; `KCollisionServer::searchBlock` reads them as one `s32`, which is the leaf 0x80000002 on the Wii and the node
+0x00028000 here, so every ray through Beach Bowl's water surface walked 0x28000 bytes past the octree into the heap
+(an unmapped read in `checkArrow`, seconds after landing). It is written as the one word it is now. Finding it: the
+KCL a crash walked matched no file on the disc (`resource_audit --collision` and a walk of all 1,016 disc octrees found
+nothing wrong), so the data was built at run time.
+
 **Messages (BMG).** The game reads its text more than one way, so no single byte order serves it. Characters
 and a tag's type are 16-bit units; `MessageEditorMessageTag` reads a tag's length and group as bytes, and so
 does `TalkNodeCtrl`. Parameters are read as bytes, halves, words or text, depending on the kind. `smg::nativeBmg`
