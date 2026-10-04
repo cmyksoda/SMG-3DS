@@ -10,6 +10,7 @@
 #include <Game/LiveActor/Spine.hpp>
 #include <Game/Util/SingletonHolder.hpp>
 #include <revolution/os.h>
+#include <Game/Util/PlayerUtil.hpp>
 
 NameObjHolder* getSceneNameObjHolder() {
     return SingletonHolder< GameSystem >::get()->mSceneController->mObjHolder;
@@ -26,6 +27,19 @@ CollisionCode* getSceneCollisionCode() {
 
 // Where the game's state machines are, every few seconds, for runs that no longer stop: the nerves are static objects
 // that tools/heartbeat-names.sh names from the ELF. Called from the game thread at every 300th frame (smgFramePhase).
+extern "C" BOOL smgDevWarp(float* to);  // source/compat/Kpad.cpp
+
+// dev.warp: once a run, two seconds after Mario first appears, he's moved to the given place.
+extern "C" void smgDevWarpStep() {
+    static int frames = 0;
+    float to[3];
+    if (frames < 0 || !smgDevWarp(to) || !MR::isExistSceneObj(SceneObj_MarioHolder)) return;
+    if (!MR::getSceneObj< MarioHolder >(SceneObj_MarioHolder)->getMarioActor() || ++frames < 60) return;
+    MR::setPlayerPos(TVec3f(to[0], to[1], to[2]));
+    OSReport("dev.warp: Mario to (%.0f, %.0f, %.0f)\n", to[0], to[1], to[2]);
+    frames = -1;
+}
+
 extern "C" void smgHeartbeat() {
     GameSystem* system = SingletonHolder< GameSystem >::get();
     if (!system || !system->mSpine) return;

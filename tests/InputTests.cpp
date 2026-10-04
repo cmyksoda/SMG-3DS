@@ -302,6 +302,7 @@ void settingsFiles() {
     developer.devSkipStory = developer.devGxDump = developer.devGxNull = developer.devGxTiming = developer.devGxCheck = developer.devGxInline = developer.devDrawEvery = developer.devGxNoRaw = true;
     developer.devStartGalaxy = "PeachCastleGardenGalaxy", developer.devStartMario = 1;
     developer.devGalaxy = "AstroGalaxy", developer.devGalaxyScenario = 2;
+    developer.devWarp = true, developer.devWarpTo[0] = -7000.5f, developer.devWarpTo[1] = 100, developer.devWarpTo[2] = -8900;
     check(!smg::Settings{}.devSkipStory && smg::formatSettings(smg::Settings{}).find("dev.") == std::string::npos &&
           smg::parseSettings(smg::formatSettings(developer)) == developer, "the story skip is off unless set, and written only when on");
     check(smg::parseSettings("preview=../../sys 1\n").previewGalaxy == "EggStarGalaxy" &&
@@ -312,6 +313,9 @@ void settingsFiles() {
     check(smg::parseSettings("dev.galaxy=EggStarGalaxy 1\n").devGalaxyScenario == 1 && smg::parseSettings("dev.galaxy=EggStarGalaxy 0\n").devGalaxyScenario == 0 &&
               smg::parseSettings("dev.galaxy=../x 1\n").devGalaxy.empty(),
           "a first stage by galaxy and scenario");
+    check(smg::parseSettings("dev.warp=-7000 100 -8900\n").devWarp && smg::parseSettings("dev.warp=-7000 100 -8900\n").devWarpTo[2] == -8900 &&
+              !smg::parseSettings("dev.warp=1 2\n").devWarp && !smg::parseSettings("dev.warp=1 2 3 4\n").devWarp,
+          "a place for Mario by three numbers");
     const auto parsed = smg::parseSettings(
         "pointer=teleport\nmotion_speed=9000\nstick_speed=50\ninvert_x=yes\nbind.jump=A+Q\nbind.spin = Y \nnonsense\n");
     check(parsed.pointer == smg::PointerMode::Motion && parsed.motionSpeed == 100 && parsed.stickSpeed == 50,

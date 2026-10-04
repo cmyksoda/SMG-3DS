@@ -31,6 +31,7 @@
 #include <vector>
 
 extern "C" void smgHeartbeat();          // source/compat/GameScene.cpp
+extern "C" void smgDevWarpStep();       // source/compat/GameScene.cpp
 extern "C" unsigned smgMovieDecodes();  // source/compat/Thp.cpp
 extern "C" unsigned smgFifoWrites;       // source/compat/GxFifo.cpp
 extern "C" int smgDevGxDump();           // source/compat/Kpad.cpp
@@ -2246,5 +2247,6 @@ extern "C" void smgFramePhase(int phase) {
     if (phase == 0 && current >= 0) smg::sPhaseFrames.fetch_add(1, std::memory_order_relaxed);
     current = phase, last = now;
     // Every 300th frame the game's state is logged (source/compat/GameScene.cpp), from the game's own thread.
+    if (phase == 0) smgDevWarpStep();
     if (phase == 0 && ++frames % 300 == 0) smgHeartbeat();
 }

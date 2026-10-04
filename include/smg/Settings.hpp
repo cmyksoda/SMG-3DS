@@ -60,6 +60,9 @@ struct Settings {
     // later scenes without playing up to them.
     std::string devGalaxy;
     int devGalaxyScenario = 0;
+    // For development only (dev.warp=X Y Z): two seconds after Mario first appears, he's moved there (once a run).
+    bool devWarp = false;
+    float devWarpTo[3] = {};
     static constexpr int MinSpeed = 25, MaxSpeed = 300, SpeedStep = 25;
 };
 bool operator==(const Settings& a, const Settings& b);

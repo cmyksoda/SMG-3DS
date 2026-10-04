@@ -94,7 +94,8 @@ bool operator==(const Settings& a, const Settings& b) {
            a.devGxDump == b.devGxDump && a.devGxNull == b.devGxNull && a.devGxTiming == b.devGxTiming &&
            a.devGxCheck == b.devGxCheck && a.devGxInline == b.devGxInline && a.devDrawEvery == b.devDrawEvery && a.devGxNoRaw == b.devGxNoRaw &&
            a.devAvSync == b.devAvSync && a.devStartGalaxy == b.devStartGalaxy && a.devStartMario == b.devStartMario &&
-           a.devGalaxy == b.devGalaxy && a.devGalaxyScenario == b.devGalaxyScenario;
+           a.devGalaxy == b.devGalaxy && a.devGalaxyScenario == b.devGalaxyScenario && a.devWarp == b.devWarp &&
+           (!a.devWarp || std::equal(a.devWarpTo, a.devWarpTo + 3, b.devWarpTo));
 }
 
 Settings parseSettings(const std::string& text, Settings base) {
@@ -121,6 +122,11 @@ Settings parseSettings(const std::string& text, Settings base) {
             parseGalaxyNumber(value, 0, settings.devStartGalaxy, settings.devStartMario);
         } else if (key == "dev.galaxy") {
             parseGalaxyNumber(value, 1, settings.devGalaxy, settings.devGalaxyScenario);
+        } else if (key == "dev.warp") {
+            float to[3];
+            char rest;
+            if (std::sscanf(value.c_str(), "%f %f %f %c", &to[0], &to[1], &to[2], &rest) == 3)
+                settings.devWarp = true, std::copy(to, to + 3, settings.devWarpTo);
         } else if (key == "dev.skip_story" || key == "dev.gx_dump" || key == "dev.gx_null" || key == "dev.gx_timing" || key == "dev.gx_check" ||
                    key == "dev.gx_inline" || key == "dev.draw_every" || key == "dev.gx_noraw" || key == "dev.av_sync") {
             if (value == "0" || value == "1")
@@ -163,6 +169,11 @@ std::string formatSettings(const Settings& settings) {
     if (settings.devGxNoRaw) text += "dev.gx_noraw=1\n";
     if (settings.devStartMario >= 0) text += "dev.start=" + settings.devStartGalaxy + " " + std::to_string(settings.devStartMario) + "\n";
     if (settings.devGalaxyScenario > 0) text += "dev.galaxy=" + settings.devGalaxy + " " + std::to_string(settings.devGalaxyScenario) + "\n";
+    if (settings.devWarp) {
+        char line[96];
+        std::snprintf(line, sizeof line, "dev.warp=%g %g %g\n", settings.devWarpTo[0], settings.devWarpTo[1], settings.devWarpTo[2]);
+        text += line;
+    }
     return text;
 }
 

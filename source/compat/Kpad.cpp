@@ -3,6 +3,7 @@
 // gyroscope moves the pointer in motion mode, as the Wii Remote's sensor bar and gyro do.
 #include <smg/HidInput.hpp>
 #include <smg/Kpad.hpp>
+#include <algorithm>
 #include <cstdio>
 
 namespace {
@@ -84,6 +85,12 @@ const char* smgDevGalaxy(int* scenario) {
     if (s.devGalaxyScenario <= 0) return nullptr;
     *scenario = s.devGalaxyScenario;
     return s.devGalaxy.c_str();
+}
+// dev.warp: where Mario is moved once he first appears, false when unset.
+BOOL smgDevWarp(float* to) {
+    const smg::Settings& s = input().settings();
+    if (s.devWarp) std::copy(s.devWarpTo, s.devWarpTo + 3, to);
+    return s.devWarp;
 }
 // GameSystem::frameLoop (adapted): logic steps per drawn frame. The Wii drew each one; the port draws every second one,
 // 30 frames a second with the game at full speed, unless dev.draw_every=1.
