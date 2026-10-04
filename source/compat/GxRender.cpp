@@ -1722,12 +1722,13 @@ struct Renderer {
                          perf.steps[6] / n, perf.stepTicks[7] * ms, perf.steps[7] / n, perf.stepTicks[8] * ms, perf.steps[8] / n, perf.stepTicks[9] * ms,
                          perf.steps[9] / n, perf.stepTicks[10] * ms, perf.steps[10] / n, perf.stepTicks[11] * ms, perf.steps[11] / n);
             std::fprintf(stderr, "gx perf: pipeline per frame: %.0f prepares read whole, %.0f folds made, %.0f lighting reads; vertex layouts %.0f read, "
-                         "%.0f reused; unfolded texgen vertices: matrix the position's %.0f, another %.0f, normalized %.0f\n", pipeline.fullPrepares / n,
-                         pipeline.foldsMade / n, pipeline.lightingReads / n, lastGpu->layoutsRead / n, lastGpu->layoutsReused / n,
-                         pipeline.texMatrixShared / n, pipeline.texMatrixOwn / n, pipeline.texgensNormalized / n);
+                         "%.0f reused; unfolded texgen vertices: matrix the position's %.0f, its pair %.0f, another %.0f, the last again %.0f, normalized %.0f\n",
+                         pipeline.fullPrepares / n, pipeline.foldsMade / n, pipeline.lightingReads / n, lastGpu->layoutsRead / n,
+                         lastGpu->layoutsReused / n, pipeline.texMatrixShared / n, pipeline.texMatrixPaired / n, pipeline.texMatrixOwn / n,
+                         pipeline.texMatrixRepeated / n, pipeline.texgensNormalized / n);
         }
         pipeline.fullPrepares = pipeline.foldsMade = pipeline.lightingReads = 0;
-        pipeline.texMatrixShared = pipeline.texMatrixOwn = pipeline.texgensNormalized = 0;
+        pipeline.texMatrixShared = pipeline.texMatrixPaired = pipeline.texMatrixOwn = pipeline.texMatrixRepeated = pipeline.texgensNormalized = 0;
         lastGpu->layoutsRead = lastGpu->layoutsReused = 0;
         std::string approximations;
         for (const auto& [why, count] : perf.approximated)

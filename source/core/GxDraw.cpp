@@ -667,7 +667,10 @@ void GxVertexPipeline::texgen(const TexGen& t, const GxVertex& v, float st[2]) c
         return;
     }
     const std::uint32_t index = t.perVertexMatrix ? v.texMatrixIndex[t.coord] : t.matrix;
-    if (t.perVertexMatrix) ++(index == v.matrixIndex ? texMatrixShared : texMatrixOwn);
+    if (t.perVertexMatrix) {
+        ++(index == v.matrixIndex ? texMatrixShared : index == v.matrixIndex + 30u ? texMatrixPaired : texMatrixOwn);
+        texMatrixRepeated += index == lastTexMatrix, lastTexMatrix = index;
+    }
     texgensNormalized += t.dual && t.normalize;
     c[0] = 0, c[1] = 0, c[2] = 1;
     for (int r = 0; r < t.rows; ++r)

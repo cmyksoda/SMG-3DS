@@ -208,8 +208,10 @@ public:
     // Prepares that read the state whole, folds made, and lighting read (for the perf line).
     std::uint32_t fullPrepares = 0, lightingReads = 0;
     mutable std::uint32_t foldsMade = 0;
-    // Unfolded texgens' vertices (for the perf line): a per-vertex matrix that is the position's, or another; normalized.
-    mutable std::uint32_t texMatrixShared = 0, texMatrixOwn = 0, texgensNormalized = 0;
+    // Unfolded texgens' vertices (for the perf line): a per-vertex matrix that is the position's, the texture slot paired
+    // with it (30 rows on), another, or the previous vertex's again; normalized.
+    mutable std::uint32_t texMatrixShared = 0, texMatrixPaired = 0, texMatrixOwn = 0, texMatrixRepeated = 0, texgensNormalized = 0;
+    mutable std::uint32_t lastTexMatrix = 0;
 
 private:
     struct TexGen {
