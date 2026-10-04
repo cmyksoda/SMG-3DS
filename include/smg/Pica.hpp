@@ -14,8 +14,9 @@ struct TiledTexture {
     GPU_TEXCOLOR format = GPU_RGBA8;
     std::vector<std::uint8_t> bytes;
 };
-// In the smallest native format that holds it without visible loss, or in `format` when given.
+// In the smallest native format that holds it without visible loss (tileFormat), or in `format` when given.
 TiledTexture tile(const ModelTexture& source, int format = -1);
+GPU_TEXCOLOR tileFormat(const ModelTexture& source);
 bool upload(C3D_Tex& texture, const TiledTexture& tiled);
 
 // The fragment side of a GX material: the combiner program as texture environments, and the pixel tests.

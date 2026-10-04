@@ -42,6 +42,8 @@ GPU_TEXCOLOR chooseFormat(const ModelTexture& texture) {
 // Runs on the loader thread: converts and swizzles into the layout the GPU samples.
 } // namespace
 
+GPU_TEXCOLOR tileFormat(const ModelTexture& source) { return chooseFormat(source); }
+
 TiledTexture tile(const ModelTexture& source, int format) {
     TiledTexture out;
     const Image& image = source.image;

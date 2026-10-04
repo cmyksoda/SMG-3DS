@@ -215,7 +215,7 @@ struct Renderer {
         u32 stateHits = 0, stateMisses = 0, stateClears = 0;
         u32 cpuCopies = 0, gpuCopies = 0;
         u32 peeks = 0;
-        u32 atlasJoins = 0, atlasesBuilt = 0, atlasTurns = 0;  // CPU-path draws that joined their batch by an atlas, and atlases made
+        u32 atlasJoins = 0, atlasesBuilt = 0, atlasTurns = 0;
         u64 peekTicks = 0;  // depth peeks: the frame paused, the GPU waited for, one tile read back
         u32 meshesChecked = 0, meshesDiffering = 0;  // dev.gx_check
         std::pair<const char*, u32> approximated[8] = {};  // new draw states whose combiner program is approximated, by reason
@@ -582,12 +582,13 @@ struct Renderer {
         }
         indexUsed += written;
         used += count;
+        fresh[0] = fresh[1] = fresh[2] = false;  // a readback must flush what's pending first
     }
 
     // The draw state for what comes next: kept while the BP registers a draw reads (C0 and C1 alone, when they ride)
-    // stay. The CPU path's state may read C1 from the palette; a mesh's never does.
+    // stay. The CPU path's state may read C1 from the palette or sample an atlas; a mesh's never does.
     void ensureState(const GxCommandProcessor& gpu, bool cpuPath) {
-        if (stateValid && !cpuPath && state_->color1InTexture) return buildState(gpu, false);
+        if (stateValid && !cpuPath && (state_->color1InTexture || boundAtlas >= 0)) return buildState(gpu, false);
         if (!stateValid || gpu.bpChanges != stateBp || !(frame == stateFrame)) {
             std::uint8_t color[4];
             const bool colorsOnly = gpu.bpChangesBesideColors == stateBesideColors && (state_->color1InTexture || gpu.color1Changes == stateColor1);
@@ -697,9 +698,8 @@ struct Renderer {
         return entry;
     }
 
-    // Mario's running dust picks one of three textures a particle, which ended the batch at every particle: textures
-    // taking turns under one otherwise equal state share an atlas instead. A vertex outside its texture would sample a
-    // neighbor, so that atlas is given up and the primitive drawn again from its own texture.
+    // Particles that pick one of a few textures each (Mario's running dust) ended the batch at every particle; textures
+    // taking turns under one otherwise equal state share an atlas instead.
     struct Atlas {
         u32 base = 0;
         std::vector<Key> members;
@@ -761,9 +761,7 @@ struct Renderer {
             }
     }
 
-    // Two CPU-path states in a row that differ only in their texture: once a base's textures have taken enough turns
-    // within a window, an atlas holds them, with its old members when they fit. True when it built one (the pending batch
-    // was drawn first if an old atlas went).
+    // True when it built an atlas: the pending batch was drawn first if an old one went.
     bool noteTurn(const CachedState& previous, const CachedState& next) {
         if (!previous.oneMap || !next.oneMap || previous.base != next.base || previous.texture == next.texture) return false;
         Turns& turns = turnsByBase[previous.base];
@@ -807,12 +805,12 @@ struct Renderer {
             if (!size || !decodeGxImage({static_cast<const std::uint8_t*>(OSPhysicalToCached(address)), size}, m.format, width, height, {},
                                         GxPalette::IA8, m.image, error))
                 return false;
-            const GPU_TEXCOLOR chosen = tile(m).format;
+            const GPU_TEXCOLOR chosen = tileFormat(m);
             const auto gray = [](GPU_TEXCOLOR f) { return f == GPU_L8 || f == GPU_LA4 || f == GPU_LA8; };
             if (chosen == GPU_ETC1 || chosen == GPU_ETC1A4) return false;
             format = !k || chosen == format ? chosen : gray(chosen) && gray(format) ? GPU_LA8 : GPU_RGBA8;
         }
-        // Shelves of cells, tallest first, each member bordered by the texels its wrap mode samples past its edges.
+        // A border of the texels each member's wrap mode samples past its edges keeps filtering inside it.
         std::vector<std::size_t> order(keys.size());
         for (std::size_t k = 0; k < order.size(); ++k) order[k] = k;
         std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) { return members[a].image.height > members[b].image.height; });
@@ -859,7 +857,10 @@ struct Renderer {
             C3D_TexDelete(&atlas.texture);
             atlas.built = false;
         }
-        if (!upload(atlas.texture, tiled)) return false;
+        if (!upload(atlas.texture, tiled)) {
+            atlas.refused = true, ++atlasGeneration;  // its old texture is already gone
+            return false;
+        }
         atlas.base = base, atlas.members = keys, atlas.place = std::move(place), atlas.built = true, atlas.refused = false;
         for (const Key& k : keys) atlasAddresses.insert(std::get<0>(k));
         ++atlasGeneration, ++perf.atlasesBuilt;
@@ -906,6 +907,21 @@ struct Renderer {
         if (start) perf.stepTicks[which] += svcGetSystemTick() - start, ++perf.steps[which];
     }
 
+    // Read back only for a riding C0 (onlyColor0Changed) and by the timing's tally.
+    void recordBuild(const GxCommandProcessor& gpu) {
+        if (!state_->color0InVertex && !Step::timing()) return;
+        std::memcpy(bpAtBuild, gpu.bp, sizeof bpAtBuild);
+        std::memcpy(colorAtBuild, gpu.tevColor, sizeof colorAtBuild);
+        std::memcpy(konstAtBuild, gpu.tevKonst, sizeof konstAtBuild);
+    }
+
+    // A joining state is drawn with the batch's combiner, so its colors must be the batch's unless both read them per
+    // vertex (C0) or from the palette (C1).
+    static bool sameColors(const CachedState& a, const CachedState& b) {
+        return ((a.state.color0InVertex && b.state.color0InVertex) || !std::memcmp(a.colors, b.colors, 2 * sizeof(u32))) &&
+               ((a.state.color1InTexture && b.state.color1InTexture) || !std::memcmp(a.colors + 2, b.colors + 2, 2 * sizeof(u32)));
+    }
+
     void buildState(const GxCommandProcessor& gpu, bool cpuPath) {
         CachedState* previous = stateValid && cpuPath ? stateEntry : nullptr;
         CachedState* next;
@@ -916,11 +932,12 @@ struct Renderer {
         if (previous && next && previous != next) {
             if (noteTurn(*previous, *next)) previous = nullptr;  // an atlas made or remade: the batch is drawn, start afresh
             if (previous) placeInAtlas(*next);
-            if (previous && boundAtlas >= 0 && next->atlas == boundAtlas && frame == stateFrame) {
+            if (previous && boundAtlas >= 0 && next->atlas == boundAtlas && frame == stateFrame && sameColors(*previous, *next)) {
                 // The same state but its texture, which sits in the batch's atlas: the particle joins the batch.
                 stateEntry = next, state_ = &next->state;
                 pipeline.stateChanged();
                 pipeline.setAtlas(next->mapUnit, next->place);
+                recordBuild(gpu);
                 stateBp = gpu.bpChanges, stateBesideColors = gpu.bpChangesBesideColors, stateColor1 = gpu.color1Changes;
                 ++perf.atlasJoins;
                 return;
@@ -943,12 +960,7 @@ struct Renderer {
             for (u32 a = 0; a < 0x100; ++a)
                 if (gpu.bp[a] != bpAtBuild[a] && GxCommandProcessor::drawsRead(a)) ++perf.changed[a];
         }
-        // Read back only for a riding C0 (onlyColor0Changed) and by the timing's tally.
-        if (state_->color0InVertex || Step::timing()) {
-            std::memcpy(bpAtBuild, gpu.bp, sizeof bpAtBuild);
-            std::memcpy(colorAtBuild, gpu.tevColor, sizeof colorAtBuild);
-            std::memcpy(konstAtBuild, gpu.tevKonst, sizeof konstAtBuild);
-        }
+        recordBuild(gpu);
         stateValid = true, stateBp = gpu.bpChanges, stateBesideColors = gpu.bpChangesBesideColors, stateColor1 = gpu.color1Changes;
         stateFrame = frame, ++stateVersion;
         if (state_->unsupported) stop(state_->unsupported);

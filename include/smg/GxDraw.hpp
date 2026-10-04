@@ -172,9 +172,8 @@ public:
     void stateChanged() { prepared_ = false; }
     // Where the palette unit samples for the next primitives (GX texture coordinates).
     void setPaletteTexel(float s, float t) { palette_[0] = s, palette_[1] = t; }
-    // A unit whose texture sits in an atlas: its coordinates go into the texture's place (u and v scale, then offset).
-    // takeAtlasOutside says whether a vertex since the last call fell outside the texture, where the atlas would sample
-    // its neighbors instead of clamping.
+    // takeAtlasOutside: whether a vertex since the last call left its texture, where the atlas would sample a neighbor
+    // instead of clamping.
     void setAtlas(unsigned unit, const float place[4]) { atlasUnit_ = static_cast<int>(unit), std::memcpy(atlasPlace_, place, sizeof atlasPlace_); }
     void clearAtlas() { atlasUnit_ = -1; }
     bool takeAtlasOutside() {
