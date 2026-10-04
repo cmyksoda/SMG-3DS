@@ -543,9 +543,13 @@ a name missed. Gateway's runaway Luma asks for its cutscene "チコガイドデ�
 Petari libraries now compile with `-finput-charset=UTF-8 -fexec-charset=CP932` (on `petari_core`, public), as
 Metrowerks compiled them from Shift-JIS source; every one of the literals has a CP932 spelling.
 
-**The C library.** MSL's printf writes nothing for a null `%s`; newlib writes `(null)`. The game builds archive
-paths that way (`LayoutHolder`, `ResourceHolder`: four sites adapted). Other calls may lean on it; a general fix
-would give game code MSL's own formatter (its decompiled `printf.c`) or wrap the printf family.
+**The C library.** MSL's printf writes nothing for a null `%s` (padded to its width like any string); newlib writes
+`(null)`. The game builds archive paths that way (`LayoutHolder`, `ResourceHolder`: four sites adapted before the
+general fix). The game's link now wraps `sprintf`, `snprintf`, `vsprintf` and `vsnprintf` (`source/compat/MslStdio.cpp`)
+around `smg::mslVsnprintf`, which walks the format and hands each conversion to newlib's own `snprintf`, a null `%s`
+as an empty string; everything else stays newlib's, which `MslPrintfTests` holds it to. The game's code is compiled
+with those four as non-builtins, as GCC otherwise folds `sprintf(d, "%s", s)` into a `strcpy` the wrap never sees.
+`printf` and `fprintf` stay newlib's: they only reach the log.
 
 **Wide gaps, measured.** 64-bit hosts: 94 of the 1,803 files need fixes (`long` overload ambiguities, pointer
 casts to `u32`), and the game stores pointers in `u32`, so a 32-bit host is the honest target for sanitizer runs.

@@ -71,6 +71,8 @@ target_compile_options(petari_core PUBLIC -fno-strict-aliasing)
 target_compile_options(petari_core PUBLIC -funsigned-char)
 # The disc names things in Shift-JIS and Metrowerks compiled the game's literals so; Petari's are UTF-8 source.
 target_compile_options(petari_core PUBLIC -finput-charset=UTF-8 -fexec-charset=CP932)
+# The sprintf family goes through MSL's behavior (source/compat/MslStdio.cpp), which GCC's folding into strcpy skips.
+target_compile_options(petari_core PUBLIC -fno-builtin-sprintf -fno-builtin-snprintf -fno-builtin-vsprintf -fno-builtin-vsnprintf)
 
 set(GRAVITY_SHAPES PlanetGravity PointGravity ParallelGravity CubeGravity DiskGravity DiskTorusGravity
   ConeGravity SegmentGravity WireGravity)
@@ -240,7 +242,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
 add_library(smg_platform STATIC
   source/core/Input.cpp source/core/Motion.cpp source/core/Settings.cpp source/core/Session.cpp
   source/core/Archive.cpp source/core/Bcsv.cpp source/core/Model.cpp source/core/Texture.cpp source/core/Combiner.cpp
-  source/core/Stage.cpp source/core/StageGravity.cpp source/core/Mesh.cpp source/core/Etc1.cpp source/core/Kcl.cpp source/core/StageCollision.cpp source/core/StageLight.cpp source/core/Animation.cpp source/core/Actors.cpp source/core/J3DImage.cpp source/core/Dol.cpp source/core/GxCommands.cpp source/core/Bmg.cpp source/core/Kpad.cpp source/core/Layout.cpp source/core/GxDraw.cpp source/core/GxCopy.cpp source/core/Jpa.cpp source/core/WiiDsp.cpp source/core/AudioData.cpp source/core/Thp.cpp source/core/CameraAnim.cpp source/core/Aes.cpp source/core/WiiDisc.cpp)
+  source/core/Stage.cpp source/core/StageGravity.cpp source/core/Mesh.cpp source/core/Etc1.cpp source/core/Kcl.cpp source/core/StageCollision.cpp source/core/StageLight.cpp source/core/Animation.cpp source/core/Actors.cpp source/core/J3DImage.cpp source/core/Dol.cpp source/core/GxCommands.cpp source/core/Bmg.cpp source/core/Kpad.cpp source/core/Layout.cpp source/core/GxDraw.cpp source/core/GxCopy.cpp source/core/Jpa.cpp source/core/WiiDsp.cpp source/core/AudioData.cpp source/core/Thp.cpp source/core/CameraAnim.cpp source/core/Aes.cpp source/core/WiiDisc.cpp source/core/MslPrintf.cpp)
 target_include_directories(smg_platform PUBLIC include)
 target_link_libraries(smg_platform PUBLIC petari_scene petari_anim)
 target_compile_options(smg_platform PRIVATE -Wall -Wextra -Werror)
@@ -305,7 +307,7 @@ if(NINTENDO_3DS)
       list(APPEND PETARI_BUILT_ELSEWHERE "${source}")
     endforeach()
   endforeach()
-  set(PETARI_GAME_SOURCES source/compat/Sdk.cpp source/compat/Nand.cpp source/compat/Rfl.cpp source/compat/GameScene.cpp source/compat/HomeButtonMenu.cpp source/compat/OsThreads.cpp source/compat/OsMemory.cpp source/compat/GameHeap.cpp source/compat/Dvd.cpp source/compat/DiscImage.cpp source/compat/Video.cpp source/compat/OsReset.cpp source/compat/GxRender.cpp source/compat/SystemConfig.cpp source/compat/Wpad.cpp source/compat/NativeResources.cpp source/compat/GxFifo.cpp source/compat/Nwc24.cpp source/compat/WiiAudio.cpp source/compat/Nw4rDb.cpp source/compat/DolTables.cpp source/compat/Kpad.cpp source/compat/Thp.cpp
+  set(PETARI_GAME_SOURCES source/compat/Sdk.cpp source/compat/Nand.cpp source/compat/Rfl.cpp source/compat/GameScene.cpp source/compat/HomeButtonMenu.cpp source/compat/OsThreads.cpp source/compat/OsMemory.cpp source/compat/GameHeap.cpp source/compat/Dvd.cpp source/compat/DiscImage.cpp source/compat/Video.cpp source/compat/OsReset.cpp source/compat/GxRender.cpp source/compat/SystemConfig.cpp source/compat/Wpad.cpp source/compat/NativeResources.cpp source/compat/GxFifo.cpp source/compat/Nwc24.cpp source/compat/WiiAudio.cpp source/compat/Nw4rDb.cpp source/compat/DolTables.cpp source/compat/Kpad.cpp source/compat/Thp.cpp source/compat/MslStdio.cpp
     "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/LiveActor/RailRiderCamera.cpp"
     "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/LiveActor/LiveActorSound.cpp")
   foreach(source ${PETARI_GAME_CANDIDATES})
@@ -375,7 +377,8 @@ if(NINTENDO_3DS)
   # boundary stops come after it, for what the game does not define.
   target_link_libraries(mario_probe PRIVATE petari_overwrites -Wl,--start-group smg_platform petari_game petari_scene petari_anim petari_j3d
     petari_gravity petari_core msl_wide smg_pica -Wl,--end-group petari_game_boundaries citro2d citro3d ctru m)
-  target_link_options(mario_probe PRIVATE -Wl,--gc-sections "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/mario_probe.map" -Wl,--wrap=abort)
+  target_link_options(mario_probe PRIVATE -Wl,--gc-sections "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/mario_probe.map" -Wl,--wrap=abort
+    -Wl,--wrap=sprintf -Wl,--wrap=snprintf -Wl,--wrap=vsprintf -Wl,--wrap=vsnprintf)
   add_custom_command(TARGET mario_probe POST_BUILD
     COMMAND "${DEVKITPRO}/tools/bin/3dsxtool" "$<TARGET_FILE:mario_probe>" "${CMAKE_CURRENT_BINARY_DIR}/mario_probe.3dsx" VERBATIM)
 
@@ -498,6 +501,10 @@ else()
   target_link_libraries(gx_draw_tests PRIVATE smg_native_scene smg_platform)
   target_compile_options(gx_draw_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME gx_draw COMMAND gx_draw_tests)
+  add_executable(msl_printf_tests tests/MslPrintfTests.cpp)
+  target_link_libraries(msl_printf_tests PRIVATE smg_platform)
+  target_compile_options(msl_printf_tests PRIVATE -Wall -Wextra -Werror)
+  add_test(NAME msl_printf COMMAND msl_printf_tests)
   add_executable(thp_tests tests/ThpTests.cpp)
   target_link_libraries(thp_tests PRIVATE smg_native_scene smg_platform)
   target_compile_options(thp_tests PRIVATE -Wall -Wextra -Werror)
