@@ -6,12 +6,14 @@
 ; Lit meshes share view-to-clip rows (clip[0-3]) and take six a slot after them (modelview, normal), up to nine slots,
 ; and up to four light entries of six rows (GxMeshUniforms): the SDK puts directional lights at 1e18, past what the
 ; PICA's 24-bit floats square, so positions come prescaled; an entry's settings are numbers mixed in, so colour and
-; alpha can be lit differently in one loop.
+; alpha can be lit differently in one loop. A texgen may take its matrix from the vertex's slot (slotgenN): three rows
+; slotrow's place after the slot's first, then its texrow rows as the dual transform.
 .constf scale(0.00392156862, 1.0, 0.0, 0.0)
 .fvec clip[58]
 .fvec texrow[9]
 .fvec material
 .fvec ambient
+.fvec slotrow
 .fvec light[24]
 .ivec lightloop
 .bool transform
@@ -24,6 +26,9 @@
 .bool project0
 .bool project1
 .bool project2
+.bool slotgen0
+.bool slotgen1
+.bool slotgen2
 .out outpos position
 .out outclr color
 .out outtc0 texcoord0
@@ -63,26 +68,53 @@
             dp4 outpos.z, clip[a0.x+2], inpos
             dp4 outpos.w, clip[a0.x+3], inpos
         .end
-        dp4 r0.x, texrow[0], intc0
-        dp4 r0.y, texrow[1], intc0
+        mov r9, intc0
+        ifu slotgen0
+            add r6.y, slotrow.x, inslot.x
+            mova a0.y, r6.y
+            dp4 r9.x, clip[a0.y], intc0
+            dp4 r9.y, clip[a0.y+1], intc0
+            dp4 r9.z, clip[a0.y+2], intc0
+            mov r9.w, scale.y
+        .end
+        dp4 r0.x, texrow[0], r9
+        dp4 r0.y, texrow[1], r9
         ifu project0
-            dp4 r1.x, texrow[2], intc0
+            dp4 r1.x, texrow[2], r9
             rcp r1.x, r1.x
             mul r0.xy, r0.xy, r1.xx
         .end
         mov outtc0, r0
-        dp4 r0.x, texrow[3], intc1
-        dp4 r0.y, texrow[4], intc1
+        mov r9, intc1
+        ifu slotgen1
+            add r6.y, slotrow.y, inslot.x
+            mova a0.y, r6.y
+            dp4 r9.x, clip[a0.y], intc1
+            dp4 r9.y, clip[a0.y+1], intc1
+            dp4 r9.z, clip[a0.y+2], intc1
+            mov r9.w, scale.y
+        .end
+        dp4 r0.x, texrow[3], r9
+        dp4 r0.y, texrow[4], r9
         ifu project1
-            dp4 r1.x, texrow[5], intc1
+            dp4 r1.x, texrow[5], r9
             rcp r1.x, r1.x
             mul r0.xy, r0.xy, r1.xx
         .end
         mov outtc1, r0
-        dp4 r0.x, texrow[6], intc2
-        dp4 r0.y, texrow[7], intc2
+        mov r9, intc2
+        ifu slotgen2
+            add r6.y, slotrow.z, inslot.x
+            mova a0.y, r6.y
+            dp4 r9.x, clip[a0.y], intc2
+            dp4 r9.y, clip[a0.y+1], intc2
+            dp4 r9.z, clip[a0.y+2], intc2
+            mov r9.w, scale.y
+        .end
+        dp4 r0.x, texrow[6], r9
+        dp4 r0.y, texrow[7], r9
         ifu project2
-            dp4 r1.x, texrow[8], intc2
+            dp4 r1.x, texrow[8], r9
             rcp r1.x, r1.x
             mul r0.xy, r0.xy, r1.xx
         .end

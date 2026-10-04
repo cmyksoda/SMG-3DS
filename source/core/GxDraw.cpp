@@ -239,7 +239,7 @@ void GxLighting::apply(const float view[3], const float normal[3], const std::ui
 void gxMeshModel(const GxMeshUniforms& u, const GxMeshVertex& v, float clip[4], float color[4], float tex[CombinerProgram::MaxUnits][2]) {
     const auto dot3 = [](const float* a, const float* b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; };
     const auto dot4 = [](const float* row, const float* xyz) { return row[0] * xyz[0] + row[1] * xyz[1] + row[2] * xyz[2] + row[3]; };
-    const unsigned slot = u.lit ? (static_cast<unsigned>(v.slot) - 4) / 6 : static_cast<unsigned>(v.slot) / 4;
+    const unsigned slot = u.lit ? (static_cast<unsigned>(v.slot) - 4) / u.slotRows : static_cast<unsigned>(v.slot) / 4;
     float view[3];
     if (u.lit) {
         // The slot's modelview, then the shared rows to clip space, as the shader does.
@@ -249,8 +249,13 @@ void gxMeshModel(const GxMeshUniforms& u, const GxMeshVertex& v, float clip[4], 
         for (int r = 0; r < 4; ++r) clip[r] = dot4(u.clip[slot] + r * 4, v.position);
     }
     for (unsigned t = 0; t < u.units; ++t) {
-        const float s = dot4(u.texgen[t][0], v.source[t]), w = dot4(u.texgen[t][1], v.source[t]);
-        const float q = u.projective[t] ? dot4(u.texgen[t][2], v.source[t]) : 1;
+        float in[3] = {v.source[t][0], v.source[t][1], v.source[t][2]};
+        if (u.slotTexgen[t]) {
+            const float* rows = u.slotTexgen[t] == GxMesh::SlotModelView ? u.modelView[slot] : u.paired[slot][(static_cast<int>(u.slotTexgenRow[t]) - 6) / 3];
+            for (int r = 0; r < 3; ++r) in[r] = dot4(rows + r * 4, v.source[t]);
+        }
+        const float s = dot4(u.texgen[t][0], in), w = dot4(u.texgen[t][1], in);
+        const float q = u.projective[t] ? dot4(u.texgen[t][2], in) : 1;
         tex[t][0] = s / q, tex[t][1] = w / q;
     }
     for (int c = 0; c < 4; ++c) {
@@ -820,9 +825,9 @@ unsigned GxVertexPipeline::meshEligible() const {
         if (lightEntries(lighting_, entries) > 4) return MeshLights;
     }
     for (unsigned u = 0; u < units_; ++u)
-        if (texgens_[u].perVertexMatrix) return MeshTexgen;
+        if (texgens_[u].perVertexMatrix && !(lit_ && perVertexMatrix_)) return MeshTexgen;
     for (unsigned u = 0; u < units_; ++u)
-        if (!texgens_[u].folded) return MeshNormalize;
+        if (texgens_[u].dual && texgens_[u].normalize) return MeshNormalize;
     return MeshOk;
 }
 
@@ -848,6 +853,7 @@ unsigned GxVertexPipeline::buildMesh(const std::uint8_t* list, std::uint32_t siz
     mesh = GxMesh{};
     mesh.arraysLo = reinterpret_cast<const std::uint8_t*>(UINTPTR_MAX), mesh.arraysHi = nullptr;
     const bool fromVertex = meshColorFromVertex();
+    std::uint8_t slotTexgen[CombinerProgram::MaxUnits] = {};
     std::uint32_t at = 0;
     while (at < size) {
         const std::uint8_t op = list[at];
@@ -884,6 +890,13 @@ unsigned GxVertexPipeline::buildMesh(const std::uint8_t* list, std::uint32_t siz
                 const unsigned slot = v.matrixIndex / 3;
                 m.slot = static_cast<float>(lit_ ? slot : slot * 4);  // lit: renumbered by group below
                 mesh.slots = static_cast<std::uint16_t>(mesh.slots | 1u << slot);
+                for (unsigned u = 0; u < units_; ++u) {
+                    if (!texgens_[u].perVertexMatrix) continue;
+                    const unsigned index = v.texMatrixIndex[texgens_[u].coord];
+                    const std::uint8_t mode = index == v.matrixIndex ? GxMesh::SlotModelView : index == v.matrixIndex + 30u ? GxMesh::SlotPaired : 0;
+                    if (!mode || (slotTexgen[u] && slotTexgen[u] != mode)) return MeshTexgen;
+                    slotTexgen[u] = mode;
+                }
             } else if (lit_) {
                 m.slot = 4;  // the one compact slot (the draw's fixed attribute)
             }
@@ -922,6 +935,9 @@ unsigned GxVertexPipeline::buildMesh(const std::uint8_t* list, std::uint32_t siz
     std::vector<std::int32_t> copy(mesh.vertices.size(), -1);
     std::vector<std::uint32_t> copied;
     GxMesh::Group group;
+    std::memcpy(group.slotTexgen, slotTexgen, sizeof slotTexgen);
+    for (unsigned u = 0; u < units_; ++u) group.slotRows = static_cast<std::uint8_t>(group.slotRows + 3 * (slotTexgen[u] == GxMesh::SlotPaired));
+    const unsigned maxSlots = std::min(GxMesh::MaxLitSlots, (58u - 4) / group.slotRows);  // the shader's 58 clip rows
     for (std::size_t t = 0; t < mesh.indices.size(); t += 3) {
         std::uint8_t slots[3], fresh = 0;
         for (int k = 0; k < 3; ++k) {
@@ -930,10 +946,10 @@ unsigned GxVertexPipeline::buildMesh(const std::uint8_t* list, std::uint32_t siz
             for (int j = 0; j < k; ++j) known |= slots[j] == slots[k];
             fresh = static_cast<std::uint8_t>(fresh + !known);
         }
-        if (group.slotCount + fresh > GxMesh::MaxLitSlots) {
+        if (group.slotCount + fresh > maxSlots) {
             group.indexCount = static_cast<std::uint32_t>(indices.size()) - group.firstIndex;
             mesh.groups.push_back(group);
-            group = GxMesh::Group{};
+            group.slotCount = 0;
             group.firstIndex = static_cast<std::uint32_t>(indices.size());
             for (std::uint32_t v : copied) copy[v] = -1;
             copied.clear();
@@ -948,7 +964,7 @@ unsigned GxVertexPipeline::buildMesh(const std::uint8_t* list, std::uint32_t siz
                 copy[source] = static_cast<std::int32_t>(vertices.size()), copied.push_back(source);
                 vertices.push_back(mesh.vertices[source]);
                 mesh.origin.push_back(source);
-                vertices.back().slot = static_cast<float>(4 + slot * 6);
+                vertices.back().slot = static_cast<float>(4 + slot * group.slotRows);
             }
             indices.push_back(static_cast<std::uint16_t>(copy[source]));
         }
@@ -961,7 +977,8 @@ unsigned GxVertexPipeline::buildMesh(const std::uint8_t* list, std::uint32_t siz
 
 std::uint32_t GxVertexPipeline::meshSources() const {
     std::uint32_t key = units_;
-    for (unsigned u = 0; u < units_; ++u) key |= std::uint32_t(texgens_[u].source | texgens_[u].threeInputs << 4) << (2 + 8 * u);
+    for (unsigned u = 0; u < units_; ++u)
+        key |= std::uint32_t(texgens_[u].source | texgens_[u].threeInputs << 4 | texgens_[u].perVertexMatrix << 5) << (2 + 8 * u);
     return key;
 }
 
@@ -970,6 +987,11 @@ void GxVertexPipeline::meshSlotUniforms(const GxMesh::Group& group, GxMeshUnifor
     out.slots = 0;
     for (int r = 0; r < 4; ++r)
         for (int c = 0; c < 4; ++c) out.toClip[r * 4 + c] = static_cast<float>(toClip_[r][c]);
+    std::memcpy(out.slotTexgen, group.slotTexgen, sizeof out.slotTexgen);
+    out.slotRows = group.slotRows;
+    unsigned paired = 0;
+    for (unsigned u = 0; u < CombinerProgram::MaxUnits; ++u)
+        out.slotTexgenRow[u] = group.slotTexgen[u] == GxMesh::SlotPaired ? static_cast<float>(6 + 3 * paired++) : 0.0f;
     const unsigned count = perVertexMatrix_ ? group.slotCount : 1;
     for (unsigned k = 0; k < count; ++k) {
         const std::uint32_t row = perVertexMatrix_ ? group.slotMap[k] * 3u : defaultMatrix_;
@@ -977,6 +999,12 @@ void GxVertexPipeline::meshSlotUniforms(const GxMesh::Group& group, GxMeshUnifor
             for (int c = 0; c < 4; ++c) out.modelView[k][r * 4 + c] = matrix(row + r, c);
         const std::uint32_t normals = 0x400 + (row & 31) * 3;
         for (int i = 0; i < 9; ++i) out.normal[k][i] = asFloat(gpu_->xf[normals + i]);
+        for (unsigned u = 0, p = 0; u < units_; ++u)
+            if (group.slotTexgen[u] == GxMesh::SlotPaired) {
+                for (int r = 0; r < 3; ++r)
+                    for (int c = 0; c < 4; ++c) out.paired[k][p][r * 4 + c] = matrix(row + 30 + r, c);
+                ++p;
+            }
         out.slots |= 1u << k;
     }
 }
@@ -1017,8 +1045,17 @@ void GxVertexPipeline::meshUniforms(std::uint16_t slots, const GxMesh::Group& gr
     }
     out.units = units_;
     for (unsigned u = 0; u < units_; ++u) {
-        std::memcpy(out.texgen[u], texgens_[u].fold, sizeof out.texgen[u]);
-        const float* q = texgens_[u].fold[2];
+        const TexGen& t = texgens_[u];
+        if (group.slotTexgen[u]) {
+            // The dual transform alone; with two rows the texgen's third output is one, whatever the slot's third row says.
+            for (int r = 0; r < 3; ++r)
+                for (int c = 0; c < 4; ++c) out.texgen[u][r][c] = t.dual ? matrix(t.post + r, c) : float(r == c);
+            if (t.rows == 2)
+                for (auto& row : out.texgen[u]) row[3] += row[2], row[2] = 0;
+        } else {
+            std::memcpy(out.texgen[u], t.fold, sizeof out.texgen[u]);
+        }
+        const float* q = out.texgen[u][2];
         out.projective[u] = !(q[0] == 0 && q[1] == 0 && q[2] == 0 && q[3] == 1);
     }
     out.fixedColor = !meshColorFromVertex();

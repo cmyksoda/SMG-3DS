@@ -120,9 +120,13 @@ struct GxMesh {
     std::uint16_t slots = 0;             // per-vertex matrix slots named (bit per slot)
     // Draws of its indices: lit, each names at most nine slots (the shader's rows), its compact slots' real ones.
     static constexpr unsigned MaxLitSlots = 9;
+    // A lit, skinned mesh's texgen may take its matrix from each vertex's slot: the slot's modelview, or the texture
+    // matrix paired with it (30 rows on), whose rows follow the slot's own (a slot's rows: 6 + 3 per paired unit).
+    enum SlotTexgen : std::uint8_t { NoSlotTexgen, SlotModelView, SlotPaired };
     struct Group {
         std::uint32_t firstIndex = 0, indexCount = 0;
         std::uint8_t slotMap[MaxLitSlots] = {}, slotCount = 0;
+        std::uint8_t slotTexgen[CombinerProgram::MaxUnits] = {}, slotRows = 6;
     };
     std::vector<Group> groups;
     std::vector<std::uint32_t> origin;  // each vertex's place among the list's own vertices (a group's copies share one)
@@ -146,6 +150,11 @@ struct GxMeshUniforms {
     float light[4][6][4];
     float toClip[16];
     float modelView[GxMesh::MaxLitSlots][12], normal[GxMesh::MaxLitSlots][9];
+    // A texgen through its vertex's slot (GxMesh::SlotTexgen): its rows' place after the slot's first, and each slot's
+    // paired texture matrices; its texgen rows are then the dual transform.
+    std::uint8_t slotTexgen[CombinerProgram::MaxUnits] = {}, slotRows = 6;
+    float slotTexgenRow[CombinerProgram::MaxUnits] = {};
+    float paired[GxMesh::MaxLitSlots][2][12];
     float ambient[4] = {};
     bool projective[CombinerProgram::MaxUnits] = {};
     unsigned units = 0;
@@ -186,7 +195,8 @@ public:
     // holds anything but primitives, or a matrix index that doesn't name a whole slot of the ten).
     // Why a mesh can't be used (0 when it can): the state (1 unsupported, 2 depth texture, 3 lit with ambient from the
     // vertex, 4 lit with C0 riding in the vertex colour, 5 more than four light entries, 6 a texgen's matrix chosen per
-    // vertex, 12 a texgen normalized before its second matrix) or the list (7 a command other than a primitive, 8 a
+    // vertex, other than its slot's modelview or paired matrix on a lit, skinned list, 12 a texgen normalized before its
+    // second matrix) or the list (7 a command other than a primitive, 8 a
     // matrix index naming no whole slot, 9 more vertices than 16-bit indices reach, 10 nothing drawn), or the renderer's
     // choice (11 small enough to join the CPU path's batch).
     enum MeshRefusal : unsigned { MeshOk, MeshUnsupported, MeshDepthTexture, MeshLit, MeshLitColor0, MeshLights, MeshTexgen, MeshCommand,

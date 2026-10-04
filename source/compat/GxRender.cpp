@@ -184,6 +184,7 @@ struct Renderer {
     int clipUniform = -1, texrowUniform = -1, transformUniform = -1, projectUniform[3] = {-1, -1, -1};
     int materialUniform = -1, rgbRegUniform = -1, alphaRegUniform = -1;
     int ambientUniform = -1, lightUniform = -1, lightLoopUniform = -1, litUniform = -1, rgbLitUniform = -1, alphaLitUniform = -1, anyLightUniform = -1;
+    int slotRowUniform = -1, slotGenUniform[3] = {-1, -1, -1};
     struct CachedMesh {
         std::vector<u32> key;
         std::vector<std::pair<std::uint8_t, u32>> depends;  // the CP registers it was decoded under, and their values
@@ -276,10 +277,11 @@ struct Renderer {
         };
         ambientUniform = find("ambient"), lightUniform = find("light"), lightLoopUniform = find("lightloop"), litUniform = find("lit");
         rgbLitUniform = find("rgblit"), alphaLitUniform = find("alphalit"), anyLightUniform = find("anylight");
+        slotRowUniform = find("slotrow"), slotGenUniform[0] = find("slotgen0"), slotGenUniform[1] = find("slotgen1"), slotGenUniform[2] = find("slotgen2");
         if (clipUniform < 0 || texrowUniform < 0 || transformUniform < 0 || projectUniform[2] < 0 || materialUniform < 0 || alphaRegUniform < 0)
             stop("the GX shader's uniforms");
         // Every row goes to the GPU once, so row() may skip one whose value citro3d already has.
-        for (const auto& [first, count] : {std::pair{clipUniform, 58}, {texrowUniform, 9}, {materialUniform, 1}, {ambientUniform, 1}, {lightUniform, 24}})
+        for (const auto& [first, count] : {std::pair{clipUniform, 58}, {texrowUniform, 9}, {materialUniform, 1}, {ambientUniform, 1}, {lightUniform, 24}, {slotRowUniform, 1}})
             for (int i = 0; i < count; ++i) C3D_FVUnifSet(GPU_VERTEX_SHADER, first + i, 0, 0, 0, 0);
         ready = true;
     }
@@ -1110,7 +1112,7 @@ struct Renderer {
             const GxMeshVertex& v = vertices[i];
             float clip[4], color[4], tex[CombinerProgram::MaxUnits][2];
             gxMeshModel(u, v, clip, color, tex);
-            const unsigned slot = (unsigned(v.slot) - 4) / 6;
+            const unsigned slot = (unsigned(v.slot) - 4) / u.slotRows;
             const float* n = u.normal[slot < GxMesh::MaxLitSlots ? slot : 0];
             std::fprintf(stderr, "gx dump:   vertex %lu (slot %u): normal %.2f %.2f %.2f, normal rows %.2f %.2f %.2f / %.2f %.2f %.2f / %.2f %.2f %.2f, "
                          "ambient %.2f %.2f %.2f, lit colour %.0f %.0f %.0f %.0f\n", static_cast<unsigned long>(i), slot, v.normal[0], v.normal[1], v.normal[2],
@@ -1502,6 +1504,8 @@ struct Renderer {
             }
             boolean(projectUniform[unit], u.projective[unit]);
         }
+        for (unsigned unit = 0; unit < 3; ++unit) boolean(slotGenUniform[unit], unit < u.units && u.slotTexgen[unit]);
+        if (u.slotTexgen[0] | u.slotTexgen[1] | u.slotTexgen[2]) row(slotRowUniform, u.slotTexgenRow[0], u.slotTexgenRow[1], u.slotTexgenRow[2], 0);
         boolean(transformUniform, true);
         boolean(rgbRegUniform, !u.fixedColor && !u.rgbFromVertex);
         boolean(alphaRegUniform, !u.fixedColor && !u.alphaFromVertex);
@@ -1583,14 +1587,19 @@ struct Renderer {
             return;
         }
         for (int r = 0; r < 4; ++r) row(clipUniform + r, u.toClip[r * 4], u.toClip[r * 4 + 1], u.toClip[r * 4 + 2], u.toClip[r * 4 + 3]);
+        const int paired = (u.slotRows - 6) / 3;
         for (unsigned slot = 0; slot < GxMesh::MaxLitSlots; ++slot) {
             if (!(u.slots >> slot & 1)) continue;
-            const int at = clipUniform + 4 + int(slot) * 6;
+            const int at = clipUniform + 4 + int(slot) * u.slotRows;
             for (int r = 0; r < 3; ++r) {
                 const float* modelView = u.modelView[slot] + r * 4;
                 row(at + r, modelView[0], modelView[1], modelView[2], modelView[3]);
                 const float* normal = u.normal[slot] + r * 3;
                 row(at + 3 + r, normal[0], normal[1], normal[2], 0);
+                for (int p = 0; p < paired; ++p) {
+                    const float* texture = u.paired[slot][p] + r * 4;
+                    row(at + 6 + 3 * p + r, texture[0], texture[1], texture[2], texture[3]);
+                }
             }
         }
     }

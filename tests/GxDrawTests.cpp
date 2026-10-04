@@ -673,6 +673,72 @@ void litMeshGroups() {
     }
     check(same, "each vertex through its group's slot lands and is lit as on the CPU");
 }
+
+// J3D's environment maps on a skinned model: a texgen through each vertex's modelview and one through the texture
+// matrix paired with its slot, both then through the dual transform. The mesh keeps them, its groups holding fewer
+// slots for the paired rows, and each vertex's coordinates come out as the CPU path's.
+void litMeshSlotTexgens() {
+    auto owned = std::make_unique<smg::GxCommandProcessor>(host());
+    smg::GxCommandProcessor& gpu = *owned;
+    Stream s;
+    clearState(s);
+    s.cp(0x50, 1 | 1 << 1 | 1 << 2 | 1 << 9 | 1 << 11), s.cp(0x60, 0), s.cp(0x70, 1 | 4 << 1 | 4 << 10);  // matrix indices, position, normal
+    for (unsigned slot = 0; slot < 10; ++slot) {
+        const float x = 40.0f * slot, c = std::cos(0.3f * slot), n = std::sin(0.3f * slot);
+        s.xff(slot * 12, {c, -n, 0, x, n, c, 0, 10, 0, 0, 1, 0});
+        s.xff(0x400 + slot * 9, {c, -n, 0, n, c, 0, 0, 0, 1});
+        s.xff((30 + slot * 3) * 4, {0.5f * c, 0.5f * n, 0, 0.5f, -0.5f * n, 0.5f * c, 0, 0.5f, 0.1f * slot, 0, 0.5f, 1});
+    }
+    s.xf(0x103F, {2}), s.xf(0x1040, {1 << 1 | 1 << 2}), s.xf(0x1041, {1 << 2 | 1 << 7});  // position (three rows), normal (two)
+    s.xf(0x1012, {1}), s.xf(0x1050, {0}), s.xf(0x1051, {3});                             // dual transform: post matrices 0, 1
+    s.xff(0x500, {0.01f, 0, 0, 0.5f, 0, 0.01f, 0, 0.25f, 0, 0, 0.001f, 1});
+    s.xff(0x50C, {0.5f, 0, 0.2f, 0.5f, 0, 0.5f, 0.3f, 0.5f, 0, 0, 1, 0});
+    s.xf(0x1009, {1});
+    s.bp(0x00000412), s.bp(0x28049040);                    // two texgens, one channel, two stages: map/coord 0, then 1
+    s.bp(0xC008FFF8), s.bp(0xC108FFD0), s.bp(0xC208FFF8), s.bp(0xC308FFD0);
+    s.bp(0x89600C03), s.bp(0x95000080), s.bp(0x81000030);  // map 1 as map 0
+    s.xf(0x100C, {0xFFFFFFFF}), s.xf(0x100A, {0x10203040});
+    s.xf(0x100E, {1 << 1 | 1 << 2 | 2 << 7}), s.xf(0x1010, {0});
+    s.xf(0x600 + 3, {0x80604020});
+    s.xff(0x600 + 4, {1, 0, 0, 1, 0, 0, 300, 100, 200, 0, 0, 0});
+    gpu.put(s.bytes.data(), static_cast<std::uint32_t>(s.bytes.size()));
+    const unsigned slots[12] = {0, 1, 2, 3, 4, 5, 6, 0, 1, 2, 3, 4};
+    Stream list;
+    list.u8(0x90), list.u16(12);
+    for (unsigned i = 0; i < 12; ++i) {
+        list.u8(slots[i] * 3), list.u8(slots[i] * 3), list.u8(30 + slots[i] * 3);
+        for (float f : {100.0f + 37 * i, 80.0f + 23 * (i % 5), -0.5f, 0.0f, 0.6f, 0.8f}) list.f32(f);
+    }
+    while (list.bytes.size() % 32) list.u8(0);
+    smg::GxDraw cpu;
+    smg::buildGxDraw(gpu, 0x90, 0, 12, list.bytes.data() + 3, {}, cpu);
+    smg::GxDrawState state;
+    smg::readGxDrawState(gpu, state);
+    smg::GxVertexPipeline pipeline;
+    smg::GxMesh mesh;
+    check(pipeline.prepare(gpu, state, {}, 0x90, 0) && pipeline.meshEligible() == smg::GxVertexPipeline::MeshOk &&
+              pipeline.buildMesh(list.bytes.data(), static_cast<std::uint32_t>(list.bytes.size()), mesh) == smg::GxVertexPipeline::MeshOk,
+          "a lit, skinned list whose texgens take their slots' matrices becomes a mesh");
+    check(mesh.groups.size() == 2 && mesh.groups[0].slotCount == 6 && mesh.groups[0].slotRows == 9 &&
+              mesh.groups[0].slotTexgen[0] == smg::GxMesh::SlotModelView && mesh.groups[1].slotTexgen[1] == smg::GxMesh::SlotPaired,
+          "its groups hold six slots of nine rows, the modelview and paired texgens marked");
+    bool same = cpu.triangles.size() == 12;
+    smg::GxMeshUniforms u;
+    for (std::size_t g = 0; same && g < mesh.groups.size(); ++g) {
+        if (g) pipeline.meshSlotUniforms(mesh.groups[g], u);
+        else pipeline.meshUniforms(mesh.slots, mesh.groups[0], u);
+        for (std::uint32_t i = mesh.groups[g].firstIndex; same && i < mesh.groups[g].firstIndex + mesh.groups[g].indexCount; ++i) {
+            const smg::GxMeshVertex& v = mesh.vertices[mesh.indices[i]];
+            same = mesh.groups[g].slotMap[(static_cast<unsigned>(v.slot) - 4) / 9] == slots[i];
+            float clip[4], color[4], tex[smg::CombinerProgram::MaxUnits][2];
+            smg::gxMeshModel(u, v, clip, color, tex);
+            for (int t = 0; same && t < 2; ++t)
+                for (int k = 0; same && k < 2; ++k)
+                    same = std::fabs(tex[t][k] - cpu.triangles[i].texcoord[t][k]) < 1e-3f * std::max(1.0f, std::fabs(tex[t][k]));
+        }
+    }
+    check(same, "each vertex's coordinates through its slot's matrices are the CPU path's");
+}
 } // namespace
 
 // nw4r's layout material: black (C0) to white (C1) by the texture, which is the texture itself. The material keeps
@@ -790,6 +856,7 @@ int runGxDrawTests() {
     meshFromDisplayList();
     litMesh();
     litMeshGroups();
+    litMeshSlotTexgens();
     drawStateKey();
     std::printf("%u GX draw checks passed\n", checks);
     return 0;
