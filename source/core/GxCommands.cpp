@@ -1,4 +1,5 @@
 #include <smg/GxCommands.hpp>
+#include <smg/GxZones.hpp>
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -251,6 +252,7 @@ void GxVertexLayout::rebase(const GxCommandProcessor& gpu) {
 const GxVertexLayout& GxCommandProcessor::layout(std::uint8_t format) const {
     format &= 7;
     if (layoutChanges_[format] != cpChanges) {
+        const GxZoneScope zone(ZoneLayout);
         GxVertexLayout& current = layouts_[format];
         if (!current.readFrom(*this, format)) {
             std::uint32_t hash = cp[VcdLo] * 0x9E3779B1u ^ cp[VcdHi];
@@ -338,6 +340,7 @@ std::uint32_t GxCommandProcessor::command(const std::uint8_t* at, std::uint32_t 
 std::uint32_t GxCommandProcessor::execute(const std::uint8_t* at, std::uint32_t available) {
     const std::uint8_t opcode = at[0];
     if (opcode == 0x61) {  // BP loads, a run at a time: most of a material's display list
+        const GxZoneScope zone(ZoneBp);
         std::uint32_t used = 0;
         while (available - used >= 5 && at[used] == 0x61) loadBp(word(at + used + 1)), used += 5;
         return used;
@@ -364,13 +367,16 @@ std::uint32_t GxCommandProcessor::execute(const std::uint8_t* at, std::uint32_t 
         if (available < 5) return 0;
         const std::uint32_t header = word(at + 1), count = (header >> 16) + 1, address = header & 0xFFFF;
         if (available < 5 + count * 4) return 0;
+        const GxZoneScope zone(ZoneXf);
         loadXf(address, count, at + 5, false);
         return 5 + count * 4;
     }
     if (opcode == 0x40) {  // call a display list at its physical address
         if (available < 9) return 0;
+        const GxZoneScope zone(ZoneCall);
         ++displayListCalls, displayListBytes += word(at + 5);
         if (!host_.displayList || !host_.displayList(word(at + 1), word(at + 5))) {
+            const GxZoneScope walking(ZoneListWalk);
             ++displayListDepth;
             run(host_.memory(word(at + 1)), word(at + 5));
             --displayListDepth;
@@ -395,6 +401,7 @@ std::uint32_t GxCommandProcessor::execute(const std::uint8_t* at, std::uint32_t 
             return 5;
         }
         // The CPU wrote these (J3D's matrices, GX's light objects): read in its order, as indexed vertex arrays are.
+        const GxZoneScope zone(ZoneXfIndexed);
         loadXf(address, count, from, true);
         return 5;
     }

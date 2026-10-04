@@ -73,6 +73,7 @@ BOOL smgDevGxTiming() { return input().settings().devGxTiming; }
 BOOL smgDevGxCheck() { return input().settings().devGxCheck; }
 BOOL smgDevGxInline() { return input().settings().devGxInline; }
 BOOL smgDevGxNoRaw() { return input().settings().devGxNoRaw; }
+BOOL smgDevGxZones() { return input().settings().devGxZones; }
 BOOL smgDevAvSync() { return input().settings().devAvSync; }
 // dev.start: the start point Mario takes in `galaxy`, or -1 for the game's own.
 int smgDevMarioStart(const char* galaxy) {

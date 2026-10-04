@@ -10,6 +10,7 @@
 #include <smg/GxCopy.hpp>
 #include <smg/GxDraw.hpp>
 #include <smg/GxRender.hpp>
+#include <smg/GxZones.hpp>
 #include <smg/Pica.hpp>
 #include <smg/Texture.hpp>
 #include <smg/Thp.hpp>
@@ -40,6 +41,7 @@ extern "C" int smgDevGxNull();
 extern "C" int smgDevGxTiming();
 extern "C" int smgDevGxCheck();
 extern "C" int smgDevGxNoRaw();
+extern "C" int smgDevGxZones();
 extern "C" void (*smgGpuMemoryChanged)(const void* start, u32 size);  // source/compat/Os.cpp
 extern std::atomic<u32> smgDspTicks;                                  // source/compat/WiiAudio.cpp
 
@@ -89,6 +91,16 @@ bool sCopiesStayOnGpu = false;
 // drawing, the logic step, animation, waiting for the GPU's draw done (endFrame), the retrace wait.
 constexpr int Phases = 5;
 std::atomic<u32> sPhaseTicks[Phases] = {}, sPhaseFrames{0};
+
+// dev.gx_zones: the render thread's zone, read every 200 us from the system core.
+std::atomic<u32> sZoneSamples[ZoneCount] = {};
+void sampleZones(void*) {
+    for (;;) {
+        svcSleepThread(200000);
+        const unsigned zone = gxZone;
+        if (zone < ZoneCount) sZoneSamples[zone].fetch_add(1, std::memory_order_relaxed);
+    }
+}
 
 // Which 4 KiB pages some mesh was made from, one bit each over the address space: read without a lock by the flush
 // hook, so the game's many flushes of other memory (matrices every frame) cost one load. Set as meshes are made,
@@ -300,6 +312,8 @@ struct Renderer {
         // Every row goes to the GPU once, so row() may skip one whose value citro3d already has.
         for (const auto& [first, count] : {std::pair{clipUniform, 58}, {texrowUniform, 9}, {materialUniform, 1}, {ambientUniform, 1}, {lightUniform, 24}, {slotRowUniform, 1}})
             for (int i = 0; i < count; ++i) C3D_FVUnifSet(GPU_VERTEX_SHADER, first + i, 0, 0, 0, 0);
+        if (smgDevGxZones() && R_SUCCEEDED(APT_SetAppCpuTimeLimit(80)) && !threadCreate(sampleZones, nullptr, 0x1000, 0x18, 1, true))
+            stop("starting the zone sampler");
         ready = true;
     }
 
@@ -516,11 +530,13 @@ struct Renderer {
     // the vertex buffer can start over. Inside a frame citro3d's "sync" transfers only queue: readbacks go between.
     void pause() {
         flushBatch();
+        const GxZoneScope zone(ZonePause);
         flushVertices();
         C3D_RenderTargetDetachOutput(target);
         C3D_FrameEnd(GX_CMDLIST_FLUSH);
     }
     void resume() {
+        const GxZoneScope zone(ZonePause);
         C3D_FrameBegin(0);
         C3D_FrameDrawOn(target);
         C3D_RenderTargetSetOutput(target, GFX_TOP, GFX_LEFT, DisplayTransferFlags);
@@ -922,7 +938,7 @@ struct Renderer {
 
     // dev.gx_timing: the clock around one of the per-call steps.
     struct Step {
-        Step(Perf& perf, int which) : perf_(perf), which_(which), start_(timing() ? svcGetSystemTick() : 0) {}
+        Step(Perf& perf, int which) : perf_(perf), which_(which), zone_(zones[which]), start_(timing() ? svcGetSystemTick() : 0) {}
         ~Step() {
             if (start_) perf_.stepTicks[which_] += svcGetSystemTick() - start_, ++perf_.steps[which_];
         }
@@ -930,8 +946,11 @@ struct Renderer {
             static const bool on = smgDevGxTiming();
             return on;
         }
+        static constexpr GxZone zones[13] = {ZoneState,   ZoneApply,  ZonePrepare,    ZoneState,    ZoneState, ZoneState,    ZoneCpuVertices,
+                                             ZoneFlush,   ZoneMeshLookup, ZoneUniforms, ZoneMeshDraw, ZoneTexture, ZoneMeshBuild};
         Perf& perf_;
         int which_;
+        GxZoneScope zone_;
         u64 start_;
     };
 
@@ -1215,6 +1234,7 @@ struct Renderer {
         std::uintptr_t* start = changedStart;
         std::uintptr_t* end = changedEnd;
         if (!sChanged.pending.load(std::memory_order_acquire)) return;
+        const GxZoneScope zone(ZoneChanged);
         LightLock_Lock(&sChanged.lock);
         const unsigned count = sChanged.count;
         const bool overflowed = sChanged.overflowed;
@@ -1262,6 +1282,7 @@ struct Renderer {
     // GX_CallDisplayList: a list of primitives under a state the GPU path covers is drawn from its mesh (made the first
     // time); anything else is read by the command processor as before.
     bool displayList(const GxCommandProcessor& gpu, std::uint32_t address, std::uint32_t size) {
+        const GxZoneScope zone(ZoneListCheck);
         const unsigned why = displayListMesh(gpu, address, size);
         listRefusal = why;
         if (why == GxVertexPipeline::MeshSmall) return drawDecodedList(gpu, address, size);
@@ -1297,6 +1318,7 @@ struct Renderer {
 
     bool drawDecodedList(const GxCommandProcessor& gpu, std::uint32_t address, std::uint32_t size) {
         applyChangedMemory();
+        const GxZoneScope zone(ZoneSmallList);
         const std::uint8_t* list = gpu.memoryFunction()(address);
         auto found = decodedLists.find(address);
         bool valid = found != decodedLists.end() && found->second.size == size && sameBytes(found->second.bytes, list, size);
@@ -1383,6 +1405,7 @@ struct Renderer {
         if (scissorEmpty) return GxVertexPipeline::MeshEmpty;
         if (const unsigned why = pipeline.meshEligible()) return ++perf.refused[why], why;
         const u64 lookup = stepStart();
+        gxZone = ZoneMeshLookup;
         // The key: the list, its first and last words (another list at a freed address differs), where the colour comes
         // from and the texgens' sources. The CP registers its vertices were read under are checked apart, only those it
         // uses: other formats' tables and the matrix arrays (12-15) change every frame without touching it.
@@ -1410,6 +1433,7 @@ struct Renderer {
         }
         if (stale) dropMesh(found), found = meshes.end(), ++perf.meshMismatches;
         stepEnd(8, lookup);
+        gxZone = ZoneListCheck;
         if (found == meshes.end()) {
             if (const auto refused = budgetRefused.find(hash); refused != budgetRefused.end()) {
                 if (!makeRoom(refused->second)) return ++perf.refused[GxVertexPipeline::MeshBudget], GxVertexPipeline::MeshBudget;
@@ -1466,8 +1490,12 @@ struct Renderer {
             found = meshes.find(hash);
         }
         found->second.lastFrame = framesShown;
-        if (found->second.moving && (moved || found->second.refreshedFrame != framesShown) && !refreshMesh(found->second, list, size))
-            return dropMesh(found), ++perf.refused[GxVertexPipeline::MeshMoving], GxVertexPipeline::MeshMoving;
+        if (found->second.moving && (moved || found->second.refreshedFrame != framesShown)) {
+            gxZone = ZoneMeshRefresh;
+            const bool refreshed = refreshMesh(found->second, list, size);
+            gxZone = ZoneListCheck;
+            if (!refreshed) return dropMesh(found), ++perf.refused[GxVertexPipeline::MeshMoving], GxVertexPipeline::MeshMoving;
+        }
         drawMesh(found->second);
         return GxVertexPipeline::MeshOk;
     }
@@ -1617,6 +1645,7 @@ struct Renderer {
         flushBatch();
         roomFor(0, DrawCommandWords + u32(mesh.groups.size() - 1) * GroupCommandWords);
         applyState();
+        const GxZoneScope zone(ZoneUniforms);
         const u64 uniforms = stepStart();
         GxMeshUniforms u;
         pipeline.meshUniforms(mesh.slots, mesh.groups[0], u);
@@ -1652,6 +1681,7 @@ struct Renderer {
         boolean(alphaRegUniform, !u.fixedColor && !u.alphaFromVertex);
         row(materialUniform, u.color[0] / 255.0f, u.color[1] / 255.0f, u.color[2] / 255.0f, u.color[3] / 255.0f);
         stepEnd(9, uniforms);
+        gxZone = ZoneMeshDraw;
         const u64 drawing = stepStart();
         // GxMeshVertex: position (v0), colour (v1), three texgen inputs (v2-v4), normal (v6), slot (v5). What a draw doesn't
         // take from the vertices is a fixed attribute, and the bytes it skips are padding (0xC is four bytes, 0xE twelve).
@@ -2004,6 +2034,19 @@ struct Renderer {
             std::fprintf(stderr, "gx perf: key mismatches by what changed (per frame): key %.1f, descriptor %.1f, format table %.1f, array base %.1f, "
                          "stride %.1f\n", perf.mismatchWhy[0] / n, perf.mismatchWhy[1] / n, perf.mismatchWhy[2] / n, perf.mismatchWhy[3] / n,
                          perf.mismatchWhy[4] / n);
+        u32 zoneSamples[ZoneCount], zoneTotal = 0;
+        for (unsigned z = 0; z < ZoneCount; ++z) zoneTotal += zoneSamples[z] = sZoneSamples[z].exchange(0, std::memory_order_relaxed);
+        if (zoneTotal) {
+            // Each zone's share of the window, as milliseconds of an average frame.
+            std::string zones;
+            for (unsigned z = 0; z < ZoneCount; ++z) {
+                if (!zoneSamples[z]) continue;
+                char item[40];
+                std::snprintf(item, sizeof item, "%s %s %.2f", zones.empty() ? "" : ",", gxZoneName(z), ms / n * zoneSamples[z] / zoneTotal);
+                zones += item;
+            }
+            std::fprintf(stderr, "gx perf: render thread zones, ms per frame (%lu samples):%s\n", static_cast<unsigned long>(zoneTotal), zones.c_str());
+        }
         unsigned long long gameWaits = 0, otherWaits = 0;
         smgCpuWaits(&gameWaits, &otherWaits);
         std::fprintf(stderr, "gx perf: waits to turn interrupts off, per frame: the game's thread %.2f ms, the others %.2f ms\n",
@@ -2501,6 +2544,7 @@ void gxRenderPrimitive(const GxCommandProcessor& gpu, std::uint8_t kind, std::ui
     static const bool null = smgDevGxNull();
     if (null) return;
     const PortMemory memory;
+    const GxZoneScope zone(ZonePrimitive);
     const Timed timed(gpu.displayListDepth ? 4 : 0);
     if (gpu.displayListDepth) renderer().perf.listVertices += count, renderer().perf.refusedVertices[renderer().listRefusal] += count;
     renderer().draw(gpu, kind, format, count, vertices);
@@ -2543,18 +2587,21 @@ void gxRenderMemoryChanged(const void* start, std::uint32_t size) {
 void gxRenderMovieFrame(const std::uint8_t* y, const std::uint8_t* u, const std::uint8_t* v, unsigned width, unsigned height, unsigned generation,
                         int x, int top, int w, int h) {
     const PortMemory memory;
+    const GxZoneScope zone(ZoneMovie);
     const Timed timed(3);
     renderer().movieFrame(y, u, v, width, height, generation, x, top, w, h);
 }
 
 std::uint32_t gxRenderPeek(const GxCommandProcessor& gpu, unsigned x, unsigned y, bool depth) {
     const PortMemory memory;
+    const GxZoneScope zone(ZonePeek);
     return renderer().peek(gpu, x, y, depth);
 }
 
 void gxRenderCopy(const GxCommandProcessor& gpu, std::uint32_t command) {
     const PortMemory memory;
     {
+        const GxZoneScope zone(command >> 14 & 1 ? ZoneFrameEnd : ZoneCopy);
         const Timed timed(command >> 14 & 1 ? 5 : 2);
         renderer().copy(gpu, command);
     }

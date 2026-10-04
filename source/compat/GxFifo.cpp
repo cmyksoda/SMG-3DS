@@ -5,6 +5,7 @@
 #include <smg/GxCommands.hpp>
 #include <smg/GxFifoWrite.h>
 #include <smg/GxRender.hpp>
+#include <smg/GxZones.hpp>
 #include <revolution/os.h>
 #include <revolution/os/OSInterrupt.h>
 #include <algorithm>
@@ -110,12 +111,16 @@ unsigned streamOf(u32 self) {
     return stream;
 }
 
-void process(unsigned stream, const u8* bytes, u32 count) {
+// `zoned`: the render thread's own reading, marked in its zone (smg/GxZones.hpp).
+void process(unsigned stream, const u8* bytes, u32 count, bool zoned = false) {
     const u64 start = svcGetSystemTick();
+    if (zoned) smg::gxZone = smg::ZoneLock;
     sFifoLock.lock();
+    if (zoned) smg::gxZone = smg::ZoneParse;
     ++smgFifoWrites;
     processor().put(stream, bytes, count);
     sFifoLock.unlock();
+    if (zoned) smg::gxZone = smg::ZoneIdle;
     sClock.busy.fetch_add(static_cast<u32>(svcGetSystemTick() - start), std::memory_order_relaxed);
     sClock.bytes.fetch_add(count, std::memory_order_relaxed);
 }
@@ -160,7 +165,7 @@ void renderLoop(void*) {
         const Entry entry = sEntries[sTail % MaxEntries];
         sBusy = true;
         LightLock_Unlock(&sQueueLock);
-        if (entry.size) process(entry.stream, entry.bytes ? entry.bytes : entry.word, entry.size);
+        if (entry.size) process(entry.stream, entry.bytes ? entry.bytes : entry.word, entry.size, true);
         LightLock_Lock(&sQueueLock);
         ++sTail, sConsumed += entry.ringBytes;
         CondVar_Broadcast(&sDone);

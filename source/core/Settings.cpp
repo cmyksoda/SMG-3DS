@@ -93,7 +93,7 @@ bool operator==(const Settings& a, const Settings& b) {
            a.previewGalaxy == b.previewGalaxy && a.previewScenario == b.previewScenario && a.devSkipStory == b.devSkipStory &&
            a.devGxDump == b.devGxDump && a.devGxNull == b.devGxNull && a.devGxTiming == b.devGxTiming &&
            a.devGxCheck == b.devGxCheck && a.devGxInline == b.devGxInline && a.devDrawEvery == b.devDrawEvery && a.devGxNoRaw == b.devGxNoRaw &&
-           a.devAvSync == b.devAvSync && a.devStartGalaxy == b.devStartGalaxy && a.devStartMario == b.devStartMario &&
+           a.devGxZones == b.devGxZones && a.devAvSync == b.devAvSync && a.devStartGalaxy == b.devStartGalaxy && a.devStartMario == b.devStartMario &&
            a.devGalaxy == b.devGalaxy && a.devGalaxyScenario == b.devGalaxyScenario && a.devWarp == b.devWarp &&
            (!a.devWarp || (std::equal(a.devWarpTo, a.devWarpTo + 3, b.devWarpTo) && a.devWarpSeconds == b.devWarpSeconds));
 }
@@ -130,7 +130,7 @@ Settings parseSettings(const std::string& text, Settings base) {
             if ((read == 3 || read == 4) && seconds >= 0 && seconds <= 600)
                 settings.devWarp = true, std::copy(to, to + 3, settings.devWarpTo), settings.devWarpSeconds = seconds;
         } else if (key == "dev.skip_story" || key == "dev.gx_dump" || key == "dev.gx_null" || key == "dev.gx_timing" || key == "dev.gx_check" ||
-                   key == "dev.gx_inline" || key == "dev.draw_every" || key == "dev.gx_noraw" || key == "dev.av_sync") {
+                   key == "dev.gx_inline" || key == "dev.draw_every" || key == "dev.gx_noraw" || key == "dev.gx_zones" || key == "dev.av_sync") {
             if (value == "0" || value == "1")
                 (key == "dev.gx_dump"     ? settings.devGxDump
                  : key == "dev.gx_null"   ? settings.devGxNull
@@ -139,6 +139,7 @@ Settings parseSettings(const std::string& text, Settings base) {
                  : key == "dev.gx_inline" ? settings.devGxInline
                  : key == "dev.draw_every" ? settings.devDrawEvery
                  : key == "dev.gx_noraw" ? settings.devGxNoRaw
+                 : key == "dev.gx_zones" ? settings.devGxZones
                  : key == "dev.av_sync" ? settings.devAvSync
                                           : settings.devSkipStory) = value == "1";
         } else if (key.rfind("bind.", 0) == 0) {
@@ -169,6 +170,7 @@ std::string formatSettings(const Settings& settings) {
     if (settings.devDrawEvery) text += "dev.draw_every=1\n";
     if (settings.devAvSync) text += "dev.av_sync=1\n";
     if (settings.devGxNoRaw) text += "dev.gx_noraw=1\n";
+    if (settings.devGxZones) text += "dev.gx_zones=1\n";
     if (settings.devStartMario >= 0) text += "dev.start=" + settings.devStartGalaxy + " " + std::to_string(settings.devStartMario) + "\n";
     if (settings.devGalaxyScenario > 0) text += "dev.galaxy=" + settings.devGalaxy + " " + std::to_string(settings.devGalaxyScenario) + "\n";
     if (settings.devWarp) {
