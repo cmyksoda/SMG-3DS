@@ -289,7 +289,7 @@ void GxCommandProcessor::loadXf(std::uint32_t address, std::uint32_t count, cons
     xfLightChanges += lights;
 }
 
-void GxCommandProcessor::loadBp(std::uint32_t value) {
+[[gnu::always_inline]] inline void GxCommandProcessor::loadBp(std::uint32_t value) {
     const std::uint32_t address = value >> 24;
     const std::uint8_t kind = bpKinds[address];
     if (kind & BpMask) {  // the mask for the next load only
@@ -352,7 +352,11 @@ std::uint32_t GxCommandProcessor::bpRun(const std::uint8_t* at, std::uint32_t av
     for (; available - used >= 5 && at[used] == 0x61; used += 5) {
         const std::uint32_t value = word(at + used + 1), address = value >> 24;
         const std::uint8_t kind = bpKinds[address];
-        if (kind & (BpColour | BpEvent | BpMask)) {
+        if (kind & BpMask) {  // the mask for the next load only
+            mask = value & 0xFFFFFF;
+            continue;
+        }
+        if (kind & (BpColour | BpEvent)) {
             bpMask_ = mask, bpChanges += changes, bpChangesBesideColors += changes, changes = 0;
             loadBp(value);
             mask = bpMask_;

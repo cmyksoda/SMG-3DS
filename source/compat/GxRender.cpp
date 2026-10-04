@@ -245,7 +245,7 @@ struct Renderer {
         u32 meshVerticesMade = 0;
         u32 stateHits = 0, stateMisses = 0, stateClears = 0;
         u32 cpuCopies = 0, gpuCopies = 0;
-        u32 peeks = 0;
+        u32 peeks = 0, peeksDeferred = 0;
         u32 atlasJoins = 0, atlasesBuilt = 0, atlasTurns = 0;
         u64 peekTicks = 0;  // depth peeks: the frame paused, the GPU waited for, one tile read back
         u32 meshesChecked = 0, meshesDiffering = 0, refreshesChecked = 0, refreshesDiffering = 0;  // dev.gx_check
@@ -323,6 +323,7 @@ struct Renderer {
         // wait here (C3D_FRAME_SYNCDRAW) cost a frame that ran long half a refresh on average. Timed apart.
         const u64 start = svcGetSystemTick();
         C3D_FrameBegin(0);
+        ++framesBegun;
         perf.syncTicks += svcGetSystemTick() - start;
         C3D_FrameDrawOn(target);
         if (clearPending) C3D_RenderTargetClear(target, C3D_CLEAR_ALL, clearColor, clearDepth);
@@ -538,6 +539,7 @@ struct Renderer {
     void resume() {
         const GxZoneScope zone(ZonePause);
         C3D_FrameBegin(0);
+        ++framesBegun;
         C3D_FrameDrawOn(target);
         C3D_RenderTargetSetOutput(target, GFX_TOP, GFX_LEFT, DisplayTransferFlags);
         startBuffers();
@@ -1934,14 +1936,14 @@ struct Renderer {
         std::fprintf(stderr, "gx perf: t=%.0f, %lu frames, %.1f ms/frame (%.1f fps, %.2f logic steps each); per logic step: game thread draw %.1f, "
                      "logic %.1f, animation %.1f, waiting for the GPU %.1f, retrace wait %.1f; per frame: GX stream read %s %.1f ms (%.1f of it waiting "
                      "for the PICA), game waiting for room %.1f ms, %.0f KB; DSP %.1f ms; %.0f primitives (%.0f same state, %.0f with only C0 new), %.0f "
-                     "vertices, %.0f triangles, %.0f draws; depth peeks %.1f (%.2f ms); atlases %zu (%lu made), %.0f draws joined by them, %.0f turns\n",
+                     "vertices, %.0f triangles, %.0f draws; depth peeks %.1f (%.1f answered from the frame before, %.2f ms); atlases %zu (%lu made), %.0f draws joined by them, %.0f turns\n",
                      double(now) / SYSCLOCK_ARM11, static_cast<unsigned long>(perf.frames), ms / n, n * 1000.0 / ms, phaseFrames / n, phases[0], phases[1],
                      phases[2], phases[3], phases[4],
                      clock.core == 2 ? "on core 2" : clock.core == 1 ? "on core 1" : "on the game's thread", clock.busy.exchange(0) * tick,
                      perf.syncTicks * tick, clock.gameWaits.exchange(0) * tick, clock.bytes.exchange(0) / 1024.0 / n,
                      smgDspTicks.exchange(0, std::memory_order_relaxed) * tick, perf.primitives / n,
                      perf.sameState / n, perf.color0Rides / n, perf.vertices / n, perf.triangles / n, perf.draws / n, perf.peeks / n,
-                     perf.peekTicks * tick, atlases.size(), static_cast<unsigned long>(perf.atlasesBuilt), perf.atlasJoins / n, perf.atlasTurns / n);
+                     perf.peeksDeferred / n, perf.peekTicks * tick, atlases.size(), static_cast<unsigned long>(perf.atlasesBuilt), perf.atlasJoins / n, perf.atlasTurns / n);
         // The registers behind most state changes, so batching can be aimed at them.
         std::string top;
         for (int k = 0; k < 6; ++k) {
@@ -2480,7 +2482,22 @@ struct Renderer {
         if (!depthTile) stop("reading a depth tile back with no memory to read it into");
         const unsigned tile = (row / 8) * 30 + column / 8;
         if (fresh[2] && tile == freshTile) return depthTile[morton(column & 7, row & 7)];  // nothing drawn since
-        if (inFrame) pause();
+        if (inFrame) {
+            const PeekTile* done = nullptr;
+            bool queued = false;
+            for (const PeekTile& p : peekTiles) {
+                if (p.tile != tile) continue;
+                if (p.begun < framesBegun && framesShown - p.frame <= 1 && (!done || p.begun > done->begun)) done = &p;
+                queued |= p.begun == framesBegun;
+            }
+            if (!queued) queuePeekTile(tile);
+            if (done) {
+                GSPGPU_InvalidateDataCache(done->texels, 256);
+                ++perf.peeksDeferred;
+                return done->texels[morton(column & 7, row & 7)];
+            }
+            pause();
+        }
         C3D_SyncTextureCopy(static_cast<u32*>(target->frameBuf.depthBuf) + tile * 64, GX_BUFFER_DIM(256 / 16, 0), depthTile, GX_BUFFER_DIM(256 / 16, 0), 256,
                             GX_TRANSFER_RAW_COPY(1));
         GSPGPU_InvalidateDataCache(depthTile, 256);
@@ -2488,6 +2505,30 @@ struct Renderer {
         perf.peekTicks += svcGetSystemTick() - start;
         fresh[2] = true, freshTile = tile;
         return depthTile[morton(column & 7, row & 7)];
+    }
+
+    // A depth peek (the star pointer's, a talking NPC's: both from draw-sync callbacks, their answer used the frame after)
+    // is answered from its tile as the GPU copied it at a peek the frame before, so the frame isn't stopped for it: each
+    // peek queues that copy behind what was drawn so far. A copy is done once a later C3D_FrameBegin has waited for it.
+    struct PeekTile {
+        u32* texels = nullptr;
+        unsigned tile = ~0u;
+        u32 begun = 0, frame = 0;  // framesBegun and framesShown when it was queued
+    };
+    static constexpr unsigned PeekTiles = 8;
+    PeekTile peekTiles[PeekTiles];
+    unsigned nextPeekTile = 0;
+    u32 framesBegun = 0;
+    void queuePeekTile(unsigned tile) {
+        PeekTile& p = peekTiles[nextPeekTile++ % PeekTiles];
+        if (!p.texels) p.texels = static_cast<u32*>(linearAlloc(256));
+        if (!p.texels) stop("copying a depth tile with no memory to copy it into");
+        flushBatch();
+        flushVertices();
+        C3D_FrameSplit(GX_CMDLIST_FLUSH);
+        GX_TextureCopy(static_cast<u32*>(target->frameBuf.depthBuf) + tile * 64, GX_BUFFER_DIM(256 / 16, 0), p.texels, GX_BUFFER_DIM(256 / 16, 0), 256,
+                       GX_TRANSFER_RAW_COPY(1));
+        p.tile = tile, p.begun = framesBegun, p.frame = framesShown;
     }
 
     static u32 copyClearColor(const GxCommandProcessor& gpu) {
