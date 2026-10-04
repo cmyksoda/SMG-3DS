@@ -95,7 +95,7 @@ bool operator==(const Settings& a, const Settings& b) {
            a.devGxCheck == b.devGxCheck && a.devGxInline == b.devGxInline && a.devDrawEvery == b.devDrawEvery && a.devGxNoRaw == b.devGxNoRaw &&
            a.devAvSync == b.devAvSync && a.devStartGalaxy == b.devStartGalaxy && a.devStartMario == b.devStartMario &&
            a.devGalaxy == b.devGalaxy && a.devGalaxyScenario == b.devGalaxyScenario && a.devWarp == b.devWarp &&
-           (!a.devWarp || std::equal(a.devWarpTo, a.devWarpTo + 3, b.devWarpTo));
+           (!a.devWarp || (std::equal(a.devWarpTo, a.devWarpTo + 3, b.devWarpTo) && a.devWarpSeconds == b.devWarpSeconds));
 }
 
 Settings parseSettings(const std::string& text, Settings base) {
@@ -124,9 +124,11 @@ Settings parseSettings(const std::string& text, Settings base) {
             parseGalaxyNumber(value, 1, settings.devGalaxy, settings.devGalaxyScenario);
         } else if (key == "dev.warp") {
             float to[3];
+            int seconds = 2;
             char rest;
-            if (std::sscanf(value.c_str(), "%f %f %f %c", &to[0], &to[1], &to[2], &rest) == 3)
-                settings.devWarp = true, std::copy(to, to + 3, settings.devWarpTo);
+            const int read = std::sscanf(value.c_str(), "%f %f %f %d %c", &to[0], &to[1], &to[2], &seconds, &rest);
+            if ((read == 3 || read == 4) && seconds >= 0 && seconds <= 600)
+                settings.devWarp = true, std::copy(to, to + 3, settings.devWarpTo), settings.devWarpSeconds = seconds;
         } else if (key == "dev.skip_story" || key == "dev.gx_dump" || key == "dev.gx_null" || key == "dev.gx_timing" || key == "dev.gx_check" ||
                    key == "dev.gx_inline" || key == "dev.draw_every" || key == "dev.gx_noraw" || key == "dev.av_sync") {
             if (value == "0" || value == "1")
@@ -171,7 +173,8 @@ std::string formatSettings(const Settings& settings) {
     if (settings.devGalaxyScenario > 0) text += "dev.galaxy=" + settings.devGalaxy + " " + std::to_string(settings.devGalaxyScenario) + "\n";
     if (settings.devWarp) {
         char line[96];
-        std::snprintf(line, sizeof line, "dev.warp=%g %g %g\n", settings.devWarpTo[0], settings.devWarpTo[1], settings.devWarpTo[2]);
+        std::snprintf(line, sizeof line, "dev.warp=%g %g %g %d\n", settings.devWarpTo[0], settings.devWarpTo[1], settings.devWarpTo[2],
+                      settings.devWarpSeconds);
         text += line;
     }
     return text;

@@ -86,10 +86,10 @@ const char* smgDevGalaxy(int* scenario) {
     *scenario = s.devGalaxyScenario;
     return s.devGalaxy.c_str();
 }
-// dev.warp: where Mario is moved once he first appears, false when unset.
-BOOL smgDevWarp(float* to) {
+// dev.warp: where Mario is moved and how many seconds after he first appears, false when unset.
+BOOL smgDevWarp(float* to, int* seconds) {
     const smg::Settings& s = input().settings();
-    if (s.devWarp) std::copy(s.devWarpTo, s.devWarpTo + 3, to);
+    if (s.devWarp) std::copy(s.devWarpTo, s.devWarpTo + 3, to), *seconds = s.devWarpSeconds;
     return s.devWarp;
 }
 // GameSystem::frameLoop (adapted): logic steps per drawn frame. The Wii drew each one; the port draws every second one,
