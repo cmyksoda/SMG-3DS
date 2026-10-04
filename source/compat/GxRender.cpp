@@ -205,8 +205,9 @@ struct Renderer {
         std::uintptr_t range[2][2] = {};  // the memory it was made from, [lo, hi): the display list, the array elements
     };
     std::unordered_map<std::uint64_t, CachedMesh> meshes;
-    // Lists refused for want of mesh memory, by key hash, and when: not built again for a while, as building is the cost.
-    std::unordered_map<std::uint64_t, u32> budgetRefused;
+    // Lists refused for want of mesh memory, by key hash, with their mesh's size: room is looked for before building again,
+    // as building is the cost.
+    std::unordered_map<std::uint64_t, std::size_t> budgetRefused;
     std::unordered_set<std::uintptr_t> meshPages, texturePages;  // 4 KiB pages some mesh or texture was made from
     std::size_t meshBytes = 0;
     bool dumping = false;
@@ -220,7 +221,7 @@ struct Renderer {
         u32 meshDraws = 0, meshTriangles = 0, meshesMade = 0, citroDraws = 0;
         u32 pendingWhy[9] = {};  // mesh draws through citro3d after each kind of change (Pending)
         u32 meshInvalidated = 0, meshOverflows = 0, meshBudgetDrops = 0, meshMismatches = 0, flushesQueued = 0, texturesInvalidated = 0;
-        u32 meshesEvicted = 0, leftOutDraws = 0, meshesRefreshed = 0, meshVerticesRefreshed = 0;
+        u32 meshesEvicted = 0, meshesDroppedForRoom = 0, leftOutDraws = 0, meshesRefreshed = 0, meshVerticesRefreshed = 0;
         u32 mismatchWhy[5] = {};  // the key's words, the descriptor (CP 0x50/0x60), a format table, an array base, a stride
         u64 timed[6] = {};  // dev.gx_timing: CPU-path primitives (immediate, in lists), display lists (mesh draws), texture copies, movie, frame ends
         u64 cpuCopyTicks = 0;  // of the texture copies, those read back and encoded on the CPU
@@ -551,7 +552,8 @@ struct Renderer {
             std::abort();
         }
         C3D_Tex& texture = textures[key];
-        if (!upload(texture, tile(source))) stop("a texture the PICA takes no memory for");
+        const TiledTexture tiled = tile(source);
+        if (!withRoom([&] { return upload(texture, tiled); })) stop("a texture the PICA takes no memory for");
         const auto [lo, hi] = textureRange(key);
         markPages(lo, hi, texturePages);
         return texture;
@@ -1146,7 +1148,8 @@ struct Renderer {
         }
     }
 
-    static constexpr std::size_t MeshBudget = 12u << 20;
+    // Meshes may always take MeshBudget, and more while MeshReserve of linear memory stays free for textures and movies.
+    static constexpr std::size_t MeshBudget = 12u << 20, MeshReserve = 8u << 20;
 
     void dropMesh(std::unordered_map<std::uint64_t, CachedMesh>::iterator it) {
         meshBytes -= it->second.vertexCount * sizeof(GxMeshVertex) + it->second.indexCount * sizeof(std::uint16_t);
@@ -1155,15 +1158,38 @@ struct Renderer {
     }
     // Room for `bytes` more, from the meshes least recently drawn: none drawn in this frame or the last, which the GPU
     // may still read.
-    void evictMeshesFor(std::size_t bytes) {
+    void evictMeshesFor(std::size_t bytes, std::size_t& free) {
         std::vector<std::pair<u32, std::uint64_t>> stale;
         for (const auto& [hash, mesh] : meshes)
             if (mesh.lastFrame + 2 <= framesShown) stale.emplace_back(mesh.lastFrame, hash);
         std::sort(stale.begin(), stale.end());
         for (const auto& [frame, hash] : stale) {
-            if (meshBytes + bytes <= MeshBudget) break;
-            dropMesh(meshes.find(hash)), ++perf.meshesEvicted;
+            if (meshBytes + bytes <= MeshBudget || free >= bytes + MeshReserve) break;
+            const std::size_t held = meshBytes;
+            dropMesh(meshes.find(hash)), ++perf.meshesEvicted, free += held - meshBytes;
         }
+    }
+    bool makeRoom(std::size_t bytes) {
+        std::size_t free = meshBytes + bytes > MeshBudget ? linearSpaceFree() : 0;
+        const auto room = [&] { return meshBytes + bytes <= MeshBudget || free >= bytes + MeshReserve; };
+        if (!room()) evictMeshesFor(bytes, free);
+        return room();
+    }
+    // Linear memory for something that would otherwise stop: the meshes the GPU no longer reads go, then (outside a draw,
+    // whose mesh or batch dropping every mesh would pull out from under it) every mesh, with another try after each.
+    bool drawing = false;
+    template <class Allocate> bool withRoom(Allocate allocate) {
+        if (allocate()) return true;
+        const std::size_t held = meshes.size();
+        for (auto it = meshes.begin(); it != meshes.end();) {
+            const auto next = std::next(it);
+            if (it->second.lastFrame + 2 <= framesShown) dropMesh(it);
+            it = next;
+        }
+        if (meshes.size() < held && (++perf.meshesDroppedForRoom, allocate())) return true;
+        if (drawing || meshes.empty()) return false;
+        dropAllMeshes(), ++perf.meshesDroppedForRoom;
+        return allocate();
     }
     void dropAllMeshes() {
         if (inFrame) pause(), resume();  // the GPU may still read them
@@ -1382,8 +1408,10 @@ struct Renderer {
         if (stale) dropMesh(found), found = meshes.end(), ++perf.meshMismatches;
         stepEnd(8, lookup);
         if (found == meshes.end()) {
-            if (const auto refused = budgetRefused.find(hash); refused != budgetRefused.end() && refused->second + 15 > framesShown)
-                return ++perf.refused[GxVertexPipeline::MeshBudget], GxVertexPipeline::MeshBudget;
+            if (const auto refused = budgetRefused.find(hash); refused != budgetRefused.end()) {
+                if (!makeRoom(refused->second)) return ++perf.refused[GxVertexPipeline::MeshBudget], GxVertexPipeline::MeshBudget;
+                budgetRefused.erase(refused);
+            }
             // Its pages are marked before it is read: a write and flush from another thread between a reading and the
             // marking would never reach it (the flush hook passes unmarked pages by).
             const std::uint8_t *lo, *hi;
@@ -1397,10 +1425,9 @@ struct Renderer {
             static const bool checking = smgDevGxCheck();
             if (checking) checkMesh(gpu, list, size, mesh, address);
             const std::size_t vertexBytes = mesh.vertices.size() * sizeof(GxMeshVertex), bytes = vertexBytes + mesh.indices.size() * sizeof(std::uint16_t);
-            if (meshBytes + bytes > MeshBudget) evictMeshesFor(bytes);
-            if (meshBytes + bytes > MeshBudget) {
+            if (!makeRoom(bytes)) {
                 if (budgetRefused.size() > 1024) budgetRefused.clear();
-                budgetRefused[hash] = framesShown;
+                budgetRefused[hash] = bytes;
                 return ++perf.meshBudgetDrops, ++perf.refused[GxVertexPipeline::MeshBudget], GxVertexPipeline::MeshBudget;
             }
             void* block = linearAlloc(bytes);
@@ -1581,6 +1608,8 @@ struct Renderer {
     }
 
     void drawMesh(const CachedMesh& mesh) {
+        drawing = true;
+        const struct Release { bool& flag; ~Release() { flag = false; } } release{drawing};
         if (!inFrame) begin();
         flushBatch();
         roomFor(0, DrawCommandWords + u32(mesh.groups.size() - 1) * GroupCommandWords);
@@ -1718,6 +1747,8 @@ struct Renderer {
     void flushBatch() {
         if (indexUsed == batchStart) return;
         const Step step(perf, 7);
+        drawing = true;
+        const struct Release { bool& flag; ~Release() { flag = false; } } release{drawing};
         applyState();
         const bool wholeScreen = dumping && dumpBatch();
         ensureCpuBuffers();
@@ -1878,8 +1909,8 @@ struct Renderer {
                          static_cast<unsigned long>(perf.meshesDiffering), static_cast<unsigned long>(perf.refreshesChecked),
                          static_cast<unsigned long>(perf.refreshesDiffering));
         std::fprintf(stderr, "gx perf: display lists refused by reason (per frame):%s; meshes invalidated %.1f, overflows %.1f, over budget %.1f, "
-                     "evicted %.1f, key mismatches %.1f, refreshed %.1f (%.0f vertices), primitives left out %.1f, flushes queued %.1f; GX FIFO writes %.0f per frame; textures %zu, %lu invalidated\n", refusals.c_str(),
-                     perf.meshInvalidated / n, perf.meshOverflows / n, perf.meshBudgetDrops / n, perf.meshesEvicted / n, perf.meshMismatches / n, perf.meshesRefreshed / n,
+                     "evicted %.1f, drops for room %lu, key mismatches %.1f, refreshed %.1f (%.0f vertices), primitives left out %.1f, flushes queued %.1f; GX FIFO writes %.0f per frame; textures %zu, %lu invalidated\n", refusals.c_str(),
+                     perf.meshInvalidated / n, perf.meshOverflows / n, perf.meshBudgetDrops / n, perf.meshesEvicted / n, static_cast<unsigned long>(perf.meshesDroppedForRoom), perf.meshMismatches / n, perf.meshesRefreshed / n,
                      perf.meshVerticesRefreshed / n, perf.leftOutDraws / n, perf.flushesQueued / n,
                      (smgFifoWrites - perf.writesBefore) / n, textures.size(), static_cast<unsigned long>(perf.texturesInvalidated));
         if (perf.meshMismatches)
@@ -2029,7 +2060,7 @@ struct Renderer {
         }
         g.width = copy.texWidth, g.height = copy.texHeight, g.readFormat = copyReadFormat(copy.format);
         if (!scratchReady) {
-            if (!C3D_TexInitVRAM(&scratch, 256, 512, GPU_RGBA8) && !C3D_TexInit(&scratch, 256, 512, GPU_RGBA8))
+            if (!C3D_TexInitVRAM(&scratch, 256, 512, GPU_RGBA8) && !withRoom([&] { return C3D_TexInit(&scratch, 256, 512, GPU_RGBA8); }))
                 stop("an EFB copy with no memory to take the target into");
             C3D_TexSetFilter(&scratch, GPU_LINEAR, GPU_LINEAR);
             C3D_TexSetWrap(&scratch, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
@@ -2235,7 +2266,7 @@ struct Renderer {
         const unsigned tw = textureSide(float(width)), th = textureSide(float(height));
         if (m.ready && (m.texture.width != tw || m.texture.height != th)) C3D_TexDelete(&m.texture), m.ready = false;
         if (!m.ready) {
-            if (!C3D_TexInit(&m.texture, tw, th, GPU_RGB565)) stop("a movie frame with no memory for its texture");
+            if (!withRoom([&] { return C3D_TexInit(&m.texture, tw, th, GPU_RGB565); })) stop("a movie frame with no memory for its texture");
             C3D_TexSetFilter(&m.texture, GPU_LINEAR, GPU_LINEAR);
             C3D_TexSetWrap(&m.texture, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
             m.ready = true, m.key = nullptr;

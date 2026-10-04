@@ -824,16 +824,22 @@ it (`ambrgb`, `ambalpha`), as `GxLighting::apply` does; Dusty Dune runs at 24 to
 against w, as the screen sees them: a far mesh's rounding (0.015 at a w of 48,000) is large in clip units but far
 below a pixel.
 
-**Mesh memory, and meshes that move.** Meshes live in linear memory under a 12 MB budget. A new one past it evicts
-the meshes drawn least recently (never one drawn this frame or the last, which the GPU may still read), and a list
-refused for room is not tried again for 15 frames. Some lists keep their bytes while their arrays move: J3D's deformed
+**Mesh memory, and meshes that move.** Meshes live in linear memory: always up to 12 MB, and past that while 8 MB
+stays free for textures and movies. At Toy Time they reached 14.5 MB, free memory never under 8 MB (the textures take
+most of it); held to 12 MB, 128,000 vertices a frame had gone to the CPU path there, in frames of 550 ms. A new mesh
+with no room evicts the meshes drawn least recently (never one drawn this frame or the last, which the GPU may still
+read), and a list refused for room keeps its mesh's size, so it is built again as soon as there is room and no
+sooner: a cut to a new room costs Toy Time one slow stretch (four seconds at 6 fps) instead of three. A texture, movie
+frame or copy target that finds no linear memory lets go the meshes the GPU no longer reads, then (unless it comes
+inside a draw, whose mesh or batch that would pull out from under it) every mesh, trying again after each, before it
+stops by name; no run so far has needed that. Some lists keep their bytes while their arrays move: J3D's deformed
 models (Honeyhive's swaying flowers and grass) draw from vertices written into one of two buffers in turn, and
 instances of one model share a list, each with its own deformed arrays. Such a mesh keeps its triangles and is decoded
 again (`GxVertexPipeline::refreshMesh`: each vertex taken from the list by the mesh's origin map, keeping its slot)
 whenever its arrays move and once a frame, into an arena owned by the frame's parity (1 MB each, outside the mesh
 budget, reused from the start two frames later). At Honeyhive that is 12 refreshes a frame (960 vertices), and the
-2,900 vertices a frame its moving lists sent to the CPU path stay on the GPU. `dev.gx_check=1` checks every refresh bit for bit against the mesh built
-anew.
+2,900 vertices a frame its moving lists sent to the CPU path stay on the GPU. `dev.gx_check=1` checks every
+refresh bit for bit against the mesh built anew.
 
 **The DSP on its own core.** The Wii's DSP ran JAudio2's microcode beside the CPU, answering its mail by interrupt;
 the port ran it inside `DSPSendMailToDSP`, on the game's core, about 5 to 7 ms of a plaza frame. Now a thread on the
