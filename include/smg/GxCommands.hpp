@@ -109,7 +109,7 @@ public:
     std::uint32_t bpChangesBesideColors = 0, color1Changes = 0;
     // Display lists called, and their bytes (for the renderer's perf line).
     std::uint32_t displayListCalls = 0, displayListBytes = 0;
-    // Commands read and their bytes by kind (CommandKind), inside called lists too (for the perf line).
+    // Commands read and their bytes by kind (CommandKind), inside called lists too (for the perf line); a run of NOPs counts once.
     enum CommandKind : unsigned { CommandBp, CommandCp, CommandXf, CommandXfIndexed, CommandCall, CommandPrimitive, CommandOther, CommandKinds };
     mutable std::uint32_t commandCounts[CommandKinds] = {}, commandBytes[CommandKinds] = {};
     // Vertex layouts read from the registers, and taken from those read before (for the perf line).

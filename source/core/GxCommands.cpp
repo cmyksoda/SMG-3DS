@@ -331,18 +331,23 @@ std::uint32_t GxCommandProcessor::command(const std::uint8_t* at, std::uint32_t 
     const std::uint32_t used = execute(at, available);
     const unsigned kind = opcode == 0x61 ? CommandBp : opcode == 0x08 ? CommandCp : opcode == 0x10 ? CommandXf : opcode >= 0x20 && opcode < 0x40 ? CommandXfIndexed
                         : opcode == 0x40 ? CommandCall : opcode >= 0x80 ? CommandPrimitive : CommandOther;
-    if (used) ++commandCounts[kind], commandBytes[kind] += used;
+    if (used) commandCounts[kind] += kind == CommandBp ? used / 5 : 1, commandBytes[kind] += used;
     return used;
 }
 
 std::uint32_t GxCommandProcessor::execute(const std::uint8_t* at, std::uint32_t available) {
     const std::uint8_t opcode = at[0];
-    if (opcode == 0x61) {  // load a BP register: most of a material's display list
-        if (available < 5) return 0;
-        loadBp(word(at + 1));
-        return 5;
+    if (opcode == 0x61) {  // BP loads, a run at a time: most of a material's display list
+        std::uint32_t used = 0;
+        while (available - used >= 5 && at[used] == 0x61) loadBp(word(at + used + 1)), used += 5;
+        return used;
     }
-    if (opcode == 0x00 || opcode == 0x48) return 1;  // NOP; invalidate the vertex cache, which the port has none of
+    if (opcode == 0x00) {  // NOPs, a run at a time: J3D pads its display lists to 32 bytes with them
+        std::uint32_t used = 1;
+        while (used < available && !at[used]) ++used;
+        return used;
+    }
+    if (opcode == 0x48) return 1;  // invalidate the vertex cache, which the port has none of
     if (opcode == 0x01) {                           // the port's own: whether texture copies stay on the GPU
         if (available < 2) return 0;
         if (!host_.copiesStay) host_.unsupported("the port's copy-mode command with no host for it", at[1]);
