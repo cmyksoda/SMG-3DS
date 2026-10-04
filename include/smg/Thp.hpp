@@ -12,4 +12,8 @@ const char* thpVideoSize(Bytes frame, unsigned& width, unsigned& height);
 
 // BT.601 full-range YCbCr, as THP's encoder wrote it, to RGB.
 void thpPixel(std::uint8_t y, std::uint8_t u, std::uint8_t v, std::uint8_t rgb[3]);
+// Decoded planes as an RGB565 texture of tw x th for the PICA (rows upside down, 8x8 tiles in Morton order), each texel
+// thpPixel's narrowed.
+void thpTiles565(const std::uint8_t* y, const std::uint8_t* u, const std::uint8_t* v, unsigned width, unsigned height, std::uint16_t* texels,
+                 unsigned tw, unsigned th);
 } // namespace smg

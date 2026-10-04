@@ -2,6 +2,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <vector>
 
@@ -44,6 +45,21 @@ int runThpTests() {
     check(rgb[0] >= 252 && rgb[1] <= 2 && rgb[2] <= 2, "full-range red");
     smg::thpPixel(29, 255, 107, rgb);
     check(rgb[0] <= 2 && rgb[1] <= 2 && rgb[2] >= 252, "full-range blue");
+    for (const auto [width, height] : {std::array<unsigned, 2>{24, 10}, std::array<unsigned, 2>{18, 7}}) {
+        std::vector<unsigned char> py(width * height), pu(width / 2 * ((height + 1) / 2)), pv(pu.size());
+        unsigned seed = width * 31 + height;
+        for (auto* plane : {&py, &pu, &pv})
+            for (unsigned char& p : *plane) p = static_cast<unsigned char>((seed = seed * 1103515245 + 12345) >> 16);
+        std::vector<std::uint16_t> fast(32 * 16, 0xDEAD), slow(32 * 16, 0xDEAD);
+        smg::thpTiles565(py.data(), pu.data(), pv.data(), width, height, fast.data(), 32, 16);
+        for (unsigned iy = 0; iy < height; ++iy)
+            for (unsigned ix = 0; ix < width; ++ix) {
+                smg::thpPixel(py[iy * width + ix], pu[iy / 2 * (width / 2) + ix / 2], pv[iy / 2 * (width / 2) + ix / 2], rgb);
+                const unsigned row = 15 - iy, morton = (ix & 1) | (ix & 2) << 1 | (ix & 4) << 2 | (row & 1) << 1 | (row & 2) << 2 | (row & 4) << 3;
+                slow[(row / 8) * 4 * 64 + (ix / 8) * 64 + morton] = static_cast<std::uint16_t>((rgb[0] >> 3) << 11 | (rgb[1] >> 2) << 5 | rgb[2] >> 3);
+            }
+        check(fast == slow, "the tiled RGB565 frame is thpPixel's, texel for texel");
+    }
     std::printf("%u THP movie checks passed\n", checks);
     return 0;
 }

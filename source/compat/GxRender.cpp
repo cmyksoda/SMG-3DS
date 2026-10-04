@@ -2038,20 +2038,7 @@ struct Renderer {
         if (!inFrame) begin();
         flushBatch();
         if (m.key != y || m.generation != generation) {
-            // Rows go in upside down and in 8x8 tiles, as tile() lays every texture out for the PICA.
-            auto* texels = static_cast<std::uint16_t*>(m.texture.data);
-            for (unsigned iy = 0; iy < height; ++iy) {
-                const unsigned row = th - 1 - iy;
-                const std::uint8_t *ys = y + std::size_t(iy) * width, *us = u + std::size_t(iy / 2) * (width / 2), *vs = v + std::size_t(iy / 2) * (width / 2);
-                std::uint16_t* tiles = texels + std::size_t(row / 8) * (tw / 8) * 64;
-                const unsigned rowBits = (row & 1) << 1 | (row & 2) << 2 | (row & 4) << 3;
-                for (unsigned ix = 0; ix < width; ++ix) {
-                    std::uint8_t rgb[3];
-                    thpPixel(ys[ix], us[ix / 2], vs[ix / 2], rgb);
-                    const unsigned morton = (ix & 1) | (ix & 2) << 1 | (ix & 4) << 2 | rowBits;
-                    tiles[(ix / 8) * 64 + morton] = std::uint16_t((rgb[0] >> 3) << 11 | (rgb[1] >> 2) << 5 | rgb[2] >> 3);
-                }
-            }
+            thpTiles565(y, u, v, width, height, static_cast<std::uint16_t*>(m.texture.data), tw, th);
             C3D_TexFlush(&m.texture);
             m.key = y, m.generation = generation;
         }

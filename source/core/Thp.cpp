@@ -248,4 +248,38 @@ void thpPixel(std::uint8_t y, std::uint8_t u, std::uint8_t v, std::uint8_t rgb[3
     rgb[1] = clamp(luma - 22554 * cb - 46802 * cr);
     rgb[2] = clamp(luma + 116130 * cb);
 }
+
+namespace {
+// thpPixel's clamp and narrowing by table, indexed by luma plus a chroma term (whole, as luma's 16 fraction bits are 0).
+struct Narrow {
+    std::uint16_t red[768], green[768], blue[768];
+    Narrow() {
+        for (int i = 0; i < 768; ++i) {
+            const int c = std::clamp(i - 256, 0, 255);
+            red[i] = static_cast<std::uint16_t>((c >> 3) << 11), green[i] = static_cast<std::uint16_t>((c >> 2) << 5), blue[i] = static_cast<std::uint16_t>(c >> 3);
+        }
+    }
+};
+} // namespace
+
+void thpTiles565(const std::uint8_t* y, const std::uint8_t* u, const std::uint8_t* v, unsigned width, unsigned height, std::uint16_t* texels,
+                 unsigned tw, unsigned th) {
+    static const Narrow narrow;
+    for (unsigned iy = 0; iy < height; ++iy) {
+        const unsigned row = th - 1 - iy;
+        const std::uint8_t *ys = y + std::size_t(iy) * width, *us = u + std::size_t(iy / 2) * (width / 2), *vs = v + std::size_t(iy / 2) * (width / 2);
+        std::uint16_t* tiles = texels + std::size_t(row / 8) * (tw / 8) * 64;
+        const unsigned rowBits = (row & 1) << 1 | (row & 2) << 2 | (row & 4) << 3;
+        for (unsigned ix = 0; ix < width; ix += 2) {
+            const int cb = int(us[ix / 2]) - 128, cr = int(vs[ix / 2]) - 128;
+            const std::uint16_t* r = narrow.red + 256 + ((91881 * cr + 0x8000) >> 16);
+            const std::uint16_t* g = narrow.green + 256 + ((-22554 * cb - 46802 * cr + 0x8000) >> 16);
+            const std::uint16_t* b = narrow.blue + 256 + ((116130 * cb + 0x8000) >> 16);
+            for (unsigned x = ix; x < ix + 2 && x < width; ++x) {
+                const unsigned luma = ys[x], morton = (x & 1) | (x & 2) << 1 | (x & 4) << 2 | rowBits;
+                tiles[(x / 8) * 64 + morton] = static_cast<std::uint16_t>(r[luma] | g[luma] | b[luma]);
+            }
+        }
+    }
+}
 } // namespace smg
