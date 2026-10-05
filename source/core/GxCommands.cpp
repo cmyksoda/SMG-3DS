@@ -354,13 +354,13 @@ std::uint32_t GxCommandProcessor::bpRun(const std::uint8_t* at, std::uint32_t av
         mask = 0xFFFFFF;
         if (old != data) bp[address] = data, changes += kind & BpDrawn, beside += !(kind & BpColour) && (kind & BpDrawn);
         if (!(kind & BpColour)) continue;
-        // 0xE0-0xE7 hold a TEV colour register or a konst colour by their type bit: the last write of each kind.
+        // 0xE0-0xE7 hold a TEV color register or a konst color by their type bit: the last write of each kind.
         const bool konst = data >> 23 & 1;
-        std::uint32_t& colour = (konst ? tevKonst : tevColor)[address - 0xE0];
-        if (colour == data) continue;
+        std::uint32_t& color = (konst ? tevKonst : tevColor)[address - 0xE0];
+        if (color == data) continue;
         if (!konst && (address == 0xE4 || address == 0xE5)) ++color1;
         else if (konst || (address != 0xE2 && address != 0xE3)) ++beside;
-        colour = data;
+        color = data;
     }
     bpMask_ = mask, bpChanges += changes, bpChangesBesideColors += beside, color1Changes += color1;
     return std::uint32_t(from - at);

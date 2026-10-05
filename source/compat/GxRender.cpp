@@ -378,7 +378,7 @@ struct Renderer {
     // sends them again and its state stays the truth.
     static constexpr u32 RawBlocks = 1u << PendingCombiner | 1u << PendingFragment | 1u << PendingCull | 1u << PendingTexture |
                                      1u << PendingFixed | 1u << PendingMeshLayout | 1u << PendingCpuBuffers;
-    u32 stagesChanged = 0;  // combiner stages, and bit 6 the buffer's updates and colour
+    u32 stagesChanged = 0;  // combiner stages, and bit 6 the buffer's updates and color
     u32 testsChanged = 0;   // 1 the alpha test, 2 the blend, 4 the depth test and write mask
     u32 unitsChanged = 0, fixedChanged = 0;
     u32 unitsBound = 0;     // texture units citro3d has a texture for: it never unbinds one
