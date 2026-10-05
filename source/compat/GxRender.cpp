@@ -327,6 +327,7 @@ struct Renderer {
         freeRetired();
         perf.syncTicks += svcGetSystemTick() - start;
         C3D_FrameDrawOn(target);
+        queuedCommands = clearPending;
         if (clearPending) C3D_RenderTargetClear(target, C3D_CLEAR_ALL, clearColor, clearDepth);
         fresh[0] = fresh[1] = fresh[2] = false;
         clearPending = false;
@@ -606,6 +607,14 @@ struct Renderer {
         paletteFlushed = paletteUsed;
     }
 
+    // citro3d's GX queue holds 32 commands until the next C3D_FrameBegin empties it, and a frame's end takes two: a frame
+    // with many copies and peeks (two commands each) ends and begins again before it would overflow.
+    u32 queuedCommands = 0;
+    void roomInQueue(u32 commands) {
+        if (inFrame && queuedCommands + commands + 2 > 32) pause(), resume();
+        queuedCommands += commands;
+    }
+
     // Textures whose memory the game rewrote, kept until the GPU is done with what was queued before (C3D_FrameBegin
     // waits for it), so the frame needn't stop for them.
     std::vector<C3D_Tex> retired;
@@ -628,6 +637,7 @@ struct Renderer {
         C3D_FrameBegin(0);
         ++framesBegun;
         freeRetired();
+        queuedCommands = 0;
         C3D_FrameDrawOn(target);
         C3D_RenderTargetSetOutput(target, GFX_TOP, GFX_LEFT, DisplayTransferFlags);
         startBuffers();
@@ -2311,6 +2321,7 @@ struct Renderer {
             C3D_TexSetWrap(&scratch, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
             scratchReady = true;
         }
+        roomInQueue(2);
         roomFor(18);
         // Queued behind the draws so far (inside a frame citro3d's "sync" copy does not wait), as the pass is behind it.
         C3D_SyncTextureCopy(static_cast<u32*>(copy.depth ? target->frameBuf.depthBuf : target->frameBuf.colorBuf), GX_BUFFER_DIM(TargetTileRow / 16, 0),
@@ -2638,6 +2649,7 @@ struct Renderer {
         PeekTile& p = peekTiles[nextPeekTile++ % PeekTiles];
         if (!p.texels) p.texels = static_cast<u32*>(linearAlloc(256));
         if (!p.texels) stop("copying a depth tile with no memory to copy it into");
+        roomInQueue(2);
         flushBatch();
         flushVertices();
         C3D_FrameSplit(GX_CMDLIST_FLUSH);
