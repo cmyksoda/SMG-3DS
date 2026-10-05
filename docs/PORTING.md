@@ -1099,7 +1099,8 @@ Comet Luma's body takes about eight ops of color alone). `SMG_LIST_APPROXIMATED=
 
 **What the approximated materials really are.** A material's audit reason is only its first, which can hide the real
 fault. Measured against the TEV model on random byte inputs and on each model's own triangles (the interpolated vertex
-color as the rasterized color, texels at the interpolated UVs), most "approximated" materials draw right: none of the
+color as the rasterized color, texels at the interpolated UVs; `SMG_MEASURE_APPROXIMATED=1` makes the audit do it, with
+the tests' models in `tests/TevModel.hpp`), most "approximated" materials draw right: none of the
 228 "unclamped output" ones differs on their real inputs (they wrap only where a vertex alpha near zero pushes a sum past
 one, which the Wii would show dark too). Two real faults came out of it. The combiner's buffer was written once per
 program, so a material that needed an earlier value a second time read a stale one (Kingfin's bones); a later stage may

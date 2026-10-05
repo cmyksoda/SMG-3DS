@@ -12,6 +12,7 @@
 #include <smg/NativeResources.hpp>
 #include <smg/Animation.hpp>
 #include <smg/Combiner.hpp>
+#include "../tests/TevModel.hpp"
 #include <smg/Kcl.hpp>
 #include <smg/Model.hpp>
 #include <smg/Scene.hpp>
@@ -46,6 +47,79 @@ bool extension(const std::string& name, const char* suffix) {
     std::string result = fs::path(name).extension().string();
     for (auto& c : result) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     return result == suffix;
+}
+
+// An approximated material on its own triangles: the interpolated vertex color as the rasterized color (a lit channel
+// under a random light), texels at the interpolated UVs. The share of points off by more than 3/255, and the worst.
+struct Measure { double share = 0; float worst = 0; };
+Measure measureOnModel(const smg::Model& model, unsigned index) {
+    using namespace tevmodel;
+    smg::ModelMaterial m = model.materials[index];
+    int modelTexture[8];
+    for (int i = 0; i < 8; ++i) modelTexture[i] = m.textures[i], m.textures[i] = m.textures[i] >= 0 ? i : -1;
+    const auto program = smg::compileTev(m);
+    const auto sourceAlpha = [](int f) { return f == 4 || f == 5; };
+    const bool alphaUsed = !(m.alphaTest.compare0 == 7 && m.alphaTest.compare1 == 7) ||
+                           (m.blend.type == 1 && (sourceAlpha(m.blend.source) || sourceAlpha(m.blend.destination)));
+    const auto texel = [](const smg::ModelTexture& t, float s, float u) -> Rgba {
+        if (t.image.pixels.empty()) return {1, 1, 1, 1};
+        s -= std::floor(s), u -= std::floor(u);
+        const unsigned x = std::min(t.image.width - 1, unsigned(s * t.image.width)), y = std::min(t.image.height - 1, unsigned(u * t.image.height));
+        const std::uint32_t c = t.image.pixels[y * t.image.width + x];
+        return {(c >> 24) / 255.0f, (c >> 16 & 255) / 255.0f, (c >> 8 & 255) / 255.0f, (c & 255) / 255.0f};
+    };
+    std::mt19937 rng(7);
+    std::uniform_real_distribution<float> unit(0, 1);
+    unsigned points = 0, off = 0;
+    Measure result;
+    for (const auto& shape : model.shapes) {
+        if (shape.material != index) continue;
+        for (std::size_t v = shape.first; v + 2 < shape.first + shape.count && points < 20000; v += 3) {
+            for (int k = 0; k < 6; ++k) {
+                float w0 = unit(rng), w1 = unit(rng);
+                if (w0 + w1 > 1) w0 = 1 - w0, w1 = 1 - w1;
+                const auto& a = model.vertices[v], &b = model.vertices[v + 1], &c = model.vertices[v + 2];
+                const auto at = [&](float x, float y, float z) { return w0 * x + w1 * y + (1 - w0 - w1) * z; };
+                float color[4], uv[2][2];
+                for (int i = 0; i < 4; ++i) color[i] = at(a.color[i], b.color[i], c.color[i]);
+                for (int set = 0; set < 2; ++set)
+                    for (int i = 0; i < 2; ++i) uv[set][i] = at(a.uv[set][i], b.uv[set][i], c.uv[set][i]);
+                Inputs in{};
+                const float light = unit(rng);
+                for (int i = 0; i < 4; ++i) {
+                    const auto& channel = m.channels[i == 3 ? 1 : 0];
+                    const float material = channel.materialSource ? color[i] : m.materialColor[0][i];
+                    const float ambient = channel.ambientSource ? color[i] : m.ambientColor[0][i];
+                    in.raster[i] = channel.lighting ? std::clamp(material * std::clamp(ambient + light, 0.0f, 1.0f), 0.0f, 1.0f) : material;
+                }
+                for (int map = 0; map < 8; ++map) {
+                    if (modelTexture[map] < 0 || modelTexture[map] >= int(model.textures.size())) continue;
+                    int coord = 0;
+                    for (int s = 0; s < m.tevStageCount; ++s)
+                        if (m.stages[s].texMap == map && m.stages[s].texCoord < 8) coord = m.stages[s].texCoord;
+                    const auto& gen = m.texGens[coord];
+                    const int set = gen.source == 5 ? 1 : 0;
+                    float s = uv[set][0], t = uv[set][1];
+                    const int matrix = gen.matrix >= 30 && gen.matrix < 60 ? (gen.matrix - 30) / 3 : -1;
+                    if (matrix >= 0 && m.hasTexMatrix[matrix]) {
+                        const auto& r = m.texMatrices[matrix].uv;
+                        const float s2 = r[0] * s + r[1] * t + r[2];
+                        t = r[3] * s + r[4] * t + r[5], s = s2;
+                    }
+                    in.texture[map] = texel(model.textures[modelTexture[map]], s, t);
+                }
+                const Rgba g = tev(m, in), q = pica(program, in);
+                float gap = 0;
+                for (int i = 0; i < 3; ++i) gap = std::max(gap, std::fabs(g[i] - q[i]));
+                if (alphaUsed) gap = std::max(gap, std::fabs(g[3] - q[3]));
+                result.worst = std::max(result.worst, gap);
+                off += gap > 3 / 255.0f;
+                ++points;
+            }
+        }
+    }
+    result.share = points ? double(off) / points : 0;
+    return result;
 }
 }
 
@@ -626,7 +700,7 @@ int main(int argc, char** argv) {
     }
     if (ec) { std::fprintf(stderr,"Directory traversal: %s\n",ec.message().c_str()); return 2; }
     std::sort(archives.begin(), archives.end());
-    std::size_t tables=0, records=0, resources=0, errors=0, modelCount=0, triangles=0, materials=0, exact=0;
+    std::size_t tables=0, records=0, resources=0, errors=0, modelCount=0, triangles=0, materials=0, exact=0, visiblyOff=0;
     std::size_t bcsvInPlace=0, bcsvRepack=0, bcsvDiffer=0;
     std::vector<float> xanimeGaps;
     std::size_t brks=0, brkErrors=0, brkUnmatched=0, skinChecked=0, skinWrong=0, j3dChecked=0, j3dWrong=0, xanimeChecked=0, bcks=0, bckErrors=0;
@@ -800,15 +874,23 @@ int main(int argc, char** argv) {
             smg::Model model;
             if (smg::loadModel({storage.data()+entry.offset,entry.size},model,256u*1024*1024,error)) {
                 triangles += model.vertices.size()/3;
-                // SMG_LIST_APPROXIMATED=1: each approximated material by where it is, to study them.
-                static const bool list = std::getenv("SMG_LIST_APPROXIMATED");
-                for (const auto& material : model.materials) {
+                // SMG_LIST_APPROXIMATED=1: each approximated material by where it is, to study them; with
+                // SMG_MEASURE_APPROXIMATED=1 also how much of its own surface it draws visibly off (measureOnModel).
+                static const bool measure = std::getenv("SMG_MEASURE_APPROXIMATED"), list = measure || std::getenv("SMG_LIST_APPROXIMATED");
+                for (unsigned index = 0; index < model.materials.size(); ++index) {
+                    const auto& material = model.materials[index];
                     ++materials;
                     const auto program = smg::compileTev(material);
                     if (program.exact) ++exact;
                     else ++approximations[program.approximation];
-                    if (!program.exact && list)
-                        std::fprintf(stderr, "approximated (%s): %s :: %s :: %s\n", program.approximation, path.c_str(), entry.path.c_str(), material.name.c_str());
+                    if (program.exact || !list) continue;
+                    std::fprintf(stderr, "approximated (%s): %s :: %s :: %s", program.approximation, path.c_str(), entry.path.c_str(), material.name.c_str());
+                    if (measure) {
+                        const Measure m = measureOnModel(model, index);
+                        std::fprintf(stderr, ": %.1f%% of its surface off (worst %.3f)", 100 * m.share, m.worst);
+                        visiblyOff += m.share > 0.01;
+                    }
+                    std::fputc('\n', stderr);
                 }
                 continue;
             }
@@ -826,6 +908,8 @@ int main(int argc, char** argv) {
         std::printf("%zu models, %zu loaded, %zu triangles\n", modelCount, modelCount - failed, triangles);
         std::printf("%zu materials, %zu translated to the 3DS combiner exactly\n", materials, exact);
         for (const auto& [reason, count] : approximations) std::printf("%6zu  approximated: %s\n", count, reason.c_str());
+        if (std::getenv("SMG_MEASURE_APPROXIMATED"))
+            std::printf("%zu of the approximated draw more than 1%% of their own surface off by over 3/255\n", visiblyOff);
         std::printf("%zu BRK files, %zu failed to load, %zu name no material of their archive's models\n", brks, brkErrors, brkUnmatched);
         std::printf("%zu models reposed at their bind pose and skinned, %zu differ from what the loader baked\n", skinChecked, skinWrong);
         std::printf("%zu skeletons through JSystem's J3DModelLoader and J3DModel, %zu differ from the port's matrices\n", j3dChecked, j3dWrong);
