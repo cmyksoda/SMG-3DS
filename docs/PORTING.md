@@ -1108,7 +1108,14 @@ read only as the next stage's d, which saturates (the Starshroom's hull: vertex 
 1.5, then plus vertex color times a texture minus a half), is now kept at half scale: `halfFirst` makes (d + lerp) / 2,
 `halfSecond` adds lerp / 2, applies both biases and doubles. The half sum saturates only where the whole is at least two,
 which any total bias of -1 or more still saturates, so it's exact; one that no longer fits in six stages is compiled
-without it. 7,411 of 7,780 materials translate exactly.
+without it. A register read after another register took the combiner's previous output (the valve switch writes C2,
+then reads C2 and the older PREV) comes from the buffer the stage that made it writes (`Arg::Saved`, `producer`):
+Rosalina's hair, Bouldergeist. A constant past one minus a term is (1 - t) + (k - 1), and halved plus a term it's
+t / 2 + k / 2 (Honeyhive's sky, which clipping had turned into orange clouds on black; Bowser's lava). A lerp of
+three constants is one constant, which frees the slots the flag disc planets' panels needed. 7,442 of 7,780
+materials translate exactly; on their own triangles 40 still differ visibly, mostly sums past one that a later stage
+reads as a, b or c (the TEV keeps their low eight bits, which the PICA can't wrap: the Ghost Ship's water), recipes
+longer than six stages (the Comet Luma's body needs about eight) and SunshineMario's compares (placed nowhere).
 
 **Development settings.** Keys in `settings.ini` for development only, written back only when on: `dev.skip_story=1`
 skips the prologue's storybook and movies; `dev.gx_dump=1` dumps a frame's draws to the log once a minute;
