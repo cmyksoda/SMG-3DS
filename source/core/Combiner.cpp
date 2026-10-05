@@ -482,32 +482,45 @@ struct Compiler {
 
     Slots colorBuffer, alphaBuffer;
 
+    // Each channel's ops follow its own previous ones: an alpha chain longer than its color (or the other way round)
+    // doesn't hold the next GX stage's other channel back. Color that reads the incoming alpha starts with it, as the
+    // alpha ops after would overwrite what it reads. ready: where each channel's next ops may begin.
+    int ready[2] = {0, 0};
+    Slots stageSlots[CombinerProgram::MaxStages][2];
+
+    static bool readsAlpha(const std::vector<Op>& ops) {
+        for (const Op& op : ops)
+            for (const Arg& a : op.args)
+                if (a.kind == Arg::Prev && (a.operand == CombineOperand::Alpha || a.operand == CombineOperand::OneMinusAlpha)) return true;
+        return false;
+    }
+
     void emit(const std::vector<Op>& colorOps, const std::vector<Op>& alphaOps) {
-        const std::size_t count = std::max(colorOps.size(), alphaOps.size());
-        const int first = program.stageCount;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (program.stageCount == CombinerProgram::MaxStages) { approximate("more than six stages"); return; }
-            const int index = program.stageCount;
-            auto& stage = program.stages[program.stageCount++];
-            Slots colorSlot, alphaSlot;
-            const Op pass{CombineFunc::Replace, {kind(Arg::Temp)}};
-            Op color = i < colorOps.size() ? colorOps[i] : pass;
-            Op alpha = i < alphaOps.size() ? alphaOps[i] : pass;
-            if (i >= alphaOps.size()) alpha.args[0].operand = CombineOperand::Alpha;
-            stage.colorFunc = color.func;
-            stage.alphaFunc = alpha.func;
-            stage.colorScale = color.scale;
-            stage.alphaScale = alpha.scale;
-            // Only the arguments a function reads: an unused one, a zero, would take a constant slot.
-            const auto arity = [](CombineFunc f) {
-                return f == CombineFunc::Replace ? 1 : f == CombineFunc::Interpolate || f == CombineFunc::MultiplyAdd ? 3 : 2;
-            };
-            for (int k = 0; k < 3; ++k) {
-                if (k < arity(color.func))
-                    place(color.args[k], false, index, first, stage, colorSlot, colorBuffer, stage.colorSource[k], stage.colorOperand[k]);
-                if (k < arity(alpha.func))
-                    place(alpha.args[k], true, index, first, stage, alphaSlot, alphaBuffer, stage.alphaSource[k], stage.alphaOperand[k]);
+        int first[2] = {ready[0], ready[1]};
+        if (readsAlpha(colorOps)) first[0] = first[1] = std::max(ready[0], ready[1]);
+        // Only the arguments a function reads: an unused one, a zero, would take a constant slot.
+        const auto arity = [](CombineFunc f) {
+            return f == CombineFunc::Replace ? 1 : f == CombineFunc::Interpolate || f == CombineFunc::MultiplyAdd ? 3 : 2;
+        };
+        for (int part = 0; part < 2; ++part) {
+            const auto& ops = part ? alphaOps : colorOps;
+            for (std::size_t i = 0; i < ops.size(); ++i) {
+                const int index = first[part] + static_cast<int>(i);
+                if (index >= static_cast<int>(CombinerProgram::MaxStages)) { approximate("more than six stages"); return; }
+                while (static_cast<int>(program.stageCount) <= index) {
+                    program.stages[program.stageCount] = CombineStage{};
+                    stageSlots[program.stageCount][0] = stageSlots[program.stageCount][1] = Slots{};
+                    ++program.stageCount;
+                }
+                auto& stage = program.stages[index];
+                const Op& op = ops[i];
+                (part ? stage.alphaFunc : stage.colorFunc) = op.func;
+                (part ? stage.alphaScale : stage.colorScale) = op.scale;
+                for (int k = 0; k < arity(op.func); ++k)
+                    place(op.args[k], part == 1, index, first[part], stage, stageSlots[index][part], part ? alphaBuffer : colorBuffer,
+                          part ? stage.alphaSource[k] : stage.colorSource[k], part ? stage.alphaOperand[k] : stage.colorOperand[k]);
             }
+            ready[part] = first[part] + static_cast<int>(ops.size());
         }
     }
 
@@ -608,6 +621,7 @@ struct Compiler {
             auto& pass = program.stages[program.stageCount++];
             pass.colorSource[0] = pass.alphaSource[0] = CombineSource::Constant;
         }
+        ready[0] = ready[1] = static_cast<int>(program.stageCount);
         for (unsigned i = 0; i < m.tevStageCount; ++i) {
             const auto& s = m.stages[i];
             Range results[2]{stageRange(s, false), stageRange(s, true)};

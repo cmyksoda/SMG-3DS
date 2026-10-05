@@ -625,6 +625,40 @@ void gearmoBody(std::mt19937& rng) {
     }
 }
 
+// Good Egg's rolling Chain Chomp (wanwanrolling.bdl WanwanRollingBody): an alpha chain of four ops beside a color chain of
+// two in the first two stages. Kept in step, the channels took eight combiner stages; each following its own ops, six.
+void chainChompBody(std::mt19937& rng) {
+    smg::ModelMaterial m;
+    for (int i = 0; i < 3; ++i) m.textures[i] = i;
+    m.tevColors[0] = {1, 1, 1, -134 / 255.0f};
+    m.tevColors[1] = {0, 0, 0, 106 / 255.0f};
+    m.tevColors[2] = {0, 0, 0, 1};
+    m.konstColors[0] = {1, 1, 1, 10 / 255.0f};
+    m.konstColors[1] = m.konstColors[2] = m.konstColors[3] = {1, 1, 1, 1};
+    m.tevStageCount = 3;
+    const std::uint8_t color[3][4]{{15, 8, 10, 15}, {15, 2, 3, 0}, {1, 10, 8, 0}};
+    const std::uint8_t alpha[3][4]{{4, 2, 5, 1}, {7, 5, 0, 7}, {0, 7, 7, 7}};
+    const std::uint8_t map[3]{0, 0, 2}, konst[3][2]{{0x0c, 0x05}, {0x07, 0x00}, {0x0c, 0x1c}};
+    for (int i = 0; i < 3; ++i) {
+        auto& s = m.stages[i];
+        s = {};
+        std::copy(color[i], color[i] + 4, s.colorIn), std::copy(alpha[i], alpha[i] + 4, s.alphaIn);
+        s.texMap = s.texCoord = map[i], s.channel = 4, s.konstColor = konst[i][0], s.konstAlpha = konst[i][1];
+    }
+    m.stages[0].alphaScale = 1;
+    m.stages[1].colorBias = 2, m.stages[1].colorScale = 3, m.stages[1].alphaScale = 3, m.stages[1].alphaClamp = 0;
+    m.stages[2].colorScale = 1, m.stages[2].alphaClamp = 0;
+    const auto program = smg::compileTev(m);
+    check(program.exact && program.stageCount <= smg::CombinerProgram::MaxStages, "the Chain Chomp's body translates exactly");
+    for (int i = 0; i < 300; ++i) {
+        const auto in = byteInputs(rng);
+        if (same(gx(m, in), pica(program, in))) continue;
+        dump(m, program, in);
+        check(false, "and matches GX on byte inputs");
+        break;
+    }
+}
+
 int runCombinerTests() {
     std::mt19937 rng(1234);
     realMaterial(rng);
@@ -637,6 +671,7 @@ int runCombinerTests() {
     waterPasses(rng);
     electricRail(rng);
     gearmoBody(rng);
+    chainChompBody(rng);
     randomMaterials(rng);
     std::printf("%u TEV combiner checks passed\n", checks);
     return 0;
