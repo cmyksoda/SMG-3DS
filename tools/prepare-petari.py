@@ -921,10 +921,12 @@ adapt("src/Game/LiveActor/LiveActor.cpp", "Game/LiveActor/LiveActor.cpp", [
    reason="sound comes with the audio system")
 
 # The Binder's flags are a byte of bitfields, which these set by its mask: 0x20 is _2 for Metrowerks (first field in
-# the top bit) and _5 for GCC (first in the bottom), so the field is named instead.
+# the top bit) and _5 for GCC (first in the bottom), so the field is named instead; 0x80 is _0.
 adapt("src/Game/Util/LiveActorUtil.cpp", "Game/Util/LiveActorUtil.cpp", [
     ("        *(u8*)&pActor->mBinder->_1EC |= 0x20;", "        pActor->mBinder->_1EC._2 = true;", 1),
     ("        *(u8*)&pActor->mBinder->_1EC &= ~0x20;", "        pActor->mBinder->_1EC._2 = false;", 1),
+    ("        s8* pFlags = (s8*)&pActor->mBinder->_1EC;\n        s32 flags = *pFlags;\n        flags &= 0xFFFFFF7F;\n        *pFlags = flags;",
+     "        pActor->mBinder->_1EC._0 = false;", 1),
 ])
 
 # Actors: what LiveActor, its sensors and its Binder call from the utility files, which reach the whole game.
