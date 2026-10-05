@@ -1214,8 +1214,12 @@ adapt("include/Game/LiveActor/ShadowVolumeDrawer.hpp", "include/Game/LiveActor/S
      "    virtual void loadModelDrawMtx() const;\n    virtual void drawShape() const;", 1),
 ])
 # The game asks for area managers by name many times a frame, each a strstr through every manager; a name's index is
-# fixed by cCreateTable, so the game's own thread remembers it by the name's address and text.
+# fixed by cCreateTable, so the game's own thread remembers it by the name's address and text. A miss still matches
+# names as a prefix compare: strstr looked for the name anywhere before checking it was at the start (1.4% of Snow
+# Capsule's game thread went there).
 adapt("src/Game/AreaObj/AreaObjContainer.cpp", "Game/AreaObj/AreaObjContainer.cpp", [
+    ("            const char* pMatch = strstr(pName, pManager->mName);\n            return pMatch != nullptr && pMatch == pName;",
+     "            return strncmp(pName, pManager->mName, strlen(pManager->mName)) == 0;", 1),
     ("AreaObjMgr* AreaObjContainer::getManager(const char* pName) const {\n"
      "    return *std::find_if(mManagerArray, mManagerArray + mNumManagers, std::binder2nd< IsManagerName, const char* >(IsManagerName(), pName));\n}",
      "extern \"C\" int smgOnGameThread();  // source/compat/GxFifo.cpp\n\n"
