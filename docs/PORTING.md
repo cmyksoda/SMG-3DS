@@ -860,8 +860,11 @@ models (Honeyhive's swaying flowers and grass) draw from vertices written into o
 instances of one model share a list, each with its own deformed arrays. Such a mesh keeps its triangles and is decoded
 again (`GxVertexPipeline::refreshMesh`: each vertex taken from the list by the mesh's origin map, keeping its slot)
 whenever its arrays move and once a frame, into an arena owned by the frame's parity (1 MB each, outside the mesh
-budget, reused from the start two frames later). At Honeyhive that is 12 refreshes a frame (960 vertices), and the
-2,900 vertices a frame its moving lists sent to the CPU path stay on the GPU. `dev.gx_check=1` checks every
+budget, reused from the start two frames later). An unlit mesh's vertices keep the list's order and are decoded
+straight into place; a lit one's groups gather them from a scratch kept between frames; and a command list's refreshes
+flush the cache once, with its vertices, not once each. At Honeyhive's start that is 69 refreshes a frame (6,378
+vertices, about 7 ms on Azahar's clock, mostly decoding attributes), and the vertices its moving lists sent to the
+CPU path stay on the GPU. `dev.gx_check=1` checks every
 refresh bit for bit against the mesh built anew.
 
 **The DSP on its own core.** The Wii's DSP ran JAudio2's microcode beside the CPU, answering its mail by interrupt;
@@ -981,7 +984,12 @@ marked by a span pass (`meshSpan`) so it is built once, not twice.
 over, nothing let them go: a new scene's files read over an old scene's memory left a texture of the same size and
 format at the same address showing the old picture, and the map only grew. `JKRDvdRipper` calls `DCInvalidateRange`
 over each file it reads and `DCStoreRange` after decompressing, which reach `gxRenderMemoryChanged`, so textures mark
-their pages as meshes do and a change over one drops it (the frame so far is ended first, as for a mesh). The perf
+their pages as meshes do and a change over one drops it. A dropped texture is kept aside until the next
+`C3D_FrameBegin` (which waits for the GPU to finish what was queued) and freed then, so the frame isn't ended for it:
+Snow Capsule's `SnowFloor` redraws a 128x128 I8 footprint texture every frame, and those pauses were 1.8 ms a frame.
+A power-of-two I8 texture also goes straight into LA8 (`tileIntensity8`, both bytes the intensity, rows from the
+bottom in 8x8 Morton tiles) instead of being decoded to RGBA and tiled: Snow Capsule's texture work went from 8.5 to
+3.5 ms a frame (its game logic, 10.6 ms a step, still holds it at 28 fps). The perf
 line counts textures kept and dropped, and how much of the free store is taken. Converting a model's textures ahead
 on core 1 was tried and taken out: 837 textures are loaded by the title (resident particles, layouts and objects) and
 the free store has about 12 MB beside the Wii arenas, so results held for later were evicted before their first draw
