@@ -1841,6 +1841,33 @@ adapt("src/Game/System/WPadPointer.cpp", "Game/System/WPadPointer.cpp", [
     ("    static const s32 sIsValidInScreenTime = 5;", "    static const s32 sIsValidInScreenTime = 0;", 1),
     ("    static const s32 sIsInValidOutScreenTime = 10;", "    static const s32 sIsInValidOutScreenTime = 0;", 1),
 ])
+# Eight of these run each logic step (a remote and a Nunchuk on each of four channels, three with nothing there), each
+# averaging and turning over its last 128 samples. Those read nothing else, so while the 128 are one value (no
+# controller, or a remote held still) they're kept as they were: the same results without the loops.
+adapt("include/Game/System/WPadAcceleration.hpp", "include/Game/System/WPadAcceleration.hpp", [
+    ("    void updateIsStable();\n", "    void updateIsStable();\n    void notePush();\n", 1),
+    ("    /* 0x64C */ s32 _64C;\n", "    /* 0x64C */ s32 _64C;\n    s32 mSameRun;          // samples in a row equal to the one before\n"
+     "    bool mWindowChanged;  // this update changed the last 128\n", 1),
+])
+adapt("src/Game/System/WPadAcceleration.cpp", "Game/System/WPadAcceleration.cpp", [
+    ("#include <revolution/wpad.h>\n", "#include <revolution/wpad.h>\n#include <cstring>\n", 1),
+    ("      _648(), _64C() {", "      _648(), _64C(), mSameRun(), mWindowChanged() {", 1),
+    ("    s32 statusCount = mPad->getValidStatusCount();\n", "    s32 statusCount = mPad->getValidStatusCount();\n    mWindowChanged = false;\n", 1),
+    ("        mHistory[_624] = previous;\n", "        mHistory[_624] = previous;\n        notePush();\n", 1),
+    ("        mHistory[_624] = acceleration;\n", "        mHistory[_624] = acceleration;\n        notePush();\n", 1),
+    ("    _62C.zero();\n\n    for (s32 j = 0; j < _628; j++) {",
+     "    if (_628 >= 128 && !mWindowChanged) {\n        updateIsStable();\n        return;\n    }\n\n    _62C.zero();\n\n"
+     "    for (s32 j = 0; j < _628; j++) {", 1),
+    ("void WPadAcceleration::updateIsStable() {",
+     "// Before _628 counts the sample just written: a run past 128 means the last 128 were already that one value.\n"
+     "void WPadAcceleration::notePush() {\n"
+     "    const s32 before = _624 == 0 ? 127 : _624 - 1;\n"
+     "    const bool same = _628 > 0 && !std::memcmp(&mHistory[_624], &mHistory[before], sizeof(TVec3f));\n"
+     "    mSameRun = same ? (mSameRun < 1000 ? mSameRun + 1 : mSameRun) : 1;\n"
+     "    mWindowChanged = mWindowChanged || mSameRun <= 128;\n"
+     "}\n\n"
+     "void WPadAcceleration::updateIsStable() {", 1),
+])
 # A mix configuration is written as a word (its bus in the high byte, then two nibbles) and read through bitfields,
 # which Metrowerks lays out from the word's first byte and GCC on ARM from its low end: here they name the same bits.
 adapt("libs/JSystem/include/JSystem/JAudio2/JASChannel.hpp", "include/JSystem/JAudio2/JASChannel.hpp", [
