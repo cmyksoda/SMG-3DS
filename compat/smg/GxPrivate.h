@@ -24,6 +24,8 @@ void smgGXMatrixArray(unsigned array, const void* base, unsigned stride);
 void smgGXLoadIndexedNow(unsigned command, unsigned index, unsigned target);
 // Bytes into the FIFO as they are (a display list's commands sent inline).
 void smgGXFifoBytes(const void* bytes, unsigned size);
+// Floats into the FIFO, each as GX_WRITE_F32 writes it, with one look for room (a matrix's rows).
+void smgGXFifoFloats(const f32* values, unsigned count);
 // GXCallDisplayList with the list's commands copied into the FIFO now (GXDisplayList.c): for lists the game rewrites
 // every frame, which the render thread would otherwise read a frame late.
 void smgGXCallDisplayListNow(const void* list, u32 nbytes);

@@ -2231,16 +2231,12 @@ gx_matrices_c = """#ifdef __MWERKS__
 """ + gx_matrices + """#else
 static void WriteMTXPS3x3from3x4(void* mtx, volatile void*) {
     const f32(*m)[4] = (const f32(*)[4])mtx;
-    for (int row = 0; row < 3; ++row) for (int col = 0; col < 3; ++col) GX_WRITE_F32(m[row][col]);
+    for (int row = 0; row < 3; ++row) smgGXFifoFloats(m[row], 3);
 }
 
-static void WriteMTXPS4x3(const f32 src[3][4], volatile void*) {
-    for (int row = 0; row < 3; ++row) for (int col = 0; col < 4; ++col) GX_WRITE_F32(src[row][col]);
-}
+static void WriteMTXPS4x3(const f32 src[3][4], volatile void*) { smgGXFifoFloats(&src[0][0], 12); }
 
-static void WriteMTXPS4x2(const f32 mtx[3][4], volatile void*) {
-    for (int row = 0; row < 2; ++row) for (int col = 0; col < 4; ++col) GX_WRITE_F32(mtx[row][col]);
-}
+static void WriteMTXPS4x2(const f32 mtx[3][4], volatile void*) { smgGXFifoFloats(&mtx[0][0], 8); }
 #endif
 
 """

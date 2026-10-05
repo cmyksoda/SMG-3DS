@@ -331,6 +331,35 @@ void smgGXFifoFlush() { flushIfBuffering(); }
 // The game's own thread: the one that writes GX (GXInit's), for memos only it keeps.
 int smgOnGameThread() { return getThreadLocalStorage() == smgFifoThread; }
 
+namespace {
+// The write point sits at any byte (commands are 1, 5 or 9 bytes long), where newlib's memcpy goes a byte at a time:
+// words instead, the stores unaligned.
+void copyToFifo(u8* to, const u8* from, unsigned size) {
+    for (; size >= 4; size -= 4, to += 4, from += 4) {
+        u32 word;
+        __builtin_memcpy(&word, from, 4);
+        __builtin_memcpy(to, &word, 4);
+    }
+    while (size--) *to++ = *from++;
+}
+} // namespace
+
+void smgGXFifoFloats(const f32* values, unsigned count) {
+    const unsigned bytes = 4 * count;
+    if (getThreadLocalStorage() != smgFifoThread || !sRenderThread) {
+        for (unsigned i = 0; i < count; ++i) smgGXFifo_f32(values[i]);
+        return;
+    }
+    if (smgFifoAt + bytes > smgFifoEnd) makeRoom(bytes);
+    for (unsigned i = 0; i < count; ++i) {
+        u32 word;
+        __builtin_memcpy(&word, &values[i], 4);
+        word = __builtin_bswap32(word);
+        __builtin_memcpy(smgFifoAt + 4 * i, &word, 4);
+    }
+    smgFifoAt += bytes;
+}
+
 void smgGXFifoBytes(const void* bytes, unsigned size) {
     const u8* from = static_cast<const u8*>(bytes);
     if (getThreadLocalStorage() != smgFifoThread || !sRenderThread) {
@@ -340,7 +369,7 @@ void smgGXFifoBytes(const void* bytes, unsigned size) {
     while (size) {
         if (smgFifoAt == smgFifoEnd) makeRoom(1);
         const unsigned n = std::min<unsigned>(size, static_cast<unsigned>(smgFifoEnd - smgFifoAt));
-        std::memcpy(smgFifoAt, from, n);
+        copyToFifo(smgFifoAt, from, n);
         smgFifoAt += n, from += n, size -= n;
     }
 }
