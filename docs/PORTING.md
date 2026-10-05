@@ -533,6 +533,13 @@ It can't see every returned local: `SimpleEffectObj::getClippingCenterOffset` re
 effect (Gateway) crashed in `SimpleEffectObj::init`. A local static holds it now, as for the temporaries in
 `MorphItemObjNeo.hpp` and `EffectObjGravityDust`; a search of the decomp for `return &name;` after a local
 declaration finds no other.
+A read past the end that no compiler can see: `SpinDriverPathStorage` keeps each galaxy's launch-star path ranges
+in one slot per scenario, sized by `getScenarioNum`, which skips hidden scenarios. A hidden scenario is the last one, so
+playing it (Freezeflame's "Top of the Ice Mountain", the sixth) indexes one slot past the array, into the next heap
+block's header (the `'HM'` magic as a pointer, `0xFF00484D` here). The Wii walked away from it and the port crashed
+loading the galaxy; such a scenario now gets the game's own -1, no stored range, so its paths draw from the start.
+No other array is sized by that count. Only scenario 1 of each galaxy has been swept so far: Space Junk's hidden sixth
+(StarDustGalaxy) still stops in `MR::getPlacedZoneId` as it loads, and Freezeflame's falls to about 1.4 fps a little way in.
 
 **Which zone a placed object is in.** `StageDataHolder::findPlacedStageDataHolder` told an object's zone (whose rails,
 start points and matrix it uses) by address: whether the object's row lies between the lowest of a holder's tables and
