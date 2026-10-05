@@ -1466,7 +1466,7 @@ adapt("src/Game/System/GameSystem.cpp", "Game/System/GameSystem.cpp", [
 ])
 
 # For development (settings.ini dev.galaxy=GALAXY N, off unless set): the first galaxy played after the file select is
-# that one, scenario N.
+# that one, scenario N. A hidden star's N plays the scenario it is placed in, as the scenario select chooses it.
 adapt("src/Game/System/GameSequenceProgress.cpp", "Game/System/GameSequenceProgress.cpp", [
     ('#include "Game/System/GameSequenceProgress.hpp"\n',
      '#include "Game/System/GameSequenceProgress.hpp"\n\nextern "C" const char* smgDevGalaxy(int* scenario);  // source/compat/Kpad.cpp\n'
@@ -1479,6 +1479,8 @@ adapt("src/Game/System/GameSequenceProgress.cpp", "Game/System/GameSequenceProgr
      "        !MR::isEqualString(moveArg.mStageName, \"FileSelect\")) {\n"
      "        OSReport(\"dev.galaxy: %s %ld instead of %s %ld\\n\", devGalaxy, (long)devScenario, moveArg.mStageName, (long)moveArg.mScenarioNo);\n"
      "        sDevGalaxyTaken = true;\n        moveArg.mStageName = devGalaxy;\n        moveArg.mScenarioNo = moveArg._C = devScenario;\n"
+     "        if (MR::makeGalaxyStatusAccessor(devGalaxy).isHiddenStar(devScenario)) {\n"
+     "            moveArg.mScenarioNo = MR::getPlacedHiddenStarScenarioNo(devGalaxy, devScenario);\n        }\n"
      "        mStorySequenceExecutor->forceStop();\n    }\n"
      "    if (moveArg.mStageName != nullptr && smgDevMarioStart(moveArg.mStageName) >= 0) {\n"
      "        mStorySequenceExecutor->forceStop();\n    }\n\n"
