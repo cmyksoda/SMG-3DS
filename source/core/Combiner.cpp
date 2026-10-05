@@ -282,7 +282,10 @@ struct Compiler {
             // d + a(1 - c) + bc reads the incoming previous value in the first op. A signed or halved
             // sum instead needs the whole lerp in one op, and gets d back from the buffer.
             ops.push_back({CombineFunc::MultiplyAdd, {a, invert(c), d}});
-            ops.push_back({CombineFunc::MultiplyAdd, {b, c, temp}});
+            if (b.kind == Arg::Constant && c.kind == Arg::Constant)  // one constant, not two slots
+                ops.push_back({CombineFunc::Add, {temp, constant(b.value[0] * c.value[0], b.value[1] * c.value[1], b.value[2] * c.value[2])}});
+            else
+                ops.push_back({CombineFunc::MultiplyAdd, {b, c, temp}});
         } else {
             if (form == Product) ops.push_back({CombineFunc::Modulate, {x, y}});
             else ops.push_back({CombineFunc::Interpolate, {b, a, c}});
@@ -367,14 +370,19 @@ struct Compiler {
         return program.stageCount + ops.size() > CombinerProgram::MaxStages ? unsupported() : ops;
     }
 
-    // lerp(a, b, c) as one term: an argument as it is, or ops leaving it in temp.
+    // lerp(a, b, c) as one term of a chain: an argument as it is, or ops leaving it in temp. Between two constants, a
+    // below b, it is c times the slope with a joining the chain's constant.
     Arg lerpTerm(const Arg& a, const Arg& b, const Arg& c, bool alpha, std::vector<Op>& ops) {
         const Arg temp = kind(Arg::Temp, alpha ? CombineOperand::Alpha : CombineOperand::Color);
         if (zero(c) || a == b) return a;
         if (one(c)) return b;
         if (zero(a) && zero(b)) return kind(Arg::Zero);
+        const bool rising = std::equal(a.value, a.value + 3, b.value, [](float x, float y) { return x <= y; });
         if (zero(a)) ops.push_back({CombineFunc::Modulate, {b, c}});
-        else if (zero(b)) ops.push_back({CombineFunc::Modulate, {a, invert(c)}});
+        else if (a.kind == Arg::Constant && b.kind == Arg::Constant && c.kind != Arg::Constant && c.kind != Arg::One && rising) {
+            ops.push_back({CombineFunc::Modulate, {c, constant(b.value[0] - a.value[0], b.value[1] - a.value[1], b.value[2] - a.value[2])}});
+            for (int i = 0; i < 3; ++i) chains[alpha ? 1 : 0].k[i] += a.value[i];
+        } else if (zero(b)) ops.push_back({CombineFunc::Modulate, {a, invert(c)}});
         else ops.push_back({CombineFunc::Interpolate, {b, a, c}});
         return temp;
     }
