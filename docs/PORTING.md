@@ -1018,7 +1018,9 @@ nothing but that window, so while its 128 samples are one value the adapted `upd
 samples in a row as they come) and only runs the stateful `updateIsStable`: the same results, bit for bit. Logic went
 from 10.45 to 10.1 ms a step at Snow Capsule (which now holds 30 fps in most windows) and from 5.5 to 5.1 at the
 Observatory. Area managers found by name (`AreaObjContainer::getManager`, memoized per name address) match a miss as
-a prefix compare instead of `strstr` over the whole name.
+a prefix compare instead of `strstr` over the whole name. A quarter of Dusty Dune's game thread is its blowing sand
+(`JPADrawDirection`, per particle); the vector `MR::isNearZero` each one asks is inline now (the same six compares),
+which took its draw from about 4.25 to 4.1 ms a step.
 
 **A frame in flight.** At the hilltop view of the castle the game's thread needed about 27.6 ms of work a frame and
 the render thread about 28.4, both under the 33.4 of a 30 fps frame, yet frames took about 38: the step after a drawn
