@@ -776,6 +776,37 @@ void skyPastOne(std::mt19937& rng) {
     }
 }
 
+// A flag disc planet's red panel: stage 1 lerps C1 and C0 by C0's negative alpha (wrapped as a c input), three
+// constants that are one, which leaves room for the others.
+void flagPanel(std::mt19937& rng) {
+    smg::ModelMaterial m;
+    m.textures[0] = 0, m.textures[1] = 1;
+    m.tevColors[0] = {255 / 255.0f, 202 / 255.0f, 218 / 255.0f, -89 / 255.0f};
+    m.tevColors[1] = {113 / 255.0f, 165 / 255.0f, 72 / 255.0f, 88 / 255.0f};
+    m.tevColors[2] = {0, 0, 0, 1};
+    m.tevStageCount = 3;
+    const std::uint8_t color[3][4]{{15, 8, 10, 15}, {4, 2, 3, 0}, {1, 10, 8, 0}};
+    const std::uint8_t alpha[3][4]{{4, 2, 5, 1}, {7, 5, 0, 7}, {0, 7, 7, 7}};
+    const std::uint8_t map[3]{0, 0, 1}, konst[3][2]{{0x0c, 0x05}, {0x07, 0x00}, {0x0c, 0x1c}};
+    for (int i = 0; i < 3; ++i) {
+        auto& s = m.stages[i];
+        s = {};
+        std::copy(color[i], color[i] + 4, s.colorIn), std::copy(alpha[i], alpha[i] + 4, s.alphaIn);
+        s.texMap = s.texCoord = map[i], s.channel = 4, s.konstColor = konst[i][0], s.konstAlpha = konst[i][1];
+    }
+    m.stages[0].alphaScale = 1;
+    m.stages[1].colorBias = 2, m.stages[1].colorScale = 3, m.stages[1].alphaScale = 3, m.stages[1].alphaClamp = 0;
+    m.stages[2].colorScale = 1, m.stages[2].alphaClamp = 0;
+    const auto program = smg::compileTev(m);
+    for (int i = 0; i < 300; ++i) {
+        const auto in = byteInputs(rng);
+        if (same(gx(m, in), pica(program, in))) continue;
+        dump(m, program, in);
+        check(false, "a flag panel's lerp of constants matches GX on byte inputs");
+        break;
+    }
+}
+
 int runCombinerTests() {
     std::mt19937 rng(1234);
     realMaterial(rng);
@@ -786,6 +817,7 @@ int runCombinerTests() {
     starshroomHull(rng);
     valveSwitch(rng);
     skyPastOne(rng);
+    flagPanel(rng);
     compareWithoutC(rng);
     compareAddsC(rng);
     sixTapBlur(rng);

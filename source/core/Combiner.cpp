@@ -257,6 +257,14 @@ struct Compiler {
         else if (zero(a)) { form = Product; x = b; y = c; }
         else if (zero(b)) { form = Product; x = a; y = invert(c); }
         else form = Lerp;
+        // A lerp of constants is one constant, taking one slot instead of up to three.
+        const auto fixed = [](const Arg& v) { return v.kind == Arg::Constant || v.kind == Arg::One || v.kind == Arg::Zero; };
+        if (form != None && form != Single && fixed(a) && fixed(b) && fixed(c)) {
+            const auto value = [](const Arg& v, int i) { return v.kind == Arg::One ? 1.0f : v.kind == Arg::Zero ? 0.0f : v.value[i]; };
+            float l[3];
+            for (int i = 0; i < 3; ++i) l[i] = value(a, i) * (1 - value(c, i)) + value(b, i) * value(c, i);
+            form = Single, x = constant(l[0], l[1], l[2]);
+        }
         if (form == Single && zero(x)) form = None;
         if (!inUnit(d)) return signedSum(form, x, y, a, b, c, d, subtract, bias, scale, alpha);
 
