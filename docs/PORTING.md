@@ -824,9 +824,11 @@ table makes alpha read red and color read alpha), its color runs the alpha chain
 EQUAL alpha test keeps only the lines (blend one, one). Only where GX's sum saturates do the passes differ, as they
 saturate apart. `CombinerTests` checks Beach Bowl's water this way against the TEV, on and off the lines. A pass that
 samples what the program does (the lines' pass) draws the same vertices again, a batch's or a mesh's; one that samples
-other coordinates (Beach Bowl's screen term) takes the CPU path, each primitive's vertices made again under its program
-beside the program's, its indices drawn once with the batch. Beach Bowl's water costs about 5 ms a frame more this
-way; at 400x240 its lines come out as scattered bright pixels (how closely they match the Wii's is unchecked).
+other coordinates (Beach Bowl's screen term) takes the CPU path beside the program's vertices, its indices drawn once
+with the batch: it takes the program's clip positions and colors (the same state but for the program) and works out
+only its own texture coordinates, reading just the position and normal when its texgens use only those
+(`GxVertexPipeline::runPass`; lines, points and atlases still remake everything). Standing at Beach Bowl's start that
+took the CPU path from 13.1 to 12.1 ms a frame, and the water galaxies' render threads are mostly that path now; at 400x240 its lines come out as scattered bright pixels (how closely they match the Wii's is unchecked).
 `OceanSphere` (Drip Drop, Good Egg, Bonefin) blends between two colors by the product instead of adding to it, which no
 added pass reproduces; `equalLine` draws it in one program instead (below).
 
@@ -994,6 +996,15 @@ line counts textures kept and dropped, and how much of the free store is taken. 
 on core 1 was tried and taken out: 837 textures are loaded by the title (resident particles, layouts and objects) and
 the free store has about 12 MB beside the Wii arenas, so results held for later were evicted before their first draw
 (14 of 994 used), and a larger budget starved mesh building.
+
+**Work the game does for nothing.** Every logic step `WPadHolder` updates two acceleration trackers on each of the four
+channels (the remote and a Nunchuk), three channels with nothing on them, and each averages and turns over its last
+128 samples (`WPadAcceleration`, about a tenth of Snow Capsule's game thread by the sampler). Their results read
+nothing but that window, so while its 128 samples are one value the adapted `update` keeps them (counting equal
+samples in a row as they come) and only runs the stateful `updateIsStable`: the same results, bit for bit. Logic went
+from 10.45 to 10.1 ms a step at Snow Capsule (which now holds 30 fps in most windows) and from 5.5 to 5.1 at the
+Observatory. Area managers found by name (`AreaObjContainer::getManager`, memoized per name address) match a miss as
+a prefix compare instead of `strstr` over the whole name.
 
 **A frame in flight.** At the hilltop view of the castle the game's thread needed about 27.6 ms of work a frame and
 the render thread about 28.4, both under the 33.4 of a 30 fps frame, yet frames took about 38: the step after a drawn
