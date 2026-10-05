@@ -2135,6 +2135,11 @@ adapt("src/Game/Player/MarioEffect.cpp", "Game/Player/MarioEffect.cpp", [
     ("            u8 mByte0;\n            u8 mByte1;\n            u8 mByte2;\n            u8 mByte3;\n",
      "            u8 mByte3;\n            u8 mByte2;\n            u8 mByte1;\n            u8 mByte0;\n", 2),
 ])
+# A spiral camera's start and end times are the halves of a BCSV word, the Wii's first half being the top one.
+adapt("src/Game/Camera/CamTranslatorSpiral.cpp", "Game/Camera/CamTranslatorSpiral.cpp", [
+    ("    s32 startTime = reinterpret_cast< s16* >(&general->mNum1)[0];\n    s32 endTime = reinterpret_cast< s16* >(&general->mNum1)[1];",
+     "    s32 startTime = s16(general->mNum1 >> 16);\n    s32 endTime = s16(general->mNum1);", 1),
+])
 # The draw-state bits these constants set as Metrowerks packs bitfields (from the top): fields 0xB and 0x12.
 adapt("src/Game/Player/MarioJump.cpp", "Game/Player/MarioJump.cpp", [
     ("        _1C_WORD |= 0x00100000;", "        _1C._B = true;", 1),
