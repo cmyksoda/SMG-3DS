@@ -2514,6 +2514,14 @@ adapt("src/Game/System/ResourceHolder.cpp", "Game/System/ResourceHolder.cpp", [
     ('                snprintf(path, 128, "%s/%s", pPath, finder->mName);',
      '                snprintf(path, 128, "%s/%s", pPath ? pPath : "", finder->mName);', 1),
 ])
+# A hidden scenario (Freezeflame's sixth) has no slot, as getScenarioNum skips it, and the Wii read the heap block past
+# the array; here its launch stars store no path range, the game's own -1.
+adapt("src/Game/System/SpinDriverPathStorage.cpp", "Game/System/SpinDriverPathStorage.cpp", [
+    ("    return findFromGalaxy(pGalaxyName)->getScenarioStorage(scenarioNo).setup(zoneId, spinDriverId, pDrawRange);",
+     "    SpinDriverPathStorageGalaxy* pGalaxy = findFromGalaxy(pGalaxyName);\n"
+     "    if (scenarioNo > pGalaxy->mNumScenarios) {\n        return -1;\n    }\n"
+     "    return pGalaxy->getScenarioStorage(scenarioNo).setup(zoneId, spinDriverId, pDrawRange);", 1),
+])
 
 # A copy this script no longer writes would still be preferred over upstream's file by the build (and a stale
 # header over upstream's by the compiler), so it goes; clean the build directories after this removes a header.
