@@ -810,9 +810,84 @@ CombinerProgram compile(const ModelMaterial& material, bool known, bool color1) 
     return shifted.exact || std::strcmp(shifted.approximation, "more than two constants") ? shifted : program;
 }
 void clearDead(ModelMaterial& m);
+
+// The game's water contour bands: P = 2 K0 T0 T1 from two gray textures, then P + (P.r > A0 ? C0 : 0) unclamped, read
+// as the weight of lerp(C1, K1, c), whose low eight bits wrap: a bright band where A0 < P < 1 - C0, P shifted down
+// above it. Six stages carry P at K0 / 2 scale beside two sharpened steps (at A0 and 1 - C0) and blend to K1 inside
+// their window. Approximate: P past K0 / 2 saturates (both texels past one half) and the steps aren't sharp.
+bool wrapBand(const ModelMaterial& m, std::uint8_t grayMaps, CombinerProgram& out) {
+    if (m.tevStageCount != 4) return false;
+    const TevStage* s = m.stages;
+    const auto color = [](const TevStage& t, std::initializer_list<int> in, int op, int bias, int scale, int clamp) {
+        return std::equal(in.begin(), in.end(), t.colorIn) && t.colorOp == op && t.colorBias == bias && t.colorScale == scale &&
+               t.colorClamp == clamp && t.colorReg == 0;
+    };
+    const auto rasterAlpha = [](const TevStage& t) {
+        return t.alphaIn[0] == 5 && t.alphaIn[1] == 7 && t.alphaIn[2] == 7 && t.alphaIn[3] == 7 && !t.alphaOp && !t.alphaBias && !t.alphaScale &&
+               t.alphaReg == 0 && t.channel == 4;
+    };
+    const auto gray = [&](const TevStage& t) {
+        if (t.texMap >= 8 || m.textures[t.texMap] < 0 || !(grayMaps >> t.texMap & 1)) return false;
+        const std::uint8_t* swap = m.swapTables[t.texSwap & 3];
+        return swap[0] < 3 && swap[1] < 3 && swap[2] < 3;
+    };
+    if (!color(s[0], {15, 14, 8, 15}, 0, 0, 0, 1) || !color(s[1], {15, 0, 8, 15}, 0, 0, 1, 1) || !color(s[2], {0, 3, 2, 0}, 8, 3, 0, 0) ||
+        !color(s[3], {4, 14, 0, 15}, 0, 0, 0, 1) || !rasterAlpha(s[2]) || !rasterAlpha(s[3]) || !gray(s[0]) || !gray(s[1]))
+        return false;
+    const auto& c0 = m.tevColors[0];
+    const float k0 = konst(m, s[0].konstColor, 0), a0 = c0[3], k = 256 / 255.0f - c0[0], q = k0 / 2;
+    if (konst(m, s[0].konstColor, 1) != k0 || konst(m, s[0].konstColor, 2) != k0 || c0[1] != c0[0] || c0[2] != c0[0]) return false;
+    const float a1 = a0 / q - 7 / 128.0f, b1 = k / q - 0.00686f;
+    float c1[3], d[3];
+    for (int i = 0; i < 3; ++i) c1[i] = wrapByte(m.tevColors[1][i]), d[i] = konst(m, s[3].konstColor, i) - c1[i];
+    const auto unit = [](float v) { return v >= 0 && v <= 1; };
+    if (!(q > 0) || !(a0 >= 0) || !(a0 < k) || !(k <= 0.5f) || !unit(a1) || !unit(b1) || !unit(d[0]) || !unit(d[1]) || !unit(d[2])) return false;
+    CombinerProgram p;
+    p.unitCount = 2;
+    p.units[0] = {m.textures[s[0].texMap], static_cast<std::uint8_t>(s[0].texCoord < 8 ? s[0].texCoord : 0)};
+    p.units[1] = {m.textures[s[1].texMap], static_cast<std::uint8_t>(s[1].texCoord < 8 ? s[1].texCoord : 0)};
+    using F = CombineFunc;
+    using S = CombineSource;
+    using O = CombineOperand;
+    const auto stage = [&](int i, F cf, std::uint8_t cs, std::initializer_list<std::pair<S, O>> cin, F af, std::uint8_t as,
+                           std::initializer_list<std::pair<S, O>> ain) -> CombineStage& {
+        CombineStage& t = p.stages[i];
+        t.colorFunc = cf, t.colorScale = cs, t.alphaFunc = af, t.alphaScale = as;
+        int n = 0;
+        for (const auto& [source, operand] : cin) t.colorSource[n] = source, t.colorOperand[n++] = operand;
+        n = 0;
+        for (const auto& [source, operand] : ain) t.alphaSource[n] = source, t.alphaOperand[n++] = operand;
+        return t;
+    };
+    // Q = 4 T0 T1 everywhere, so P = q Q.
+    stage(0, F::Modulate, 4, {{S::Texture0, O::Red}, {S::Texture1, O::Red}}, F::Modulate, 4, {{S::Texture0, O::Red}, {S::Texture1, O::Red}});
+    // Rising ramps toward each step in red and blue; alpha P + 1/2 - k.
+    CombineStage& rise = stage(1, F::Subtract, 4, {{S::Previous, O::Color}, {S::Constant, O::Color}}, F::MultiplyAdd, 1,
+                               {{S::Previous, O::Alpha}, {S::Constant, O::Alpha}, {S::Buffer, O::Alpha}});
+    rise.constant = {a1, 0, b1, q};
+    // Red falls from one at A0; blue is k until the step at 1 - C0.
+    CombineStage& fall = stage(2, F::Subtract, 4, {{S::Constant, O::Color}, {S::Previous, O::Color}}, F::Replace, 1, {{S::Previous, O::Alpha}});
+    fall.constant = {0.25f, 0, k / 4, 0};
+    // Doubled thrice: red is 1 - [P > A0], blue k (1 - [P > 1 - C0]); alpha P - k [P > 1 - C0], the wrapped weight.
+    stage(3, F::Add, 4, {{S::Previous, O::Color}, {S::Previous, O::Color}}, F::AddSigned, 1, {{S::Previous, O::Alpha}, {S::Previous, O::Blue}});
+    // C1 + (K1 - C1) weight; alpha the band, between the steps.
+    CombineStage& blend = stage(4, F::MultiplyAdd, 1, {{S::Previous, O::Alpha}, {S::Constant, O::Color}, {S::Buffer, O::Color}}, F::Modulate, 4,
+                                {{S::Previous, O::OneMinusRed}, {S::Previous, O::Blue}});
+    blend.constant = {d[0], d[1], d[2], 0};
+    // K1 inside the band; the raster's alpha, as the last GX stages give.
+    CombineStage& band = stage(5, F::Interpolate, 1, {{S::Constant, O::Color}, {S::Previous, O::Color}, {S::Previous, O::Alpha}}, F::Replace, 1,
+                               {{S::Primary, O::Alpha}});
+    for (int i = 0; i < 3; ++i) band.constant[i] = konst(m, s[3].konstColor, i);
+    p.bufferColor = {c1[0], c1[1], c1[2], 0.5f - k};
+    p.stageCount = 6;
+    p.exact = false;
+    p.approximation = "a compare's wrap band";
+    out = p;
+    return true;
+}
 } // namespace
 
-CombinerProgram compileTev(const ModelMaterial& material, bool color1FromUnit) {
+CombinerProgram compileTev(const ModelMaterial& material, bool color1FromUnit, std::uint8_t grayMaps) {
     // A register of known value read as a constant frees the previous value but takes a constant slot.
     const auto previous = compile(material, false, color1FromUnit);
     if (previous.exact) return previous;
@@ -820,10 +895,12 @@ CombinerProgram compileTev(const ModelMaterial& material, bool color1FromUnit) {
     if (constants.exact) return constants;
     // Stages that only fed a saturated result fixed whatever they give take no combiner stages.
     ModelMaterial folded = material;
-    if (!Compiler(material, false, false, color1FromUnit).foldFixed(folded)) return previous;
-    clearDead(folded);
-    for (const bool known : {false, true})
-        if (const auto program = compile(folded, known, color1FromUnit); program.exact) return program;
+    if (Compiler(material, false, false, color1FromUnit).foldFixed(folded)) {
+        clearDead(folded);
+        for (const bool known : {false, true})
+            if (const auto program = compile(folded, known, color1FromUnit); program.exact) return program;
+    }
+    if (CombinerProgram band; wrapBand(material, grayMaps, band)) return band;
     return previous;
 }
 namespace {

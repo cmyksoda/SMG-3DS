@@ -304,16 +304,18 @@ struct TevKey {
     int textures[8];
     std::uint8_t swapTables[4][4];
     std::uint8_t color1FromUnit;
+    std::uint8_t grayMaps;
     std::uint8_t count;
     TevStage stages[16];
 };
 
 std::uint32_t tevCompiles = 0;
 
-const CombinerProgram& cachedTev(const ModelMaterial& m, bool color1FromUnit = false) {
+const CombinerProgram& cachedTev(const ModelMaterial& m, bool color1FromUnit = false, std::uint8_t grayMaps = 0) {
     TevKey key;
     std::memset(static_cast<void*>(&key), 0, sizeof key);
     key.color1FromUnit = color1FromUnit;
+    key.grayMaps = grayMaps;
     key.count = std::min<std::uint8_t>(m.tevStageCount, 16);
     std::copy(m.stages, m.stages + key.count, key.stages);
     std::copy(m.tevColors, m.tevColors + 4, key.tevColors);
@@ -338,7 +340,7 @@ const CombinerProgram& cachedTev(const ModelMaterial& m, bool color1FromUnit = f
     ++tevCompiles;
     Entry& entry = cache[hash];
     entry.key = key;
-    entry.program = compileTev(m, color1FromUnit);
+    entry.program = compileTev(m, color1FromUnit, grayMaps);
     return entry.program;
 }
 } // namespace
@@ -461,7 +463,9 @@ void readProgram(const GxCommandProcessor& gpu, GxDrawState& out, bool palette) 
     readPixel(gpu, out);
     std::uint8_t identitySwap = 0;
     if (!color0CanRide(gpu, out.material, identitySwap)) {
-        out.program = cachedTev(out.material);
+        std::uint8_t grayMaps = 0;  // I4, I8, IA4 and IA8 give equal red, green and blue
+        for (int map = 0; map < 8; ++map) grayMaps = static_cast<std::uint8_t>(grayMaps | (out.textures[map].format <= 3) << map);
+        out.program = cachedTev(out.material, false, grayMaps);
         return;
     }
     // Compiled with C0 read as the rasterized color and its value left out, so every C0 shares one program.

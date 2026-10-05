@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <random>
 
 namespace {
@@ -692,6 +693,47 @@ void lavaHalved(std::mt19937& rng) {
     }
 }
 
+// The game's water contour band (the Ghost Ship cave's WaterBack_v): two gray textures, an R8 compare adding C0
+// unclamped, its sum's low eight bits the weight of the last lerp. Through wrapBand it matches the TEV almost
+// everywhere for texels up to one half (the texture's own reach); without gray maps it isn't taken.
+void waterBand(std::mt19937& rng) {
+    smg::ModelMaterial m;
+    m.textures[0] = 0, m.textures[1] = 1;
+    m.tevColors[0] = {224 / 255.0f, 224 / 255.0f, 224 / 255.0f, 28 / 255.0f};
+    m.tevColors[1] = {24 / 255.0f, 53 / 255.0f, 322 / 255.0f, 1};
+    m.konstColors[0] = {140 / 255.0f, 140 / 255.0f, 140 / 255.0f, 1};
+    m.konstColors[1] = {90 / 255.0f, 197 / 255.0f, 205 / 255.0f, 1};
+    m.tevStageCount = 4;
+    const std::uint8_t color[4][4]{{15, 14, 8, 15}, {15, 0, 8, 15}, {0, 3, 2, 0}, {4, 14, 0, 15}};
+    const std::uint8_t alpha[4][4]{{7, 6, 4, 7}, {7, 0, 4, 7}, {5, 7, 7, 7}, {5, 7, 7, 7}};
+    const std::uint8_t map[4]{0, 1, 0xFF, 0xFF}, konst[4]{0x0c, 0x0c, 0x0c, 0x0d};
+    for (int i = 0; i < 4; ++i) {
+        auto& s = m.stages[i];
+        s = {};
+        std::copy(color[i], color[i] + 4, s.colorIn), std::copy(alpha[i], alpha[i] + 4, s.alphaIn);
+        s.texMap = s.texCoord = map[i], s.channel = 4, s.konstColor = konst[i];
+    }
+    m.stages[1].colorScale = 1, m.stages[1].alphaScale = 1, m.stages[1].alphaClamp = 0;
+    m.stages[2].colorOp = 8, m.stages[2].colorBias = 3, m.stages[2].colorClamp = 0, m.stages[2].alphaClamp = 0;
+    m.stages[3].alphaClamp = 0;
+    const auto program = smg::compileTev(m, false, 0b11);
+    check(program.approximation && !std::strcmp(program.approximation, "a compare's wrap band"), "the water's contour band is recognized");
+    std::uniform_int_distribution<int> byte(0, 128);
+    int off = 0;
+    for (int i = 0; i < 2000; ++i) {
+        Inputs in{};
+        for (int t = 0; t < 2; ++t) in.texture[t][0] = in.texture[t][1] = in.texture[t][2] = in.texture[t][3] = byte(rng) / 255.0f;
+        for (auto& c : in.raster) c = byte(rng) / 128.0f;
+        const auto g = tev(m, in), q = pica(program, in);
+        float gap = 0;
+        for (int c = 0; c < 4; ++c) gap = std::max(gap, std::fabs(g[c] - q[c]));
+        off += gap > 3 / 255.0f;
+    }
+    check(off < 40, "and matches the TEV but at the band's edges");
+    const auto colored = smg::compileTev(m);
+    check(!colored.approximation || std::strcmp(colored.approximation, "a compare's wrap band"), "not for textures that could be colored");
+}
+
 int runCombinerTests() {
     std::mt19937 rng(1234);
     realMaterial(rng);
@@ -704,6 +746,7 @@ int runCombinerTests() {
     skyPastOne(rng);
     flagPanel(rng);
     lavaHalved(rng);
+    waterBand(rng);
     compareWithoutC(rng);
     compareAddsC(rng);
     sixTapBlur(rng);

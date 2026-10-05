@@ -52,12 +52,22 @@ bool extension(const std::string& name, const char* suffix) {
 // An approximated material on its own triangles: the interpolated vertex color as the rasterized color (a lit channel
 // under a random light), texels at the interpolated UVs. The share of points off by more than 3/255, and the worst.
 struct Measure { double share = 0; float worst = 0; };
+// The maps whose texture format gives equal red, green and blue, as the renderer tells the compiler.
+std::uint8_t grayMaps(const smg::Model& model, const smg::ModelMaterial& m) {
+    std::uint8_t maps = 0;
+    for (int i = 0; i < 8; ++i)
+        if (m.textures[i] >= 0 && m.textures[i] < int(model.textures.size()) && static_cast<int>(model.textures[m.textures[i]].format) <= 3)
+            maps = static_cast<std::uint8_t>(maps | 1 << i);
+    return maps;
+}
+
 Measure measureOnModel(const smg::Model& model, unsigned index) {
     using namespace tevmodel;
     smg::ModelMaterial m = model.materials[index];
+    const std::uint8_t gray = grayMaps(model, m);
     int modelTexture[8];
     for (int i = 0; i < 8; ++i) modelTexture[i] = m.textures[i], m.textures[i] = m.textures[i] >= 0 ? i : -1;
-    const auto program = smg::compileTev(m);
+    const auto program = smg::compileTev(m, false, gray);
     const auto sourceAlpha = [](int f) { return f == 4 || f == 5; };
     const bool alphaUsed = !(m.alphaTest.compare0 == 7 && m.alphaTest.compare1 == 7) ||
                            (m.blend.type == 1 && (sourceAlpha(m.blend.source) || sourceAlpha(m.blend.destination)));
@@ -880,7 +890,7 @@ int main(int argc, char** argv) {
                 for (unsigned index = 0; index < model.materials.size(); ++index) {
                     const auto& material = model.materials[index];
                     ++materials;
-                    const auto program = smg::compileTev(material);
+                    const auto program = smg::compileTev(material, false, grayMaps(model, material));
                     if (program.exact) ++exact;
                     else ++approximations[program.approximation];
                     if (program.exact || !list) continue;

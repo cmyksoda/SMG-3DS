@@ -38,8 +38,9 @@ struct CombinerProgram {
     const char* approximation = nullptr; // the first reason, for audits
 };
 
-// color1FromUnit: C1 is read from a unit of its own (a texel per primitive) instead of as a constant.
-CombinerProgram compileTev(const ModelMaterial& material, bool color1FromUnit = false);
+// color1FromUnit: C1 is read from a unit of its own (a texel per primitive) instead of as a constant. grayMaps: the
+// texture maps (a bit each) whose format gives every texel equal red, green and blue (I4, I8, IA4, IA8).
+CombinerProgram compileTev(const ModelMaterial& material, bool color1FromUnit = false, std::uint8_t grayMaps = 0);
 
 // A material one PICA pass can't draw (an R8 equality compare, more texture samples than units) as passes whose blended
 // results add up to it: the first blended as the material says, each extra one added over it. Exact but where GX's
