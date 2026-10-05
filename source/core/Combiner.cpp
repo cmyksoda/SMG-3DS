@@ -457,9 +457,20 @@ struct Compiler {
             else ops.push_back({CombineFunc::Interpolate, {b, a, c}});
             t = temp;
         }
-        if (subtract) {
+        if (subtract && beyondOne) {
+            // k - t is (1 - t) + (k - 1) where k passes one and (1 - t) - (1 - k) where it doesn't: a sum past one
+            // saturates the same, unless it is halved after.
+            if (factor < 1) approximate("register beyond one");
+            float above[3], below[3];
+            bool anyBelow = false;
+            for (int i = 0; i < 3; ++i) {
+                above[i] = std::clamp(k[i] - 1, 0.0f, 1.0f), below[i] = std::clamp(1 - k[i], 0.0f, 1.0f);
+                anyBelow |= below[i] > 0;
+            }
+            ops.push_back({CombineFunc::Add, {invert(t), constant(above[0], above[1], above[2])}});
+            if (anyBelow) ops.push_back({CombineFunc::Subtract, {temp, constant(below[0], below[1], below[2])}});
+        } else if (subtract) {
             // k - t: a component with k at or below zero saturates to zero, as max(0, 0 - t) does.
-            if (beyondOne) approximate("register beyond one");
             ops.push_back({CombineFunc::Subtract, {constant(positive[0], positive[1], positive[2]), t}});
         } else {
             // A sum past one saturates the same whether k or one was added, unless it is halved after.

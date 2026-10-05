@@ -749,6 +749,33 @@ void valveSwitch(std::mt19937& rng) {
     }
 }
 
+// HalfGalaxySky's blue: C0 minus texture times vertex color, with C0 past one (1.04, 1.47, 1.89 by component).
+void skyPastOne(std::mt19937& rng) {
+    smg::ModelMaterial m;
+    m.textures[0] = 0, m.textures[1] = 1;
+    m.tevColors[0] = {265 / 255.0f, 375 / 255.0f, 481 / 255.0f, 1};
+    m.tevStageCount = 2;
+    const std::uint8_t color[2][4]{{15, 8, 10, 2}, {15, 14, 8, 0}};
+    const std::uint8_t alpha[2][4]{{7, 4, 5, 7}, {5, 7, 7, 7}};
+    for (int i = 0; i < 2; ++i) {
+        auto& s = m.stages[i];
+        s = {};
+        std::copy(color[i], color[i] + 4, s.colorIn), std::copy(alpha[i], alpha[i] + 4, s.alphaIn);
+        s.texMap = s.texCoord = static_cast<std::uint8_t>(i), s.channel = 4;
+    }
+    m.stages[0].colorOp = 1;
+    m.stages[1].alphaClamp = 0;
+    const auto program = smg::compileTev(m);
+    check(program.exact, "a register past one minus a term translates exactly");
+    for (int i = 0; i < 300; ++i) {
+        const auto in = byteInputs(rng);
+        if (same(gx(m, in), pica(program, in))) continue;
+        dump(m, program, in);
+        check(false, "and matches GX on byte inputs");
+        break;
+    }
+}
+
 int runCombinerTests() {
     std::mt19937 rng(1234);
     realMaterial(rng);
@@ -758,6 +785,7 @@ int runCombinerTests() {
     kingfinBone(rng);
     starshroomHull(rng);
     valveSwitch(rng);
+    skyPastOne(rng);
     compareWithoutC(rng);
     compareAddsC(rng);
     sixTapBlur(rng);
