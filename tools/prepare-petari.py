@@ -2107,7 +2107,7 @@ adapt("src/MSL_C/wprintf.c", "MSL_C/wprintf.c", [
      '#include "cstdarg"\n#include "cstdlib"\n#include "cwctype"\n#include "wchar_t.h"\n\n#pragma exceptions on\n', "#include <smg/MslWide.h>\n", 1),
     ("parse_format(format_ptr, (va_list*)arg, &format);", "parse_format(format_ptr, &arg, &format);", 1),
 ])
-# Colours packed into a u32 through memory read 0xRRGGBBAA on the Wii and byte-reversed on ARM; these pack and
+# Colors packed into a u32 through memory read 0xRRGGBBAA on the Wii and byte-reversed on ARM; these pack and
 # unpack the value the Wii's way, so literals like 0xFF0000FF and u32s bound for the GPU keep their meaning.
 adapt("libs/nw4r/include/nw4r/ut/Color.h", "include/nw4r/ut/Color.h", [
     ("                ToU32ref() = color;\n                return *this;",
@@ -2117,6 +2117,12 @@ adapt("libs/nw4r/include/nw4r/ut/Color.h", "include/nw4r/ut/Color.h", [
      "                *static_cast< GXColor* >(this) = color;\n                return *this;", 1),
     ("            operator u32() const {\n                return ToU32ref();\n            }",
      "            operator u32() const {\n                return u32(r) << 24 | u32(g) << 16 | u32(b) << 8 | a;\n            }", 1),
+])
+adapt("include/Game/Util/Color.hpp", "include/Game/Util/Color.hpp", [
+    ("    Color8(u32 color) {\n        mColor = color;\n    }",
+     "    Color8(u32 color) {\n        set(u8(color >> 24), u8(color >> 16), u8(color >> 8), u8(color));\n    }", 1),
+    ("    inline operator u32() const {\n        return mColor;\n    }",
+     "    inline operator u32() const {\n        return u32(r) << 24 | u32(g) << 16 | u32(b) << 8 | a;\n    }", 1),
 ])
 # The draw-state bits these constants set as Metrowerks packs bitfields (from the top): fields 0xB and 0x12.
 adapt("src/Game/Player/MarioJump.cpp", "Game/Player/MarioJump.cpp", [
