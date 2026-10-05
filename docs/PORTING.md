@@ -1038,6 +1038,65 @@ sampling no texture had counted as a second map, and a base was first refused fo
 effects share the dust's state, some with textures of other formats). At the castle view, 80-110 dust draws a frame join a batch; the walk measured 13 of 19 windows at
 29-30 fps (lowest 26.4), against 12 of 19 (lowest 23.7) without.
 
+**Where the render thread's time goes.** Reading the clock costs Azahar 150 cycles, so `dev.gx_timing` slows what it
+times by a fifth, and Azahar's GDB stub makes its own clock jump while it samples (frames that read four seconds apart):
+neither measures. `dev.gx_zones=1` does instead: the render thread writes one byte saying what it is doing
+(`smg/GxZones.hpp`: waiting, parsing, BP runs, XF loads, a list checked, a state built, the pipeline prepared, uniforms, a
+mesh draw, CPU-path vertices, a batch drawn, peeks, a frame ended...), and a thread on the system core reads it every
+200 µs; the perf line shares each window's milliseconds out by zone. A store per zone costs nothing measurable (34.2 ms
+a frame without it at the Comet Observatory, 33.8 with). The GDB sampler still gives a function-level lead when it
+follows one thread (`rsp_sample.py`'s `TRACK=NAME`, the thread whose stack shows NAME), read as functions rather than
+instructions: the stub halts at block boundaries, so a tiny function called constantly takes its neighbours' samples.
+
+**The Comet Observatory at 30.** At the session 8 build the Observatory ran 26 to 29 frames a second with the render
+thread busy 34.2 ms a frame. In order, each measured on the same standing-still route: the commonest commands are read
+without a call (`GxCommandProcessor::command` takes BP runs, CP and XF loads itself; BP runs keep the mask and change
+counts in registers, TEV colors too, only events leaving through `loadEvent`), and the per-command tally only the timing
+prints is kept only under `dev.gx_timing` (34.2 to 31.9 ms); depth peeks stop nothing (below; 30.7 ms); mesh draws
+write their changed state themselves (below; 26.7 ms, mesh draws 6.0 to 2.2 ms). That left the game's thread the limit:
+its drawing put J3D's display lists into the stream with newlib's `memcpy`, which goes a byte at a time whenever either
+pointer is off a word boundary, and the write point nearly always is (commands are 1, 5 or 9 bytes): `smgGXFifoBytes`
+copies words through unaligned stores now, and a matrix (`GXLoadPosMtxImm` and its kin) looks for room once rather
+than once a number (`smgGXFifoFloats`). Drawing went from 4.35 to 3.46 ms a logic step, and the route showed all 40
+windows at 29 to 30 (lowest 29.5). The game also ends each prohibited section (`MR::ProhibitSchedulerAndInterrupts`,
+one per material whose display list is patched) with `OSYieldThread`, a kernel call here; the port's scheduler never
+holds a thread back in those sections (`OSDisableScheduler` only counts, and a higher thread waiting for the CPU runs as
+the section lets it go), so the adapted destructor leaves the yield out: another millisecond a logic step.
+
+**Depth peeks that stop nothing.** The star pointer and a talking NPC read the depth under a point from draw-sync
+callbacks (`StarPointerPeekZ`, `TalkPeekZ`, on the render thread as it reads their token) and use the answer the frame
+after. Each read paused the frame, waited for the GPU and copied an 8x8 tile back. Now a peek queues that tile's copy
+behind what is drawn (`C3D_FrameSplit`, then `GX_TextureCopy` into one of eight small buffers; the frame's queue runs at
+its end, and `C3D_FrameBegin` waits for it) and is answered from the newest finished copy of the same tile, from this
+frame or the last; a tile with none yet is read as before. About two of the Observatory's 2.6 peeks a frame come from a
+copy; the pauses went from 0.9 to 0.1 ms. `BrightObj`'s color peeks (the sun's brightness) still read the whole color
+buffer back.
+
+**Mesh draws past citro3d.** A mesh draw whose pending state was more than its uniforms went through
+`C3D_DrawElements`, whose context update re-checks every block and walks 96 uniform flags twice (vertex and geometry
+shaders), each command through `GPUCMD_Add`. Now, when all that is pending is the combiner, fragment tests, culling,
+textures, fixed attributes or the mesh layout, the draw writes those registers itself (`writeChangedBlocks`), as
+citro3d's binders write them: each changed TEV stage's five words, the buffer's update bits and color, alpha test,
+blend and depth/write mask (with the gas depth function citro3d writes beside it), the cull mode, each changed unit's
+border, size, parameters, LOD and address with its type and then the units' configuration (the cache cleared), each
+changed fixed attribute's index and its three packed 24-bit words, the attribute formats and permutation. citro3d's
+own copies are still set, so its next draw sends them again and its state stays the truth; the scissor and a fresh
+command list still go through it. At the Observatory one group a frame of about 300 is citro3d's now.
+
+**Steps whose result is fixed.** A TEV program the PICA can't fit in six combiner stages was cut short, and what was
+left could compute something else entirely: Buoy Base's Gearmos (`caretaker.bdl`'s `BodyMat_v`, their tint a TRK1 color
+animation) drew black wherever their soot texture is clear. Their last alpha saturates whatever it reads (4 x (0.42 +
+a value of at least 0)), so the stages before it that only fed that alpha are dead. When a program comes out
+approximate, `Compiler::foldFixed` rewrites each part whose range (`stageRange`) is a single 0 or 1 after its clamp to
+read that constant, `clearDead` drops what only it read, and the material is compiled again. The register wrap that a,
+b and c read (a register's low eight bits) is kept continuous like the rest of the compiler's arithmetic, as the tests'
+TEV model keeps it, so a computed value needn't be a whole step. Then the channels stopped keeping step: each GX
+stage's color ops follow the color chain and its alpha ops the alpha chain, so an alpha chain of four ops beside a color
+chain of two no longer holds the next stage's color back (a color op that reads the incoming alpha still starts with
+the alpha ops, which would overwrite it). Good Egg's rolling Chain Chomps, the Iron Balls and the flag planets fit
+then. The disc's models went from 7,266 of 7,780 materials exact to 7,306; 14 still need more than six stages (the
+Comet Luma's body takes about eight ops of color alone). `SMG_LIST_APPROXIMATED=1` makes the audit name each one.
+
 **Development settings.** Keys in `settings.ini` for development only, written back only when on: `dev.skip_story=1`
 skips the prologue's storybook and movies; `dev.gx_dump=1` dumps a frame's draws to the log once a minute;
 `dev.gx_null=1` draws nothing, to measure the game's own work; `dev.gx_timing=1` adds the renderer's parts to the perf
@@ -1045,7 +1104,8 @@ line (CPU-path primitives, display lists, texture copies, frame ends, then each 
 were cache hits, the CPU path's vertices and draws, a mesh draw's lookup, uniforms and draw calls, a texture's first
 use; each clock read costs Azahar 150 cycles, so it slows what it measures, by up to a fifth with all of them) with the
 vertices of refused lists by reason (the perf line names new draw states whose TEV program is approximated, by reason,
-without it); `dev.gx_check=1` checks each new mesh against the CPU path; `dev.gx_inline=1` draws on the game's thread
+without it); `dev.gx_check=1` checks each new mesh against the CPU path; `dev.gx_zones=1` shares the render thread's time out by
+what it was doing (above); `dev.gx_inline=1` draws on the game's thread
 instead of the render thread; `dev.start=GALAXY N` starts that galaxy at its start point N (StartInfo's `MarioNo`), to
 reach a stage's later parts without walking there; it also stops the story's queued demos there, as `dev.galaxy` does
 (a new file's opening would otherwise meet the garden's start point 1, the after-the-attack spawn, and the attack movie
