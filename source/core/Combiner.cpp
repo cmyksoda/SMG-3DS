@@ -481,6 +481,12 @@ struct Compiler {
             // k - t: a component with k at or below zero saturates to zero, as max(0, 0 - t) does.
             ops.push_back({CombineFunc::Subtract, {constant(positive[0], positive[1], positive[2]), t}});
         } else {
+            if (beyondOne && factor == 0.5f && !anyNegative) {
+                // Halved, a k up to two is a constant within one: t / 2 + k / 2.
+                ops.push_back({CombineFunc::Modulate, {t, constant(0.5f)}});
+                ops.push_back({CombineFunc::Add, {temp, constant(std::min(k[0] / 2, 1.0f), std::min(k[1] / 2, 1.0f), std::min(k[2] / 2, 1.0f))}});
+                return ops;
+            }
             // A sum past one saturates the same whether k or one was added, unless it is halved after.
             if (beyondOne && factor < 1) approximate("register beyond one");
             bool small = true;

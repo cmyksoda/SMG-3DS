@@ -807,6 +807,34 @@ void flagPanel(std::mt19937& rng) {
     }
 }
 
+// Bowser's lava: (C0 + vertex color times a texture) / 2 with C0's red at 1.24; halved first, C0 fits.
+void lavaHalved(std::mt19937& rng) {
+    smg::ModelMaterial m;
+    m.textures[0] = 0, m.textures[2] = 2;
+    m.tevColors[0] = {315 / 255.0f, 130 / 255.0f, 10 / 255.0f, 1};
+    m.tevColors[1] = {255 / 255.0f, 105 / 255.0f, 0, 1};
+    m.tevStageCount = 2;
+    const std::uint8_t color[2][4]{{15, 10, 8, 2}, {15, 4, 8, 0}};
+    const std::uint8_t alpha[2][4]{{7, 4, 6, 7}, {5, 7, 7, 7}};
+    for (int i = 0; i < 2; ++i) {
+        auto& s = m.stages[i];
+        s = {};
+        std::copy(color[i], color[i] + 4, s.colorIn), std::copy(alpha[i], alpha[i] + 4, s.alphaIn);
+        s.texMap = s.texCoord = static_cast<std::uint8_t>(i * 2), s.channel = 4;
+    }
+    m.stages[0].colorScale = 3;
+    m.stages[1].alphaClamp = 0;
+    const auto program = smg::compileTev(m);
+    check(program.exact, "a halved sum with a register past one translates exactly");
+    for (int i = 0; i < 300; ++i) {
+        const auto in = byteInputs(rng);
+        if (same(gx(m, in), pica(program, in))) continue;
+        dump(m, program, in);
+        check(false, "and matches GX on byte inputs");
+        break;
+    }
+}
+
 int runCombinerTests() {
     std::mt19937 rng(1234);
     realMaterial(rng);
@@ -818,6 +846,7 @@ int runCombinerTests() {
     valveSwitch(rng);
     skyPastOne(rng);
     flagPanel(rng);
+    lavaHalved(rng);
     compareWithoutC(rng);
     compareAddsC(rng);
     sixTapBlur(rng);
