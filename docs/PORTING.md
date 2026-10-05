@@ -828,7 +828,17 @@ other coordinates (Beach Bowl's screen term) takes the CPU path beside the progr
 with the batch: it takes the program's clip positions and colors (the same state but for the program) and works out
 only its own texture coordinates, reading just the position and normal when its texgens use only those
 (`GxVertexPipeline::runPass`; lines, points and atlases still remake everything). Standing at Beach Bowl's start that
-took the CPU path from 13.1 to 12.1 ms a frame, and the water galaxies' render threads are mostly that path now; at 400x240 its lines come out as scattered bright pixels (how closely they match the Wii's is unchecked).
+took the CPU path from 13.1 to 12.1 ms a frame. The ocean (`OceanBowl`: 24 strips of 50 vertices, position and color
+direct, four texture coordinates by INDEX16, one of them normalized through the dual transform) cost about 880
+emulated cycles a vertex, measured instruction by instruction on the host: the normalized texgen re-read 24 XF words
+a vertex, every attribute was decoded whether used or not, and an unlit channel still ran the lighting. Now a
+`GxVertexLayout::Plan` decodes, an attribute at a time over 16-vertex chunks, only what the primitive reads (a
+remade pass only its own texgens' sources); texgen folds are kept per coordinate (a program and its pass took turns
+on the same slots, refolding at every prepare), a normalized texgen reads its two matrices as floats (an identity
+post matrix only adds zeros, so it is skipped); an unlit channel takes its color straight; a strip with nothing
+culled writes its indices directly. The output is the same bit for bit (a fuzz of 288,000 random primitives against
+the old code, and the ocean's frame hashed on x86 and on Azahar); the ocean went from 7.9 to 4.1 ms a frame, and
+standing at Beach Bowl's start the CPU path from 12.1 to 8.2 ms; at 400x240 its lines come out as scattered bright pixels (how closely they match the Wii's is unchecked).
 `OceanSphere` (Drip Drop, Good Egg, Bonefin) blends between two colors by the product instead of adding to it, which no
 added pass reproduces; `equalLine` draws it in one program instead (below).
 
