@@ -774,6 +774,49 @@ void oceanSphereLines(std::mt19937& rng) {
     check(onLine > 10 && offLines * 2 < offPlain, "and misses less than half the points the version without lines does");
 }
 
+// RockPlanetOrbitSky's sky: (C0 + lerp(K0, T0, R) - 1/2 + lerp(K1, R, T1)) / 2, its first sum unclamped and C0's blue
+// negative. The chain of halves folds C0 and the bias into one signed constant, applied with the halving.
+// WaterBazookaCapsule's alpha: three unclamped sums from a negative A0, the last doubled.
+void sumChains(std::mt19937& rng) {
+    const auto stage = [](smg::TevStage& s, std::initializer_list<int> color, std::initializer_list<int> alpha, int map) {
+        s = {};
+        std::copy(color.begin(), color.end(), s.colorIn), std::copy(alpha.begin(), alpha.end(), s.alphaIn);
+        s.texMap = s.texCoord = static_cast<std::uint8_t>(map), s.channel = 4;
+    };
+    smg::ModelMaterial sky;
+    sky.textures[0] = 0, sky.textures[1] = 1;
+    sky.tevColors[0] = {28 / 255.0f, 32 / 255.0f, -21 / 255.0f, 1};
+    sky.konstColors[0] = {1, 111 / 255.0f, 0, 1};
+    sky.konstColors[1] = {0, 43 / 255.0f, 56 / 255.0f, 1};
+    sky.tevStageCount = 2;
+    stage(sky.stages[0], {14, 8, 10, 2}, {7, 4, 5, 7}, 0);
+    stage(sky.stages[1], {14, 10, 8, 0}, {5, 7, 7, 7}, 1);
+    sky.stages[0].colorBias = 2, sky.stages[0].colorClamp = 0;
+    sky.stages[1].colorScale = 3, sky.stages[1].konstColor = 0x0d, sky.stages[1].alphaClamp = 0;
+    smg::ModelMaterial capsule;
+    capsule.textures[0] = 0;
+    capsule.tevColors[0] = {1, 1, 1, -25 / 255.0f};
+    capsule.tevColors[1] = {230 / 255.0f, 230 / 255.0f, 230 / 255.0f, 1};
+    capsule.tevColors[2] = {250 / 255.0f, 250 / 255.0f, 250 / 255.0f, 1};
+    capsule.tevStageCount = 3;
+    stage(capsule.stages[0], {15, 8, 10, 15}, {7, 7, 7, 1}, 0);
+    stage(capsule.stages[1], {15, 8, 0, 15}, {7, 4, 5, 0}, 0);
+    stage(capsule.stages[2], {4, 2, 0, 15}, {1, 7, 5, 0}, 0xFF);
+    capsule.stages[0].alphaClamp = capsule.stages[1].alphaClamp = 0, capsule.stages[2].alphaScale = 1;
+    for (const auto& [m, what] : {std::pair{&sky, "a sky's sum chain with a signed constant and a halving"},
+                                  std::pair{&capsule, "a three-stage alpha chain from a negative constant, doubled"}}) {
+        const auto program = smg::compileTev(*m);
+        check(program.exact, what);
+        for (int i = 0; i < 300; ++i) {
+            const auto in = byteInputs(rng);
+            if (same(tev(*m, in), pica(program, in))) continue;
+            dump(*m, program, in);
+            check(false, "and matches GX on byte inputs");
+            break;
+        }
+    }
+}
+
 int runCombinerTests() {
     std::mt19937 rng(1234);
     realMaterial(rng);
@@ -788,6 +831,7 @@ int runCombinerTests() {
     lavaHalved(rng);
     waterBand(rng);
     oceanSphereLines(rng);
+    sumChains(rng);
     compareWithoutC(rng);
     compareAddsC(rng);
     sixTapBlur(rng);
