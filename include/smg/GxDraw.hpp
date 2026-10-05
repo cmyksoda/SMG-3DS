@@ -260,25 +260,37 @@ private:
         // dual transform folded together (the input's fourth component is always one).
         bool folded = false, planar = false;  // planar: two inputs, two outputs, nothing to divide by
         float fold[3][4] = {};
-        // What the fold was made from (setup, then the matrices' words), and the XF change count it was checked at.
+        // Normalized by the dual transform, with one matrix for the primitive: its matrices are read as floats (in folds_).
+        bool cached = false;
+        std::uint16_t input = 0;  // where its source vector sits in a GxVertex
+    };
+    // What a coordinate's fold was made from (and, normalized, its float matrices; post: exactly the identity). By coordinate:
+    // a program's units and its remade pass's take turns on the same slots, which would fold again at every prepare.
+    struct Fold {
         std::uint32_t source_[32] = {}, sourceWords = 0, foldXf = ~0u;
         std::uint32_t rowChanges[6] = {};  // its matrix rows', then its post matrix rows' change counts (xfRowChanges)
+        float fold[3][4] = {};
+        float matrix_[3][4] = {}, post_[3][4] = {};
+        bool postIdentity = false;
+        std::uint32_t matricesXf = ~0u;  // the XF change count the matrices were read at
     };
     const float* clipMatrix(std::uint32_t index) { return index < 64 && clipReady_ >> index & 1 ? clip_[index] : makeClipMatrix(index); }
     const float* makeClipMatrix(std::uint32_t index);
-    bool foldStillHolds(TexGen& t, std::uint32_t ctrl, std::uint32_t post) const;
+    bool foldStillHolds(Fold& f, const TexGen& t, std::uint32_t ctrl, std::uint32_t post) const;
     void refold(TexGen& t) const;
+    void loadMatrices(Fold& f, const TexGen& t) const;
     // Lighting read again only when an XF register or a light changed (matrix loads leave it as it was).
     void readLighting(const GxCommandProcessor& gpu) {
         lighting_.read(gpu), ++lightingReads;
         lightingRegisters_ = gpu.xfRegisterChanges, lightingLights_ = gpu.xfLightChanges;
     }
-    void vertex(const GxVertex& v, GxDrawVertex& d);
+    void vertex(const GxVertex& v, GxDrawVertex& d, const float* fixedClip);
     void meshAttributes(const GxVertex& v, bool fromVertex, GxMeshVertex& m) const;
     std::size_t triangles(GxDrawVertex* vertices, std::uint16_t count, std::uint16_t first, std::uint16_t* indices) const;
     // Lines and points from their vertices, transformed into the last `count` of maxVertices, as quads from the first.
     std::size_t widen(GxDrawVertex* vertices, std::uint16_t count, std::uint16_t first, std::uint16_t* indices);
     void texgen(const TexGen& t, const GxVertex& v, float st[2]) const;
+    void texgenNormalized(const TexGen& t, const GxVertex& v, float st[2]) const;
     float matrix(std::uint32_t row, int column) const;
 
     // What the last prepare saw: a primitive with nothing changed since skips it (most of a model's do).
@@ -289,6 +301,9 @@ private:
     const GxCommandProcessor* gpu_ = nullptr;
     const GxDrawState* state_ = nullptr;
     std::uint8_t kind_ = 0, reject_ = 0, units_ = 0;
+    // The attributes a vertex is read for (GxVertexLayout::Read...): what run() needs, and what a pass's texgens need.
+    static constexpr unsigned ReadChunk = 16;  // vertices decoded together, an attribute at a time
+    std::uint16_t readMask_ = GxVertexLayout::ReadAll, sourceMask_ = GxVertexLayout::ReadAll;
     bool perVertexMatrix_ = false, channel_ = false, lit_ = false, fixedDepth_ = false, color0InVertex_ = false;
     std::uint8_t color0_[4] = {};
     float palette_[2] = {};
@@ -298,6 +313,8 @@ private:
     std::uint32_t defaultMatrix_ = 0;
     float depth01_ = 0;
     TexGen texgens_[CombinerProgram::MaxUnits];
+    mutable Fold folds_[8];
+    const GxCommandProcessor* foldsFor_ = nullptr;
     // From view space to what the PICA takes, and each matrix slot's position matrix through it, while XF and the frame stay.
     std::uint32_t xfSeen_ = ~0u, viewSeen_[13] = {};  // XF 0x101A-0x1026: the viewport and projection
     GxFrame frameSeen_{0, 0, false};

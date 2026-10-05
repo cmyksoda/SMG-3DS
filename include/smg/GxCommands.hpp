@@ -23,8 +23,21 @@ public:
     void rebase(const GxCommandProcessor& gpu);
     // Overwrites the attributes the format has; the others keep what `vertex` held.
     void read(const std::uint8_t* at, GxVertex& vertex) const;
-    // Only the matrix indexes, the position and the normal, which come first.
-    void readPositionNormal(const std::uint8_t* at, GxVertex& vertex) const;
+    // For a run that needs only some attributes (bits as indexedArrays numbers them): read() takes those one at a time
+    // across the vertices, and leaves the rest as they were. A plan holds while this layout is not read again.
+    static constexpr std::uint16_t ReadPosition = 1, ReadNormal = 2, ReadColor0 = 4, ReadColor1 = 8, ReadTexcoords = 0x0FF0, ReadAll = 0x0FFF;
+    struct Plan {
+        struct Op {
+            std::uint8_t kind = 0, offset = 0;  // how to fetch it, and where in the vertex's bytes
+            std::uint16_t to = 0;               // where the result goes in the GxVertex
+            const void* attribute = nullptr;    // the layout's Attribute
+        };
+        Op ops[12];
+        std::uint8_t count = 0;
+    };
+    Plan plan(std::uint16_t mask) const;
+    // `count` vertices from `at` (each `size` bytes after the last) into `out`.
+    void read(const std::uint8_t* at, GxVertex* out, unsigned count, const Plan& plan) const;
     // The arrays (0 position, 1 normal, 2-3 colors, 4-11 texture coordinates) this format reads by index, a bit each.
     std::uint16_t indexedArrays() const;
     // Widens [lo, hi) over the array elements the vertex at `at` reads by index (what a cached copy depends on).
@@ -38,7 +51,7 @@ private:
     struct Attribute;
     using Decoder = void (*)(const Attribute&, const std::uint8_t*&, float*);
     struct Attribute {
-        std::uint8_t type = 0, format = 0, count = 0, shift = 0, skip = 0, componentSize = 0, directSize = 0, arrayIndex = 0;
+        std::uint8_t type = 0, format = 0, count = 0, shift = 0, skip = 0, componentSize = 0, directSize = 0, arrayIndex = 0, offset = 0;
         std::uint32_t base = 0, stride = 0;
         float scale = 1;
         const std::uint8_t* array = nullptr;
