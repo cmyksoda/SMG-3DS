@@ -23,7 +23,7 @@ public:
     void rebase(const GxCommandProcessor& gpu);
     // Overwrites the attributes the format has; the others keep what `vertex` held.
     void read(const std::uint8_t* at, GxVertex& vertex) const;
-    // The arrays (0 position, 1 normal, 2-3 colours, 4-11 texture coordinates) this format reads by index, a bit each.
+    // The arrays (0 position, 1 normal, 2-3 colors, 4-11 texture coordinates) this format reads by index, a bit each.
     std::uint16_t indexedArrays() const;
     // Widens [lo, hi) over the array elements the vertex at `at` reads by index (what a cached copy depends on).
     void indexedSpan(const std::uint8_t* at, const std::uint8_t*& lo, const std::uint8_t*& hi) const;
@@ -95,7 +95,7 @@ public:
     std::uint32_t cp[0x100] = {};
     std::uint32_t xf[0x1100] = {};
     std::uint32_t bp[0x100] = {};
-    // BP 0xE0-0xE7 hold a TEV colour register or a konst colour by their type bit: the last write of each kind.
+    // BP 0xE0-0xE7 hold a TEV color register or a konst color by their type bit: the last write of each kind.
     std::uint32_t tevColor[8] = {}, tevKonst[8] = {};
     // Loads that changed something, by kind: equal counts mean that part of the state is as it was. bpChanges counts only
     // the BP registers a draw reads (TEV, textures, pixel tests, scissor, culling), so a run of primitives can share one draw.
@@ -104,7 +104,7 @@ public:
     std::uint32_t xfRegisterChanges = 0, xfLightChanges = 0;
     // Changes to each four-word row of XF memory (the matrices, below 0x1000): what read a row still holds while its count stays.
     std::uint32_t xfRowChanges[0x400] = {};
-    // The same for every register a draw reads but the TEV colours C0 and C1, which can ride in the vertices and a
+    // The same for every register a draw reads but the TEV colors C0 and C1, which can ride in the vertices and a
     // palette instead; C1's own changes apart.
     std::uint32_t bpChangesBesideColors = 0, color1Changes = 0;
     // Display lists called, and their bytes (for the renderer's perf line).

@@ -53,8 +53,8 @@ struct Audit {
         same(std::memcmp(native, o + at, count) == 0, what, at);
     }
     std::size_t at(const void* p) const { return static_cast<const std::uint8_t*>(p) - n; }
-    // A u32 colour, taken as nw4r takes it: into a ut::Color by value, whose bytes the Wii's memory held.
-    void colour(u32 native, std::size_t offset, const char* what) {
+    // A u32 color, taken as nw4r takes it: into a ut::Color by value, whose bytes the Wii's memory held.
+    void color(u32 native, std::size_t offset, const char* what) {
         const nw4r::ut::Color c(native);
         const std::uint8_t rgba[4] = {c.r, c.g, c.b, c.a};
         bytes(rgba, offset, 4, what);
@@ -109,9 +109,9 @@ void brlyt(Audit& a) {
                 a.bytes(mat->name, base, 20, "a material name");
                 for (int c = 0; c < 3; ++c) {
                     const s16* v = &mat->tevCols[c].r;
-                    for (int k = 0; k < 4; ++k) a.half(u16(v[k]), base + 20 + 8 * c + 2 * k, "a TEV colour");
+                    for (int k = 0; k < 4; ++k) a.half(u16(v[k]), base + 20 + 8 * c + 2 * k, "a TEV color");
                 }
-                a.bytes(mat->tevKCols, base + 44, 16, "the TEV constant colours");
+                a.bytes(mat->tevKCols, base + 44, 16, "the TEV constant colors");
                 a.word(mat->resNum.bits, base + 60, "the resource bits");
                 ++a.counts["materials"];
                 // In lyt_material.cpp's order, by nw4r's own getters.
@@ -148,7 +148,7 @@ void brlyt(Audit& a) {
         } else if (kind == res::DATABLOCKKIND_PICTURE) {
             const auto* p = reinterpret_cast<const res::Picture*>(block);
             a.pane(p);
-            for (int c = 0; c < 4; ++c) a.colour(p->vtxCols[c], a.at(&p->vtxCols[c]), "a picture's vertex colour");
+            for (int c = 0; c < 4; ++c) a.color(p->vtxCols[c], a.at(&p->vtxCols[c]), "a picture's vertex color");
             a.half(p->materialIdx, a.at(&p->materialIdx), "a picture's material");
             a.same(p->texCoordNum == a.o[a.at(&p->texCoordNum)] && materials && p->materialIdx < materials->materialNum, "a picture's coordinate count",
                    a.at(&p->texCoordNum));
@@ -160,7 +160,7 @@ void brlyt(Audit& a) {
             a.half(t->materialIdx, a.at(&t->materialIdx), "a text box's material"), a.half(t->fontIdx, a.at(&t->fontIdx), "a text box's font");
             a.bytes(&t->textPosition, a.at(&t->textPosition), 2, "a text position and alignment");
             a.word(t->textStrOffset, a.at(&t->textStrOffset), "a text offset");
-            for (int c = 0; c < 2; ++c) a.colour(t->textCols[c], a.at(&t->textCols[c]), "a text colour");
+            for (int c = 0; c < 2; ++c) a.color(t->textCols[c], a.at(&t->textCols[c]), "a text color");
             a.f32(t->fontSize.width, a.at(&t->fontSize.width), "a font size"), a.f32(t->fontSize.height, a.at(&t->fontSize.height), "a font size");
             a.f32(t->charSpace, a.at(&t->charSpace), "character spacing"), a.f32(t->lineSpace, a.at(&t->lineSpace), "line spacing");
             const auto* text = detail::ConvertOffsToPtr<u16>(t, t->textStrOffset);
@@ -175,7 +175,7 @@ void brlyt(Audit& a) {
             a.word(w->contentOffset, a.at(&w->contentOffset), "a window's content offset");
             a.word(w->frameOffsetTableOffset, a.at(&w->frameOffsetTableOffset), "a window's frame table offset");
             const auto* content = detail::ConvertOffsToPtr<res::WindowContent>(w, w->contentOffset);
-            for (int c = 0; c < 4; ++c) a.colour(content->vtxCols[c], a.at(&content->vtxCols[c]), "a window's vertex colour");
+            for (int c = 0; c < 4; ++c) a.color(content->vtxCols[c], a.at(&content->vtxCols[c]), "a window's vertex color");
             a.half(content->materialIdx, a.at(&content->materialIdx), "a window's material");
             a.coords(reinterpret_cast<const std::uint8_t*>(content + 1), content->texCoordNum);
             const u32* frames = detail::ConvertOffsToPtr<u32>(w, w->frameOffsetTableOffset);

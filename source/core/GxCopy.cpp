@@ -46,7 +46,7 @@ const char* readTextureCopy(const GxCommandProcessor& gpu, std::uint32_t command
     if (out.intensity && out.format == 6 && !out.depth) return "an EFB copy to YUVA8";
     // Z4, Z8 (twice), Z16, Z24X8, Z8M, Z8L and Z16L; the rest have no depth meaning.
     if (out.depth && (out.format == 2 || out.format == 4 || out.format == 5 || out.format == 7 || out.format == 11))
-        return "an EFB depth copy to a colour format";
+        return "an EFB depth copy to a color format";
     const Tiling t = tiling(out.format);
     if (out.stride < (out.texWidth + t.width - 1) / t.width * t.bytes) return "a texture copy whose rows of tiles overlap";
     return nullptr;
@@ -95,7 +95,7 @@ void encodeTextureCopy(const GxTextureCopy& copy, EfbPixel pixel, const void* co
         }
     }
     const auto texel = [&](unsigned column, unsigned row) {
-        if (copy.depth) return boxed[std::size_t(row + 3) * columns + column];  // the copy filter blends colour only
+        if (copy.depth) return boxed[std::size_t(row + 3) * columns + column];  // the copy filter blends color only
         unsigned sum[4] = {};
         for (int tap = 0; tap < 7; ++tap) {
             if (!copy.filter[tap]) continue;

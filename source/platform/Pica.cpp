@@ -56,7 +56,7 @@ TiledTexture tile(const ModelTexture& source, int format) {
     out.minFilter = source.minFilter;
     out.magFilter = source.magFilter;
     // GX reads v down from the first row; the PICA reads t up from the last row in memory, so rows go in upside down.
-    // Nearest-neighbour stretch for the few textures that are not a power of two, by a column map made once: the ARM11
+    // Nearest-neighbor stretch for the few textures that are not a power of two, by a column map made once: the ARM11
     // divides in software.
     const auto sourceRow = [&](unsigned y) { return image.pixels.data() + std::size_t((out.height - 1 - y) * image.height / out.height) * image.width; };
     std::vector<unsigned> columns(out.width);
@@ -212,7 +212,7 @@ PicaPixel preparePixel(const ModelMaterial& m, const CombinerProgram& program) {
         out.equation = GPU_BLEND_REVERSE_SUBTRACT;
         out.source = out.destination = GPU_ONE;
     }
-    // GX blends alpha as it blends colour, subtracting it too (Dolphin's reference does the same).
+    // GX blends alpha as it blends color, subtracting it too (Dolphin's reference does the same).
     out.alphaEquation = out.equation, out.alphaSource = out.source, out.alphaDestination = out.destination;
     out.depthTest = m.depth.enable;
     out.depthFunc = depthFunction(m.depth.function);

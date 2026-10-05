@@ -45,7 +45,7 @@ Pixel pattern(const void*, int x, int y) {
     return {static_cast<std::uint8_t>(x * 4), static_cast<std::uint8_t>(y * 4), static_cast<std::uint8_t>((x ^ y) * 4),
             static_cast<std::uint8_t>(x + 2 * y)};
 }
-// What the SDK's three taps make of an EFB pixel's neighbourhood, for checking texels against.
+// What the SDK's three taps make of an EFB pixel's neighborhood, for checking texels against.
 Pixel filtered(smg::EfbPixel pixel, int x, int y) {
     Pixel out;
     for (int c = 0; c < 4; ++c) {
@@ -220,7 +220,7 @@ void refusals() {
     std::uint32_t command = issue(gpu, c, 0x1000);
     gpu.bp[0x43] = 3;  // PE_CONTROL's pixel type: Z
     c.format = 4;
-    check(smg::readTextureCopy(gpu, issue(gpu, c, 0x1000), copy), "a depth copy to a colour format is refused by name");
+    check(smg::readTextureCopy(gpu, issue(gpu, c, 0x1000), copy), "a depth copy to a color format is refused by name");
     c.format = 7;
     gpu.bp[0x43] = 0;
     (void)command;

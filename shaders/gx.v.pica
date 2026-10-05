@@ -2,10 +2,10 @@
 ; (source/core/GxDraw.cpp's GxVertexPipeline): position in clip space and each combiner unit's coordinates.
 ; With it on they are a cached mesh's (GxMeshVertex): a model-space position transformed by its matrix slot's
 ; four rows, and each texgen's input vector through its three rows, divided by q where the texgen projects; the
-; colour's parts each from the vertex or the material register (rgbreg, alphareg), lit like GxLighting::apply.
+; color's parts each from the vertex or the material register (rgbreg, alphareg), lit like GxLighting::apply.
 ; Lit meshes share view-to-clip rows (clip[0-3]) and take six a slot after them (modelview, normal), up to nine slots,
 ; and up to four light entries of six rows (GxMeshUniforms): the SDK puts directional lights at 1e18, past what the
-; PICA's 24-bit floats square, so positions come prescaled; an entry's settings are numbers mixed in, so colour and
+; PICA's 24-bit floats square, so positions come prescaled; an entry's settings are numbers mixed in, so color and
 ; alpha can be lit differently in one loop. A texgen may take its matrix from the vertex's slot (slotgenN): three rows
 ; slotrow's place after the slot's first, then its texrow rows as the dual transform.
 .constf scale(0.00392156862, 1.0, 0.0, 0.0)

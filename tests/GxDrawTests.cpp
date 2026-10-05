@@ -108,7 +108,7 @@ void lighting() {
     auto owned = std::make_unique<smg::GxCommandProcessor>(host());
     smg::GxCommandProcessor& gpu = *owned;
     gpu.xf[0x1009] = 1;
-    gpu.xf[0x100E] = 1 << 1 | 1 << 2 | 2 << 7;  // colour: material register, lit, light 0, ambient register, diffuse clamped
+    gpu.xf[0x100E] = 1 << 1 | 1 << 2 | 2 << 7;  // color: material register, lit, light 0, ambient register, diffuse clamped
     gpu.xf[0x1010] = 0;                          // alpha: the material register, unlit
     gpu.xf[0x100C] = 0xFFFFFF80, gpu.xf[0x100A] = 0x000000FF;
     gpu.xf[0x600 + 3] = 0xFFFFFFFF;
@@ -133,11 +133,11 @@ void lighting() {
     smg::gxLitChannel(gpu, origin, facing, vertex, c);
     check(c[0] == 126, "a spot light two units off falls to half by K0 + K2 d^2");
     gpu.xf[0x1010] = 1 << 1 | 1 << 2 | 2 << 7;
-    gpu.xf[0x100E] = 1, gpu.xf[0x100A] = 0;  // colour from the vertex, unlit; no ambient alpha
+    gpu.xf[0x100E] = 1, gpu.xf[0x100A] = 0;  // color from the vertex, unlit; no ambient alpha
     gpu.xf[0x600 + 3] = 0xFFFFFF80;
     setFloat(gpu, 0x600 + 12, 10);
     smg::gxLitChannel(gpu, origin, facing, vertex, c);
-    check(c[0] == 10 && c[2] == 30 && c[3] == (0x80 * (0x80 + 1) >> 8), "the colour can come from the vertex while the alpha is lit");
+    check(c[0] == 10 && c[2] == 30 && c[3] == (0x80 * (0x80 + 1) >> 8), "the color can come from the vertex while the alpha is lit");
 }
 
 // GXSetTevOp's tables: register words built from bitfields, which have to come out as the hardware's.
@@ -201,7 +201,7 @@ void texturedQuad() {
     smg::GxCommandProcessor& gpu = *owned;
     Stream s;
     clearState(s);
-    s.bp(0xC008FFF8);  // colour (0, 0, 0, TEXC)
+    s.bp(0xC008FFF8);  // color (0, 0, 0, TEXC)
     quad(s, {0, 1, 3, 2});
     drawn.clear();
     gpu.put(s.bytes.data(), static_cast<std::uint32_t>(s.bytes.size()));
@@ -238,7 +238,7 @@ void perspective() {
     check(near(p[3], 10) && near(p[2] / p[3], 0), "a point on the far plane has depth 0");
 }
 
-// Colour channel 0 from its material register or from the vertex, as XF's control words choose.
+// Color channel 0 from its material register or from the vertex, as XF's control words choose.
 void channels() {
     auto owned = std::make_unique<smg::GxCommandProcessor>(host());  // 80 KiB: more than a 3DS thread's stack
     smg::GxCommandProcessor& gpu = *owned;
@@ -251,7 +251,7 @@ void channels() {
     smg::GxDraw d;
     smg::buildGxDraw(gpu, drawn[0].kind, drawn[0].format, drawn[0].count, drawn[0].data.data(), {}, d);
     const std::uint8_t* c = d.triangles[0].color;
-    check(c[0] == 0x11 && c[1] == 0x22 && c[2] == 0x33 && c[3] == 0x44, "the material register colours the channel");
+    check(c[0] == 0x11 && c[1] == 0x22 && c[2] == 0x33 && c[3] == 0x44, "the material register colors the channel");
     Stream lit;
     lit.xf(0x100E, {2});  // lighting on
     quad(lit, {0, 1, 3, 2});
@@ -259,7 +259,7 @@ void channels() {
     gpu.put(lit.bytes.data(), static_cast<std::uint32_t>(lit.bytes.size()));
     smg::buildGxDraw(gpu, drawn[0].kind, drawn[0].format, drawn[0].count, drawn[0].data.data(), {}, d);
     c = d.triangles[0].color;
-    check(!d.unsupported && c[0] == 0 && c[2] == 0 && c[3] == 0x44, "lit with no lights and a black ambient, the colour is black; alpha stays the material's");
+    check(!d.unsupported && c[0] == 0 && c[2] == 0 && c[3] == 0x44, "lit with no lights and a black ambient, the color is black; alpha stays the material's");
 }
 
 // One pipeline across primitives: it keeps each matrix slot's transform until XF changes, turns positions for the 3DS's
@@ -298,7 +298,7 @@ void pipelineAcrossPrimitives() {
     const std::uint32_t before = gpu.bpChanges;
     Stream events;
     events.bp(0x47000001), events.bp(0x45000002), events.bp(0x0F000000);  // a token, draw done, an indirect mask
-    events.bp(0xC008FFF2);                                                // stage 0's colour, as it already is
+    events.bp(0xC008FFF2);                                                // stage 0's color, as it already is
     gpu.put(events.bytes.data(), static_cast<std::uint32_t>(events.bytes.size()));
     check(gpu.bpChanges == before, "events and loads that change nothing a draw reads leave the count");
     Stream changed;
@@ -314,7 +314,7 @@ void dualTexgen() {
     smg::GxCommandProcessor& gpu = *owned;
     Stream s;
     clearState(s);
-    s.bp(0xC008FFF8);                                          // colour (0, 0, 0, TEXC): texture 0 takes a unit
+    s.bp(0xC008FFF8);                                          // color (0, 0, 0, TEXC): texture 0 takes a unit
     s.xff(30 * 4, {2, 0, 0, 0.5f, 0, 3, 0, 0.25f});            // texture matrix at row 30, two rows (ST)
     s.xf(0x1018, {30 << 6});                                   // texgen 0's matrix
     s.xf(0x1012, {1}), s.xf(0x1050, {0});                      // dual transform on, post matrix 0, not normalized
@@ -385,20 +385,20 @@ void atlasPlace() {
     check(pipeline.takeAtlasOutside() && !pipeline.takeAtlasOutside(), "coordinates past the texture are told, once");
 }
 
-// A program that reads C0 but not the rasterized colour takes C0 from the vertex colour, so primitives whose C0 alone
-// differs share one program; one that reads the rasterized colour keeps C0 a constant.
+// A program that reads C0 but not the rasterized color takes C0 from the vertex color, so primitives whose C0 alone
+// differs share one program; one that reads the rasterized color keeps C0 a constant.
 void color0Rides() {
     auto owned = std::make_unique<smg::GxCommandProcessor>(host());
     smg::GxCommandProcessor& gpu = *owned;
     Stream s;
-    clearState(s);                                 // colour (0, 0, 0, C0), alpha (0, 0, 0, A0), no channels
+    clearState(s);                                 // color (0, 0, 0, C0), alpha (0, 0, 0, A0), no channels
     s.bp(0xF6000004), s.bp(0xF700000E);            // swap table 0: R, G, B, A
     quad(s, {0, 1, 3, 2});
     drawn.clear();
     gpu.put(s.bytes.data(), static_cast<std::uint32_t>(s.bytes.size()));
     smg::GxDrawState state;
     smg::readGxDrawState(gpu, state);
-    check(state.color0InVertex && state.program.stages[0].colorSource[0] == smg::CombineSource::Primary, "C0 is read from the vertex colour");
+    check(state.color0InVertex && state.program.stages[0].colorSource[0] == smg::CombineSource::Primary, "C0 is read from the vertex color");
     smg::GxVertexPipeline pipeline;
     smg::GxDrawVertex v[4];
     std::uint16_t indices[12];
@@ -412,10 +412,10 @@ void color0Rides() {
     pipeline.run(drawn[0].data.data(), 4, v, 0, indices);
     check(v[3].color[0] == 0x10 && v[3].color[3] == 0x20, "a new C0 reaches the next primitive under the same state");
     Stream raster;
-    raster.bp(0xC008FFFA);  // colour (0, 0, 0, RASC)
+    raster.bp(0xC008FFFA);  // color (0, 0, 0, RASC)
     gpu.put(raster.bytes.data(), static_cast<std::uint32_t>(raster.bytes.size()));
     smg::readGxDrawState(gpu, state);
-    check(!state.color0InVertex, "a program that reads the rasterized colour keeps C0 a constant");
+    check(!state.color0InVertex, "a program that reads the rasterized color keeps C0 a constant");
 }
 
 // With C0 riding, a program that also reads C1 takes it from a palette unit when the CPU path asks, so primitives whose
@@ -426,7 +426,7 @@ void color1Rides() {
     Stream s;
     clearState(s);
     s.bp(0xF6000004), s.bp(0xF700000E);  // swap table 0: R, G, B, A
-    s.bp(0xC008428F);                    // colour lerp(C1, C0, TEXC)
+    s.bp(0xC008428F);                    // color lerp(C1, C0, TEXC)
     s.bp(0xE4000033), s.bp(0xE5022011);  // C1 (0x33, 0x22, 0x11, 0)
     quad(s, {0, 1, 3, 2});
     drawn.clear();
@@ -461,7 +461,7 @@ void decodedVertices() {
     smg::GxCommandProcessor& gpu = *owned;
     Stream s;
     clearState(s);
-    s.bp(0xC008FFF8);  // colour (0, 0, 0, TEXC): texture 0 through the identity texgen
+    s.bp(0xC008FFF8);  // color (0, 0, 0, TEXC): texture 0 through the identity texgen
     quad(s, {0, 1, 3, 2});
     drawn.clear();
     gpu.put(s.bytes.data(), static_cast<std::uint32_t>(s.bytes.size()));
@@ -485,7 +485,7 @@ void meshSpans() {
     smg::GxCommandProcessor& gpu = *owned;
     Stream s;
     clearState(s);
-    s.bp(0xC008FFF8);                                       // colour (0, 0, 0, TEXC)
+    s.bp(0xC008FFF8);                                       // color (0, 0, 0, TEXC)
     s.cp(0x50, 2 << 9), s.cp(0x60, 0);                      // positions by an 8-bit index alone
     s.cp(0xA0, 0x1800), s.cp(0xB0, 12);                     // into array 0
     gpu.put(s.bytes.data(), static_cast<std::uint32_t>(s.bytes.size()));
@@ -512,7 +512,7 @@ void meshFromDisplayList() {
     smg::GxCommandProcessor& gpu = *owned;
     Stream s;
     clearState(s);
-    s.bp(0xC008FFF8);  // colour (0, 0, 0, TEXC): texture 0 through the identity texgen
+    s.bp(0xC008FFF8);  // color (0, 0, 0, TEXC): texture 0 through the identity texgen
     gpu.put(s.bytes.data(), static_cast<std::uint32_t>(s.bytes.size()));
     Stream list;
     quad(list, {0, 1, 3, 2});
@@ -586,7 +586,7 @@ void meshRefresh() {
     check(same, "decoded again from the moved array, each vertex takes its new position and keeps the rest");
 }
 
-// What gx.v.pica works out for a lit mesh's vertex: the colour (0-1).
+// What gx.v.pica works out for a lit mesh's vertex: the color (0-1).
 void shaderLighting(const smg::GxMeshUniforms& u, const smg::GxMeshVertex& v, float out[4]) {
     float clip[4], tex[smg::CombinerProgram::MaxUnits][2];
     smg::gxMeshModel(u, v, clip, out, tex);
@@ -594,7 +594,7 @@ void shaderLighting(const smg::GxMeshUniforms& u, const smg::GxMeshVertex& v, fl
 
 // A lit model drawn from a mesh: the shader's lighting from the mesh's uniforms has to match the CPU path's, for
 // diffuse light from a point and from the SDK's directional 1e18, a spot light, a specular one, and an actor's
-// colour lit by one light and its alpha by the other.
+// color lit by one light and its alpha by the other.
 void litMesh() {
     struct Case {
         const char* what;
@@ -608,9 +608,9 @@ void litMesh() {
          {{0.5f, 0.5f, 0, 1, 0.002f, 0.00001f, 300, 250, 300, 0, 0, -1}, {}}},
         {"a specular light", 1 << 1 | 1 << 2 | 1 << 9, 1 << 1 | 1 << 2 | 1 << 9,
          {{0, 0, 1, 0.5f, 0, 0.5f, 0, -0.4e18f, -0.9e18f, 0, 0.4f, 0.9165f}, {}}},
-        {"an actor's colour and alpha lit by different lights", 1 << 1 | 1 << 2 | 2 << 7, 1 << 1 | 1 << 3 | 2 << 7,
+        {"an actor's color and alpha lit by different lights", 1 << 1 | 1 << 2 | 2 << 7, 1 << 1 | 1 << 3 | 2 << 7,
          {{1, 0, 0, 1, 0, 0, 300, 100, 200, 0, 0, 0}, {1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0}}},
-        {"colour and alpha lit with their own settings", 1 << 1 | 3 << 2 | 2 << 7 | 1 << 9 | 1 << 10, 1 << 1 | 3 << 2 | 1 << 7,
+        {"color and alpha lit with their own settings", 1 << 1 | 3 << 2 | 2 << 7 | 1 << 9 | 1 << 10, 1 << 1 | 3 << 2 | 1 << 7,
          {{0.5f, 0.5f, 0, 1, 0.002f, 0.00001f, 300, 250, 300, 0, 0, -1}, {1, 0, 0, 1, 0, 0, 0, 0.6e18f, 0.8e18f, 0, 0, 0}}},
     };
     const float vertices[3][6] = {{100, 100, -0.5f, 0, 0, 1}, {500, 100, -0.5f, 0.3f, 0.4f, 0.866f}, {300, 400, -0.5f, -0.6f, 0, 0.8f}};
@@ -776,7 +776,7 @@ void linesAndPoints() {
     smg::GxCommandProcessor& gpu = *owned;
     Stream s;
     clearState(s);
-    s.bp(0xC008FFF8);                                  // colour (0, 0, 0, TEXC): texture 0 takes a unit
+    s.bp(0xC008FFF8);                                  // color (0, 0, 0, TEXC): texture 0 takes a unit
     s.bp(0x22000000 | 5u << 19 | 60u << 8 | 30u);      // points 10 px with GX_TO_ONE, lines 5 px
     s.bp(0x30000003 | 1u << 19);                       // coordinate 0 takes the point offset
     s.u8(0xB8), s.u16(1), s.u16(320), s.u16(240), s.u8(0), s.u8(0);
@@ -896,14 +896,14 @@ void litMeshSlotTexgens() {
 } // namespace
 
 // nw4r's layout material: black (C0) to white (C1) by the texture, which is the texture itself. The material keeps
-// C0, C1, C2, PREV, as the combiner reads them; BP 0xE0 is PREV's, so a grey there must not become C0.
+// C0, C1, C2, PREV, as the combiner reads them; BP 0xE0 is PREV's, so a gray there must not become C0.
 void layoutMaterial() {
     auto owned = std::make_unique<smg::GxCommandProcessor>(host());
     smg::GxCommandProcessor& gpu = *owned;
     Stream s;
     clearState(s);
-    s.bp(0xC008248F);                                    // colour: lerp(C0, C1, TEXC), clamped
-    s.bp(0xE0080080), s.bp(0xE1080080);                  // PREV = grey
+    s.bp(0xC008248F);                                    // color: lerp(C0, C1, TEXC), clamped
+    s.bp(0xE0080080), s.bp(0xE1080080);                  // PREV = gray
     s.bp(0xE20FF000), s.bp(0xE3000000);                  // C0 = black
     s.bp(0xE40FF0FF), s.bp(0xE50FF0FF);                  // C1 = white
     s.bp(0xF6000004), s.bp(0xF700000E);                  // swap table 0 as GXInit leaves it: R, G, B, A
@@ -952,11 +952,11 @@ void drawStateKey() {
     smg::readGxDrawState(gpu, b);
     check(a.textures[0].address != b.textures[0].address, "and the state read with it");
     Stream stage;
-    stage.bp(0x94000100), stage.bp(0xC008FFF3);  // back to the first map; stage 0's colour inputs changed
+    stage.bp(0x94000100), stage.bp(0xC008FFF3);  // back to the first map; stage 0's color inputs changed
     gpu.put(stage.bytes.data(), static_cast<std::uint32_t>(stage.bytes.size()));
     check(!same(), "a used stage changes the key");
     Stream readsC1;
-    readsC1.bp(0xC008FFF4);  // stage 0's colour is C1 alone
+    readsC1.bp(0xC008FFF4);  // stage 0's color is C1 alone
     gpu.put(readsC1.bytes.data(), static_cast<std::uint32_t>(readsC1.bytes.size()));
     const std::size_t c1Count = smg::gxDrawStateKey(gpu, base);
     const auto sameAsC1 = [&] {
@@ -982,11 +982,11 @@ void drawStateKey() {
     std::size_t before = keyOf(base, true, &markers);
     put({0xE4000033});  // another C1
     check((markers & 2) && keyOf(key, true, nullptr) == before && !std::memcmp(key, base, before * 4), "with the palette, a C1 that rides leaves the key as it was");
-    put({0xC008FFF2});  // stage 0's colour is C0 alone
+    put({0xC008FFF2});  // stage 0's color is C0 alone
     before = keyOf(base, false, &markers);
     put({0xE2000044});  // another C0
-    check((markers & 1) && keyOf(key, false, nullptr) == before && !std::memcmp(key, base, before * 4), "so does a C0 that rides in the vertex colour");
-    put({0xE2000600});  // C0's red below zero: no vertex colour holds it
+    check((markers & 1) && keyOf(key, false, nullptr) == before && !std::memcmp(key, base, before * 4), "so does a C0 that rides in the vertex color");
+    put({0xE2000600});  // C0's red below zero: no vertex color holds it
     const std::size_t after = keyOf(key, false, &markers);
     check(!(markers & 1) && (after != before || std::memcmp(key, base, after * 4)), "and one that can't changes it");
 }

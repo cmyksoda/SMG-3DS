@@ -17,12 +17,12 @@ void put32(Bytes& out, std::uint32_t value) { put16(out, value >> 16); put16(out
 std::uint16_t native16(const std::uint8_t* at) { std::uint16_t v; std::memcpy(&v, at, 2); return v; }
 std::uint32_t native32(const std::uint8_t* at) { std::uint32_t v; std::memcpy(&v, at, 4); return v; }
 
-// Messages at bytes 0 ("Hi", a colour tag, a wait tag) and 22 (a number tag, a sound tag), and a third
+// Messages at bytes 0 ("Hi", a color tag, a wait tag) and 22 (a number tag, a sound tag), and a third
 // message that starts at the 'i' of the first.
 Bytes text() {
     Bytes t;
     put16(t, 'H'); put16(t, 'i');
-    put16(t, 0x1A); t.insert(t.end(), {8, 255}); put16(t, 0); t.insert(t.end(), {3, 0});  // colour 3
+    put16(t, 0x1A); t.insert(t.end(), {8, 255}); put16(t, 0); t.insert(t.end(), {3, 0});  // color 3
     put16(t, 0x1A); t.insert(t.end(), {8, 1}); put16(t, 0); put16(t, 30);                // wait 30 frames
     put16(t, 0);
     put16(t, 0x1A); t.insert(t.end(), {14, 6}); put16(t, 1); put32(t, 0); put32(t, 0x10002);  // number, argument 0x10002
@@ -62,9 +62,9 @@ void converts() {
     check(native16(text) == 'H' && native16(text + 2) == 'i', "characters read as native units");
     // As MessageEditorMessageTag reads a tag: from the unit after 0x1A.
     check(native16(text + 4) == 0x1A, "a tag's mark reads as a native unit");
-    const std::uint8_t* colour = text + 6;
-    check(colour[0] == 8 && colour[1] == 255 && native16(colour + 2) == 0 && colour[4] == 3,
-          "a colour tag's length and group read as bytes, its type as a unit, its colour as a byte");
+    const std::uint8_t* color = text + 6;
+    check(color[0] == 8 && color[1] == 255 && native16(color + 2) == 0 && color[4] == 3,
+          "a color tag's length and group read as bytes, its type as a unit, its color as a byte");
     const std::uint8_t* wait = text + 14;
     check(wait[0] == 8 && wait[1] == 1 && native16(wait + 4) == 30, "a wait tag's frames read as a native half");
     check(native16(text + 20) == 0, "the first message ends in a native 0");
@@ -91,7 +91,7 @@ void refuses() {
     const Bytes before = b;
     const char* why = smg::nativeBmg(b.data(), b.size());
     check(why && std::strstr(why, "group 11") && b == before, "an unknown tag kind is named and nothing changes");
-    b = bmg(text(), 6);  // the third message starts on the colour tag's length and group
+    b = bmg(text(), 6);  // the third message starts on the color tag's length and group
     check(smg::nativeBmg(b.data(), b.size()) && b == bmg(text(), 6), "text read as both bytes and units is refused");
 }
 } // namespace

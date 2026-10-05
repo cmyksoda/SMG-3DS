@@ -119,16 +119,16 @@ void displayLists() {
 // Vertex formats as GX sets them, by the field positions of the SDK's own private/cp_reg.h.
 void vertices() {
     auto* gpu = new smg::GxCommandProcessor(host());
-    // Format 1: position direct s16 XYZ with 8 fraction bits, colour 0 direct RGBA8888, texcoord 0 direct f32 ST.
+    // Format 1: position direct s16 XYZ with 8 fraction bits, color 0 direct RGBA8888, texcoord 0 direct f32 ST.
     gpu->cp[0x50] = 1u << 9 | 1u << 13;             // VCD_LO: POS direct, COL0 direct
     gpu->cp[0x60] = 1u << 0;                        // VCD_HI: TEX0 direct
     gpu->cp[0x71] = 1u << 0 | 3u << 1 | 8u << 4     // VAT_A: XYZ, s16, shift 8
-                  | 5u << 14                        //        colour 0 RGBA8888
+                  | 5u << 14                        //        color 0 RGBA8888
                   | 1u << 21 | 4u << 22;            //        texcoord 0 ST, f32
     check(gpu->vertexSize(1) == 6 + 4 + 8, "a vertex's size follows its descriptor and format");
     std::vector<std::uint8_t> stream{0x91, 0x00, 0x02};  // triangles in format 1, two vertices (a test needs no whole triangle)
     const std::uint8_t first[] = {0x01, 0x80, 0xFF, 0x00, 0x00, 0x40,  // x 1.5, y -1.0, z 0.25
-                                  0x10, 0x20, 0x30, 0x40,              // colour
+                                  0x10, 0x20, 0x30, 0x40,              // color
                                   0x3F, 0x80, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00};  // s 1.0, t 2.0
     stream.insert(stream.end(), first, first + sizeof first);
     stream.insert(stream.end(), first, first + sizeof first);
@@ -137,7 +137,7 @@ void vertices() {
           "a whole primitive is handed over with its kind, format and count");
     const smg::GxVertex vertex = gpu->readVertex(primitives[0].vertices, 1);
     check(vertex.position[0] == 1.5f && vertex.position[1] == -1.0f && vertex.position[2] == 0.25f, "s16 positions dequantized by their shift");
-    check(vertex.color[0][0] == 0x10 && vertex.color[0][3] == 0x40, "an RGBA8888 colour read in order");
+    check(vertex.color[0][0] == 0x10 && vertex.color[0][3] == 0x40, "an RGBA8888 color read in order");
     check(vertex.texcoord[0][0] == 1.0f && vertex.texcoord[0][1] == 2.0f, "f32 texture coordinates read as floats");
     // Format 2: position indexed by u8 into array 0, stride 12, f32 XYZ.
     gpu->cp[0x50] = 2u << 9;
@@ -166,7 +166,7 @@ void vertices() {
 }
 } // namespace
 
-// BP 0xFE masks the next load only; colour and konst registers share 0xE0-0xE7 by their type bit; copies report.
+// BP 0xFE masks the next load only; color and konst registers share 0xE0-0xE7 by their type bit; copies report.
 void bpMasksAndCopies() {
     auto* gpu = new smg::GxCommandProcessor(host());
     std::vector<std::uint8_t> stream;
@@ -181,7 +181,7 @@ void bpMasksAndCopies() {
     for (std::uint32_t value : {0xE20FF0FFu, 0xE2800080u, 0xE3000040u, 0x52004000u}) { stream.push_back(0x61); put32(stream, value); }
     gpu->put(stream.data(), static_cast<std::uint32_t>(stream.size()));
     check(gpu->tevColor[2] == 0x0FF0FF && gpu->tevKonst[2] == 0x800080 && gpu->tevColor[3] == 0x000040,
-          "a TEV register and a konst colour at the same address are kept apart");
+          "a TEV register and a konst color at the same address are kept apart");
     check(copies.size() == 1 && copies[0] == 0x004000, "an EFB copy reports its command");
     const auto load = [&](std::uint32_t value) {
         stream.clear(), stream.push_back(0x61), put32(stream, value);
@@ -189,9 +189,9 @@ void bpMasksAndCopies() {
     };
     const std::uint32_t all = gpu->bpChanges, beside = gpu->bpChangesBesideColors, color1 = gpu->color1Changes;
     load(0xE2000011u), load(0xE3001100u);
-    check(gpu->bpChanges == all + 2 && gpu->bpChangesBesideColors == beside, "a new C0 counts as a change, but not beside the colours");
+    check(gpu->bpChanges == all + 2 && gpu->bpChangesBesideColors == beside, "a new C0 counts as a change, but not beside the colors");
     load(0xE2800081u);
-    check(gpu->bpChangesBesideColors == beside + 1, "a konst colour at C0's address is beside them");
+    check(gpu->bpChangesBesideColors == beside + 1, "a konst color at C0's address is beside them");
     load(0xE2800081u), load(0xE2000011u);
     check(gpu->bpChangesBesideColors == beside + 1, "and writing either one again as it was changes nothing beside them");
     load(0xE4000022u);

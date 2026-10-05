@@ -113,8 +113,8 @@ bool pane(Plan& plan, std::size_t at, std::size_t end) {
     return true;
 }
 
-// Four vertex colours (u32s nw4r turns into ut::Color by value), a material, then texture coordinate quads.
-bool vertexColours(Plan& plan, std::size_t at, std::size_t end, const Lists& lists) {
+// Four vertex colors (u32s nw4r turns into ut::Color by value), a material, then texture coordinate quads.
+bool vertexColors(Plan& plan, std::size_t at, std::size_t end, const Lists& lists) {
     if (!plan.need(at, 20, end, "a picture or window content")) return false;
     plan.words(at, 4), plan.keep(at + 18, 2);
     materialIndex(plan, at + 16, lists);
@@ -140,7 +140,7 @@ bool textBox(Plan& plan, std::size_t at, std::size_t end, const Lists& lists) {
 bool window(Plan& plan, std::size_t at, std::size_t end, const Lists& lists) {
     if (!plan.need(at, 0x68, end, "a window")) return false;
     plan.words(at + 0x4C, 4), plan.keep(at + 0x5C, 4), plan.words(at + 0x60, 2);  // inflation, frame count, offsets
-    if (!vertexColours(plan, plan.from(at, plan.be32(at + 0x60)), end, lists)) return false;
+    if (!vertexColors(plan, plan.from(at, plan.be32(at + 0x60)), end, lists)) return false;
     const unsigned frames = plan.be8(at + 0x5C);
     const std::size_t table = plan.from(at, plan.be32(at + 0x64));
     if (!plan.need(table, 4 * std::size_t(frames), end, "a window's frame table")) return false;
@@ -254,7 +254,7 @@ const char* nativeBrlyt(std::uint8_t* data, std::size_t size) {
         } else if (plan.is(at, "pan1") || plan.is(at, "bnd1")) {
             pane(plan, at, end);
         } else if (plan.is(at, "pic1")) {
-            if (pane(plan, at, end)) vertexColours(plan, at + 0x4C, end, lists);
+            if (pane(plan, at, end)) vertexColors(plan, at + 0x4C, end, lists);
         } else if (plan.is(at, "txt1")) {
             if (pane(plan, at, end)) textBox(plan, at, end, lists);
         } else if (plan.is(at, "wnd1")) {

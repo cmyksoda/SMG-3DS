@@ -1,7 +1,7 @@
 #pragma once
 // The game's files are big-endian, for the Wii's CPU; the 3DS's is little-endian. Where original code reads a
 // format's structures, these turn them to native order in place first (source/compat/NativeResources.cpp). Each
-// recognises data it already turned, so a second call changes nothing.
+// recognizes data it already turned, so a second call changes nothing.
 void smgNativeRarc(void* archive);
 // The table to read: this one, turned in place, or a repacked copy where ARM cannot load its fields where they sit.
 const void* smgNativeBcsv(void* table);

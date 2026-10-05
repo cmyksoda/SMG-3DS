@@ -22,7 +22,7 @@ float asFloat(std::uint32_t bits) {
     std::memcpy(&value, &bits, 4);
     return value;
 }
-// A TEV colour register's 11-bit two's complement component, over 255.
+// A TEV color register's 11-bit two's complement component, over 255.
 float signed11(std::uint32_t value) { return static_cast<float>(static_cast<std::int32_t>(value << 21) >> 21) / 255.0f; }
 
 // XF registers and memory, as the SDK's GX writes them.
@@ -202,7 +202,7 @@ void GxLighting::read(const GxCommandProcessor& gpu) {
              parts[0].attenuated == parts[1].attenuated && parts[0].spot == parts[1].spot;
     for (int n = 0; n < 8; ++n) {
         if (!(used >> n & 1)) continue;
-        const std::uint32_t* w = gpu.xf + XfLights + 16 * n;  // three reserved words, colour, A0-A2, K0-K2, position, direction
+        const std::uint32_t* w = gpu.xf + XfLights + 16 * n;  // three reserved words, color, A0-A2, K0-K2, position, direction
         Light& l = lights[n];
         for (int c = 0; c < 4; ++c) l.color[c] = static_cast<float>(w[3] >> (24 - 8 * c) & 0xFF);
         for (int k = 0; k < 3; ++k)
@@ -224,7 +224,7 @@ void GxLighting::apply(const float view[3], const float normal[3], const std::ui
                     if (parts[i].mask >> n & 1) addLight(lights[n], parts[i], view, normal, sums[i], i ? 3 : 0, i ? 4 : 3, nullptr);
     }
     for (int i = 0; i < 2; ++i) {
-        // Part 0 is the colour (RGB), part 1 the alpha.
+        // Part 0 is the color (RGB), part 1 the alpha.
         const Part& part = parts[i];
         for (int c = i ? 3 : 0; c < (i ? 4 : 3); ++c) {
             const std::uint8_t mat = part.materialFromVertex ? vertex[c] : material[c];
@@ -363,8 +363,8 @@ bool gxColor0Bytes(const GxCommandProcessor& gpu, std::uint8_t out[4]) { return 
 bool gxColor1Bytes(const GxCommandProcessor& gpu, std::uint8_t out[4]) { return tevColorBytes(gpu, 2, out); }
 
 namespace {
-// C0 can ride in the vertex colour when the program reads it and never writes it, never reads the rasterized colour
-// (whose place it takes), C0 is a byte colour, and a swap table leaves the rasterized colour as it is.
+// C0 can ride in the vertex color when the program reads it and never writes it, never reads the rasterized color
+// (whose place it takes), C0 is a byte color, and a swap table leaves the rasterized color as it is.
 bool color0CanRide(const GxCommandProcessor& gpu, const ModelMaterial& m, std::uint8_t& identitySwap) {
     bool reads = false;
     for (int i = 0; i < m.tevStageCount; ++i) {
@@ -421,7 +421,7 @@ std::size_t gxDrawStateKey(const GxCommandProcessor& gpu, std::uint32_t* out, bo
         }
         written |= 1u << TEV_COLOR_ENV_GET_DEST(color) | 1u << TEV_ALPHA_ENV_GET_DEST(alpha);
     }
-    // A C0 riding in the vertex colour (color0CanRide), or a C1 in the palette (color1CanRide), is read where it is drawn:
+    // A C0 riding in the vertex color (color0CanRide), or a C1 in the palette (color1CanRide), is read where it is drawn:
     // the state is the same whatever its value, so a marker stands for it.
     std::uint8_t bytes[4];
     bool identity = false;
@@ -464,7 +464,7 @@ void readProgram(const GxCommandProcessor& gpu, GxDrawState& out, bool palette) 
         out.program = cachedTev(out.material);
         return;
     }
-    // Compiled with C0 read as the rasterized colour and its value left out, so every C0 shares one program.
+    // Compiled with C0 read as the rasterized color and its value left out, so every C0 shares one program.
     ModelMaterial riding = out.material;
     riding.tevColors[0] = {0, 0, 0, 0};
     for (int i = 0; i < riding.tevStageCount; ++i) {
@@ -520,10 +520,10 @@ bool GxVertexPipeline::prepare(const GxCommandProcessor& gpu, const GxDrawState&
     // Of the CP registers, only the descriptor's matrix-index bits are read; the kind and format are only kept.
     if (prepared_ && &gpu == gpu_ && &state == state_ && gpu.cp[0x50] == preparedDescriptor_ && frame == preparedFrame_ &&
         gpu.bpChangesBesideColors == preparedBeside_ && gpu.xfRegisterChanges == preparedXfRegisters_) {
-        // Only TEV colours or XF matrix memory changed (a particle's): C0's bytes, the folds and the clip matrices again.
+        // Only TEV colors or XF matrix memory changed (a particle's): C0's bytes, the folds and the clip matrices again.
         if (gpu.bpChanges != preparedBp_) {
             if (color0InVertex_ && !gxColor0Bytes(gpu, color0_)) {
-                unsupported = "C0 outside a byte while it rides in the vertex colour";
+                unsupported = "C0 outside a byte while it rides in the vertex color";
                 return prepared_ = false;
             }
             preparedBp_ = gpu.bpChanges;
@@ -548,7 +548,7 @@ bool GxVertexPipeline::prepare(const GxCommandProcessor& gpu, const GxDrawState&
     channel_ = (gpu.xf[XfNumChans] & 3) != 0;
     color0InVertex_ = state.color0InVertex;
     if (color0InVertex_ && !gxColor0Bytes(gpu, color0_)) {
-        unsupported = "C0 outside a byte while it rides in the vertex colour";
+        unsupported = "C0 outside a byte while it rides in the vertex color";
         return false;
     }
     lit_ = channel_ && (XF_COLOR0CNTRL_F_GET_LIGHTFUNC(gpu.xf[XfColor0Ctrl]) || XF_COLOR0CNTRL_F_GET_LIGHTFUNC(gpu.xf[XfAlpha0Ctrl]));
@@ -561,8 +561,8 @@ bool GxVertexPipeline::prepare(const GxCommandProcessor& gpu, const GxDrawState&
         const std::uint8_t coord = state.program.units[u].texCoord;
         const std::uint32_t ctrl = gpu.xf[XfTexGen + coord];
         const std::uint32_t row = XF_TEX_GET_SOURCE_ROW(ctrl);
-        if (XF_TEX_GET_TEXGEN_TYPE(ctrl) != 0) unsupported = "emboss and colour texgens";
-        else if (row != 0 && row != 1 && (row < 5 || row > 12)) unsupported = "texgens from colours or binormals";
+        if (XF_TEX_GET_TEXGEN_TYPE(ctrl) != 0) unsupported = "emboss and color texgens";
+        else if (row != 0 && row != 1 && (row < 5 || row > 12)) unsupported = "texgens from colors or binormals";
         if (unsupported) return false;
         t.source = static_cast<std::uint8_t>(row), t.coord = coord;
         t.threeInputs = XF_TEX_GET_INPUT_FORM(ctrl);  // AB11 otherwise: the third input is one whatever the source
@@ -876,7 +876,7 @@ std::size_t GxVertexPipeline::triangles(GxDrawVertex* vertices, std::uint16_t co
 }
 
 namespace {
-// The shader's light entries: a light under one part's settings, feeding the colour, the alpha or both (both only when
+// The shader's light entries: a light under one part's settings, feeding the color, the alpha or both (both only when
 // the two parts treat it alike). More than four can't be drawn (returns five).
 struct LightEntry {
     std::uint8_t light, part;
@@ -919,7 +919,7 @@ unsigned GxVertexPipeline::meshEligible() const {
         if (texgens_[u].palette) return MeshUnsupported;  // the palette's texel moves per primitive
     if (fixedDepth_) return MeshDepthTexture;
     if (lit_) {
-        // The shader runs up to four light entries, each a light under one part's settings (an actor lights its colour
+        // The shader runs up to four light entries, each a light under one part's settings (an actor lights its color
         // with lights 0 and 1, its alpha with light 2 and other settings).
         if (color0InVertex_) return MeshLitColor0;
         LightEntry entries[4];

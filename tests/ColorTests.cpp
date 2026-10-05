@@ -20,12 +20,12 @@ void packing() {
     check(static_cast<u32>(packed) == 0x11223344, "a TColor reads back as 0xRRGGBBAA");
     const JUtility::TColor white;
     check(white.r == 0xFF && white.g == 0xFF && white.b == 0xFF && white.a == 0xFF, "a default TColor is opaque white");
-    const nw4r::ut::Color colour(0x000000FFu);
-    check(colour.r == 0 && colour.g == 0 && colour.b == 0 && colour.a == 0xFF, "an nw4r colour from 0x000000FF is opaque black");
-    check(static_cast<u32>(colour) == 0x000000FFu, "an nw4r colour reads back as 0xRRGGBBAA");
+    const nw4r::ut::Color color(0x000000FFu);
+    check(color.r == 0 && color.g == 0 && color.b == 0 && color.a == 0xFF, "an nw4r color from 0x000000FF is opaque black");
+    check(static_cast<u32>(color) == 0x000000FFu, "an nw4r color reads back as 0xRRGGBBAA");
     const GXColor bytes = {1, 2, 3, 4};
     const nw4r::ut::Color fromBytes(bytes);
-    check(fromBytes.r == 1 && fromBytes.a == 4 && static_cast<u32>(fromBytes) == 0x01020304, "an nw4r colour keeps a GXColor's bytes");
+    check(fromBytes.r == 1 && fromBytes.a == 4 && static_cast<u32>(fromBytes) == 0x01020304, "an nw4r color keeps a GXColor's bytes");
 }
 
 // A TEV stage's two BP commands, through GD into the port's command processor.
@@ -67,7 +67,7 @@ int runColorTests() {
     tevStage();
     vertexCounts();
     bitfieldOrder();
-    std::printf("%u colour, TEV and display list word checks passed\n", checks);
+    std::printf("%u color, TEV and display list word checks passed\n", checks);
     return 0;
 }
 

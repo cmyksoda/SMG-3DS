@@ -56,7 +56,7 @@ int main() {
     runWideTests();
     runEtc1Tests();
     runGpuTests();
-    std::puts("\nPASS: math, WPad, BCSV, J3D, TEV, gravity, NameObj, scene, collision, animation, actors, J3D transforms, GX commands, draws and copies, Wii DSP, audio data, BMG text, colours, layouts, wide text, ETC1\n\nSTART: exit");
+    std::puts("\nPASS: math, WPad, BCSV, J3D, TEV, gravity, NameObj, scene, collision, animation, actors, J3D transforms, GX commands, draws and copies, Wii DSP, audio data, BMG text, colors, layouts, wide text, ETC1\n\nSTART: exit");
     while (aptMainLoop()) {
         hidScanInput();
         if (hidKeysDown() & KEY_START) break;

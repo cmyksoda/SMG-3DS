@@ -188,9 +188,9 @@ void materials(Audit& a) {
         a.field(ids[i], "material ID");
         const J3DMaterialInitData& m = init[ids[i]];
         a.field(m.mMaterialMode, "material mode"), a.field(m.mCullModeIdx, "cull index"), a.field(m.mTevStageNumIdx, "stage count index");
-        for (int k = 0; k < 2; ++k) a.field(m.mMatColorIdx[k], "material colour index"), a.field(m.mAmbColorIdx[k], "ambient index");
+        for (int k = 0; k < 2; ++k) a.field(m.mMatColorIdx[k], "material color index"), a.field(m.mAmbColorIdx[k], "ambient index");
         for (int k = 0; k < 4; ++k) a.field(m.mColorChanIdx[k], "channel index"), a.field(m.mTevKColorIdx[k], "konst index"),
-                                   a.field(m.mTevColorIdx[k], "TEV colour index"), a.field(m.mTevSwapModeTableIdx[k], "swap table index");
+                                   a.field(m.mTevColorIdx[k], "TEV color index"), a.field(m.mTevSwapModeTableIdx[k], "swap table index");
         for (int k = 0; k < 8; ++k) a.field(m.mTexCoordIdx[k], "texgen index"), a.field(m.mTexMtxIdx[k], "texture matrix index"), a.field(m.mTexNoIdx[k], "texture index");
         for (int k = 0; k < 16; ++k) a.field(m.mTevKColorSel[k], "konst selection"), a.field(m.mTevOrderIdx[k], "TEV order index"),
                                     a.field(m.mTevStageIdx[k], "TEV stage index"), a.field(m.mTevSwapModeIdx[k], "swap index");
@@ -202,7 +202,7 @@ void materials(Audit& a) {
         for (int k = 0; k < 8; ++k) {
             if (m.mTexMtxIdx[k] != 0xFFFF) {
                 const J3DTexMtxInfo& t = in<J3DTexMtxInfo>(b, o[13])[m.mTexMtxIdx[k]];
-                a.field(t.mProjection, "texture matrix projection"), a.field(t.mCenter.x, "texture matrix centre"), a.field(t.mSRT.mScaleX, "texture scale");
+                a.field(t.mProjection, "texture matrix projection"), a.field(t.mCenter.x, "texture matrix center"), a.field(t.mSRT.mScaleX, "texture scale");
                 a.field(t.mSRT.mRotation, "texture rotation"), a.field(t.mSRT.mTranslationY, "texture translation"), a.field(t.mEffectMtx[3][3], "effect matrix");
                 a.plausible(std::isfinite(t.mSRT.mScaleX) && std::isfinite(t.mEffectMtx[0][0]), "a texture matrix");
             }
@@ -211,11 +211,11 @@ void materials(Audit& a) {
         for (int k = 0; k < 4; ++k)
             if (m.mTevColorIdx[k] != 0xFFFF) {
                 const GXColorS10& c = in<GXColorS10>(b, o[17])[m.mTevColorIdx[k]];
-                a.field(c.r, "TEV colour"), a.field(c.a, "TEV colour"), a.plausible(c.r >= -1024 && c.r < 1024, "a TEV colour");
+                a.field(c.r, "TEV color"), a.field(c.a, "TEV color"), a.plausible(c.r >= -1024 && c.r < 1024, "a TEV color");
             }
         if (m.mFogIdx != 0xFFFF) {
             const J3DFogInfo& f = in<J3DFogInfo>(b, o[23])[m.mFogIdx];
-            a.field(f.mType, "fog type"), a.field(f.mCenter, "fog centre"), a.field(f.mStartZ, "fog start"), a.field(f.mFarZ, "fog far");
+            a.field(f.mType, "fog type"), a.field(f.mCenter, "fog center"), a.field(f.mStartZ, "fog start"), a.field(f.mFarZ, "fog far");
             a.field(f.mFogAdjTable.r[9], "fog adjustment");
         }
         if (m.mNBTScaleIdx != 0xFFFF) {
@@ -366,7 +366,7 @@ void animation(Audit& a, const std::string& where, const std::uint8_t* data, std
             keyTable(a, tables[i].mTranslateInfo, translations, "a texture translation key table");
         }
         for (std::uint32_t i = 0; i < tracks / 3u; ++i) a.field(in<std::uint16_t>(b, word(0x18))[i], "a texture animation's material");
-        if (word(0x24) && tracks >= 3) a.field(in<Vec>(b, word(0x24))[0].z, "a texture matrix centre");
+        if (word(0x24) && tracks >= 3) a.field(in<Vec>(b, word(0x24))[0].z, "a texture matrix center");
         ++a.counts["BTK texture animations"];
     } else if (kind == tag("TRK1")) {
         for (int k = 0; k < 2; ++k) {
@@ -386,8 +386,8 @@ void animation(Audit& a, const std::string& where, const std::uint8_t* data, std
         std::uint16_t values[4];
         for (int c = 0; c < 4; ++c) values[c] = half(0x10 + 2 * c);
         const auto* tables = in<J3DAnmColorKeyTable>(b, word(0x18));
-        for (std::uint16_t i = 0; i < count; ++i) keyTable(a, tables[i].mRInfo, values[0], "a colour key table"), keyTable(a, tables[i].mAInfo, values[3], "a colour key table");
-        ++a.counts["BPK colour animations"];
+        for (std::uint16_t i = 0; i < count; ++i) keyTable(a, tables[i].mRInfo, values[0], "a color key table"), keyTable(a, tables[i].mAInfo, values[3], "a color key table");
+        ++a.counts["BPK color animations"];
     } else if (kind == tag("TPT1")) {
         const std::uint16_t count = half(0xC);
         const auto* tables = in<J3DAnmTexPatternFullTable>(b, word(0x10));
@@ -457,11 +457,11 @@ void jpc(Audit& a, const std::string& where, const std::uint8_t* data, std::size
                 ++a.counts["JPA dynamics blocks"];
             } else if (kind == tag("BSP1")) {
                 const auto& d = *reinterpret_cast<const JPABaseShapeData*>(c + at);
-                a.field(d.mFlags, "shape flags"), a.field(d.mClrPrmAnmOffset, "colour key offset"), a.field(d.mBaseSizeY, "base size");
-                a.field(d.mBlendModeCfg, "blend config"), a.field(d.mClrAnmFrmMax, "colour frames"), a.field(d.mClrEnv.a, "env alpha");
+                a.field(d.mFlags, "shape flags"), a.field(d.mClrPrmAnmOffset, "color key offset"), a.field(d.mBaseSizeY, "base size");
+                a.field(d.mBlendModeCfg, "blend config"), a.field(d.mClrAnmFrmMax, "color frames"), a.field(d.mClrEnv.a, "env alpha");
                 if (d.mClrFlg & 2)
                     for (unsigned k = 0; k < d.mClrPrmKeyNum; ++k)
-                        a.field(reinterpret_cast<const JPAClrAnmKeyData*>(c + at + d.mClrPrmAnmOffset)[k].index, "a colour key's frame");
+                        a.field(reinterpret_cast<const JPAClrAnmKeyData*>(c + at + d.mClrPrmAnmOffset)[k].index, "a color key's frame");
                 ++a.counts["JPA base shapes"];
             } else if (kind == tag("ESP1")) {
                 const auto& d = *reinterpret_cast<const JPAExtraShapeData*>(c + at);
@@ -469,7 +469,7 @@ void jpc(Audit& a, const std::string& where, const std::uint8_t* data, std::size
                 ++a.counts["JPA extra shapes"];
             } else if (kind == tag("SSP1")) {
                 const auto& d = *reinterpret_cast<const JPAChildShapeData*>(c + at);
-                a.field(d.mInheritRGB, "inherited colour"), a.field(d.mTiming, "child timing"), a.field(d.mRate, "child rate"), a.field(d.mRotSpeed, "rotation speed");
+                a.field(d.mInheritRGB, "inherited color"), a.field(d.mTiming, "child timing"), a.field(d.mRate, "child rate"), a.field(d.mRotSpeed, "rotation speed");
                 ++a.counts["JPA child shapes"];
             } else if (kind == tag("ETX1")) {
                 const auto& d = *reinterpret_cast<const JPAExTexShapeData*>(c + at);

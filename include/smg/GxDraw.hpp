@@ -16,7 +16,7 @@ struct GxTextureMap {
 };
 
 // A vertex ready for the PICA: clip space with the EFB mapped onto [-1, 1] (y up) and depth onto [-1, 0] (near to far,
-// as citro3d's projections), turned for the 3DS's screen when the frame says; its channel colour, and each combiner
+// as citro3d's projections), turned for the 3DS's screen when the frame says; its channel color, and each combiner
 // unit's coordinates.
 struct GxDrawVertex {
     float position[4];
@@ -55,11 +55,11 @@ struct GxDrawState {
     // Why the draws under this state are left out (null if they aren't): a stage's coordinates replaced by an indirect
     // lookup, which would read one texel everywhere instead.
     const char* leftOut = nullptr;
-    // The program reads TEV register C0 as the vertex colour, which then holds C0: a primitive whose C0 alone differs
-    // (a particle's fading colour) joins the same draw instead of starting another.
+    // The program reads TEV register C0 as the vertex color, which then holds C0: a primitive whose C0 alone differs
+    // (a particle's fading color) joins the same draw instead of starting another.
     bool color0InVertex = false;
     // With C0 riding, the program reads C1 from a palette texel on unit paletteUnit (the CPU path's draws only): a
-    // particle's other colour no longer starts a draw either.
+    // particle's other color no longer starts a draw either.
     bool color1InTexture = false;
     std::uint8_t paletteUnit = 0;
     // Passes drawn after the program's over the same primitives, each added on (splitTev): a material one PICA pass
@@ -77,14 +77,14 @@ struct GxDrawState {
 void readGxDrawState(const GxCommandProcessor& gpu, GxDrawState& out, bool palette = false);
 // The registers readGxDrawState reads for the stages and texture maps in use, in a fixed order, as a cache key: two
 // processors with the same key read the same state (a map no stage uses may differ in it). A C0 that can ride in the
-// vertex colour, or with the palette a C1 in its texel, is a marker instead (bits 1 and 2 of `markers`): the same state
+// vertex color, or with the palette a C1 in its texel, is a marker instead (bits 1 and 2 of `markers`): the same state
 // holds for every value unless readGxDrawState kept the value in its program, which the caller checks.
 // At most MaxDrawStateKey words; the texture maps' words come last, three a map (mode, image size, image address), from
 // `mapsAt` when given.
 constexpr std::size_t MaxDrawStateKey = 128;
 std::size_t gxDrawStateKey(const GxCommandProcessor& gpu, std::uint32_t* out, bool palette = false, unsigned* markers = nullptr,
                            std::size_t* mapsAt = nullptr);
-// C0 as four bytes, false when a component is outside 0-255 (then it can't be a vertex colour).
+// C0 as four bytes, false when a component is outside 0-255 (then it can't be a vertex color).
 bool gxColor0Bytes(const GxCommandProcessor& gpu, std::uint8_t out[4]);
 bool gxColor1Bytes(const GxCommandProcessor& gpu, std::uint8_t out[4]);
 // TEV programs compiled so far (readGxDrawState keeps each by what compileTev reads): how often its cache missed.
@@ -95,9 +95,9 @@ struct GxDraw : GxDrawState {
     std::vector<GxDrawVertex> triangles;
 };
 
-// GX's lighting for colour channel 0 as XF's control words, material and ambient registers and lights hold it, decoded
+// GX's lighting for color channel 0 as XF's control words, material and ambient registers and lights hold it, decoded
 // once so each vertex only does the arithmetic (Dolphin's software renderer is the reference for it). apply() takes a
-// vertex's view-space position, unit normal and colour 0.
+// vertex's view-space position, unit normal and color 0.
 struct GxLighting {
     struct Part {
         bool lit = false, materialFromVertex = false, ambientFromVertex = false, attenuated = false, spot = false;
@@ -106,7 +106,7 @@ struct GxLighting {
     struct Light {
         float color[4], cosine[3], distance[3], position[3], direction[3];
     };
-    Part parts[2];  // colour, alpha
+    Part parts[2];  // color, alpha
     bool shared = false;  // both lit by the same lights the same way: each light's attenuation worked out once
     std::uint8_t material[4] = {}, ambient[4] = {};
     Light lights[8] = {};
@@ -115,7 +115,7 @@ struct GxLighting {
 };
 
 // The GPU path: a display list of primitives decoded once, in model space, for the PICA's vertex shader to transform
-// every time it is called. Each vertex carries what the shader reads: its position, colour, each texgen's input vector
+// every time it is called. Each vertex carries what the shader reads: its position, color, each texgen's input vector
 // (the CPU path's `in`, its fourth component one), its normal (for lighting) and its matrix slot's first uniform row:
 // slot x 4 unlit (each slot's four clip rows); lit, 4 + its group's compact slot x 6 (modelview and normal rows, after
 // the four rows from view to clip the slots share).
@@ -147,14 +147,14 @@ struct GxMesh {
     std::uint8_t formats = 0;  // the vertex formats its primitives use, a bit each
 };
 // What one draw of a mesh needs besides its vertices: each named slot's whole transform (model space to what the
-// PICA takes), each texgen's three rows and whether it divides by q, and the colour when it isn't per vertex.
+// PICA takes), each texgen's three rows and whether it divides by q, and the color when it isn't per vertex.
 struct GxMeshUniforms {
     float clip[10][16];
     std::uint16_t slots = 0;
     float texgen[CombinerProgram::MaxUnits][3][4];
-    // Lit: channel 0's colour and alpha worked out on the GPU. View to clip, shared; per compact slot the modelview and
+    // Lit: channel 0's color and alpha worked out on the GPU. View to clip, shared; per compact slot the modelview and
     // normal rows (their clip rows unused); per
-    // light entry (up to four) its colour (0-1, zero in a part it doesn't light); position prescaled, a0; direction,
+    // light entry (up to four) its color (0-1, zero in a part it doesn't light); position prescaled, a0; direction,
     // a1; a2, k0, k1, k2 (one and zeros unattenuated); -prescale, 1/prescale (a far light's position scaled to about
     // one); spot (else specular), diffuse, the cosine's floor (0 clamped, -2 signed).
     bool lit = false, rgbLit = false, alphaLit = false, rgbAmbientFromVertex = false, alphaAmbientFromVertex = false;
@@ -170,7 +170,7 @@ struct GxMeshUniforms {
     float ambient[4] = {};
     bool projective[CombinerProgram::MaxUnits] = {};
     unsigned units = 0;
-    // Unlit colour: per vertex, or this colour for the draw; with vertex colours, each part from the vertex or from it.
+    // Unlit color: per vertex, or this color for the draw; with vertex colors, each part from the vertex or from it.
     bool fixedColor = false, rgbFromVertex = true, alphaFromVertex = true;
     std::uint8_t color[4] = {};
     std::uint8_t reject = 0;  // GEN_MODE's: 1 culls what GX_CULL_BACK names, 2 GX_CULL_FRONT, 3 all
@@ -206,7 +206,7 @@ public:
         atlasOutside_ = false;
         return outside;
     }
-    // After prepare: whether display lists under this state can take the GPU path (unlit or riding colour, folded
+    // After prepare: whether display lists under this state can take the GPU path (unlit or riding color, folded
     // texgens with a matrix for the whole primitive, no depth texture), and the mesh a list decodes to (false when it
     // holds anything but primitives, or a matrix index that doesn't name a whole slot of the ten).
     // Why a mesh can't be used (0 when it can): the state (1 unsupported, 2 depth texture, 3 lit with C0 riding in the
@@ -233,7 +233,7 @@ public:
     bool meshLit() const { return lit_; }
     // The texgens' sources as a mesh's vertices hold them (row and input form per unit), for a mesh's key.
     std::uint32_t meshSources() const;
-    // Whether this state's colour comes from each vertex (otherwise GxMeshUniforms' fixed colour): part of a mesh's key.
+    // Whether this state's color comes from each vertex (otherwise GxMeshUniforms' fixed color): part of a mesh's key.
     bool meshColorFromVertex() const;
     const char* unsupported = nullptr;
     // Prepares that read the state whole, folds made, and lighting read (for the perf line).
@@ -304,10 +304,10 @@ private:
 };
 
 // gx.v.pica's transform path in C++, for checking meshes against the CPU path: one vertex under a draw's uniforms, its
-// clip-space position, colour (0-1) and each unit's texture coordinates.
+// clip-space position, color (0-1) and each unit's texture coordinates.
 void gxMeshModel(const GxMeshUniforms& u, const GxMeshVertex& v, float clip[4], float color[4], float tex[CombinerProgram::MaxUnits][2]);
 
-// GX's lighting for colour channel 0 at one vertex, straight from the processor's state (GxLighting, read and applied).
+// GX's lighting for color channel 0 at one vertex, straight from the processor's state (GxLighting, read and applied).
 void gxLitChannel(const GxCommandProcessor& gpu, const float view[3], const float normal[3], const std::uint8_t vertex[4], std::uint8_t out[4]);
 
 // The state and one primitive's triangles at once (a fresh pipeline each call).

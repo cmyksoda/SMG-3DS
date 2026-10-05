@@ -10,20 +10,20 @@ void block(SwapPlan& plan, std::size_t at, std::size_t size, unsigned textureTab
     const auto need = [&](std::size_t length, const char* what) { return plan.need(at, length, end, what); };
     if (plan.is(at, "BEM1")) {  // JPADynamicsBlockData: flags and user word, nine vectors' floats, thirteen floats, eight halves
         if (need(0x7C, "a dynamics block")) plan.words(at + 8, 2), plan.words(at + 0x10, 9), plan.words(at + 0x34, 13), plan.halves(at + 0x68, 8);
-    } else if (plan.is(at, "BSP1")) {  // JPABaseShapeData, then its texture-matrix and colour key tables
+    } else if (plan.is(at, "BSP1")) {  // JPABaseShapeData, then its texture-matrix and color key tables
         if (!need(0x34, "a base shape")) return;
         plan.word(at + 8), plan.halves(at + 0xC, 2), plan.words(at + 0x10, 2), plan.half(at + 0x18), plan.half(at + 0x24);
         if (plan.be32(at + 8) & 0x01000000 && need(0x34 + 0x28, "a texture matrix animation")) plan.words(at + 0x34, 10);
-        // Colour keys (JPAClrAnmKeyData): a frame half, then a GXColor's bytes.
-        const std::uint32_t colours = plan.be8(at + 0x21);
+        // Color keys (JPAClrAnmKeyData): a frame half, then a GXColor's bytes.
+        const std::uint32_t colors = plan.be8(at + 0x21);
         const struct { std::uint32_t flag; std::size_t offset, keys; } tables[2] = {
             {2, plan.be16(at + 0xC), plan.be8(at + 0x22)}, {8, plan.be16(at + 0xE), plan.be8(at + 0x23)}};
         for (const auto& t : tables)
-            if (colours & t.flag && plan.need(at + t.offset, 6 * t.keys, end, "colour keys"))
+            if (colors & t.flag && plan.need(at + t.offset, 6 * t.keys, end, "color keys"))
                 for (std::size_t k = 0; k < t.keys; ++k) plan.half(at + t.offset + 6 * k);
     } else if (plan.is(at, "ESP1")) {  // JPAExtraShapeData: flags, seven floats, two halves, thirteen floats
         if (need(0x60, "an extra shape")) plan.word(at + 8), plan.words(at + 0xC, 7), plan.halves(at + 0x28, 2), plan.words(at + 0x2C, 13);
-    } else if (plan.is(at, "SSP1")) {  // JPAChildShapeData: flags, ten floats, two colours, a float, two halves, two bytes, a half
+    } else if (plan.is(at, "SSP1")) {  // JPAChildShapeData: flags, ten floats, two colors, a float, two halves, two bytes, a half
         if (need(0x48, "a child shape")) plan.word(at + 8), plan.words(at + 0xC, 10), plan.word(at + 0x3C), plan.halves(at + 0x40, 2), plan.half(at + 0x46);
     } else if (plan.is(at, "ETX1")) {  // JPAExTexShapeData: flags and an indirect matrix
         if (need(0x28, "an extra texture shape")) plan.word(at + 8), plan.words(at + 0xC, 6);

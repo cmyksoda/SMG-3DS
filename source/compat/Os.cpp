@@ -32,7 +32,7 @@ void DCStoreRange(void* start, u32 size) { if (smgGpuMemoryChanged) smgGpuMemory
 void DCStoreRangeNoSync(void* start, u32 size) { if (smgGpuMemoryChanged) smgGpuMemoryChanged(start, size); }
 void DCInvalidateRange(void* start, u32 size) { if (smgGpuMemoryChanged) smgGpuMemoryChanged(start, size); }
 // dcbz zeroes whole cache lines, the one cache operation whose effect code sees. Only the bytes asked for are
-// cleared: the port's heap does not keep the Wii's 32-byte alignment, so rounding out could reach a neighbour.
+// cleared: the port's heap does not keep the Wii's 32-byte alignment, so rounding out could reach a neighbor.
 void DCZeroRange(void* start, u32 size) {
     std::memset(start, 0, size);
     if (smgGpuMemoryChanged) smgGpuMemoryChanged(start, size);

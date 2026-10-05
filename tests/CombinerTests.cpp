@@ -374,8 +374,8 @@ Inputs byteInputs(std::mt19937& rng) {
     return in;
 }
 
-// The title's dissolve: alpha is TEXA > K.a ? RASA : 0, then by colour: RGB8 adds K where TEXC > RASC to the texture's
-// own colour, R8 adds C0 where the texture's red passes the raster's, and the bloom's bright pass is that test alone.
+// The title's dissolve: alpha is TEXA > K.a ? RASA : 0, then by color: RGB8 adds K where TEXC > RASC to the texture's
+// own color, R8 adds C0 where the texture's red passes the raster's, and the bloom's bright pass is that test alone.
 void compareAddsC(std::mt19937& rng) {
     smg::ModelMaterial m;
     m.textures[0] = 0;
@@ -406,7 +406,7 @@ void compareAddsC(std::mt19937& rng) {
     }
 }
 
-// BloomEffect's blur: six stages each add one tap of the same map (its own coordinate) weighted by the rasterized colour.
+// BloomEffect's blur: six stages each add one tap of the same map (its own coordinate) weighted by the rasterized color.
 // The PICA has three units; the extra taps share one, so black stays black instead of each adding white.
 void sixTapBlur(std::mt19937& rng) {
     smg::ModelMaterial m;

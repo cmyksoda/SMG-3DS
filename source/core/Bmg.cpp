@@ -49,7 +49,7 @@ const char* planParameters(const std::uint8_t* text, std::size_t first, unsigned
         plan.set(first, Swap16);
     } else if (group == 2 || group == 10) {  // a sound or font name: getParamPtr text
         for (unsigned i = 0; i < units; ++i) plan.set(first + i, Swap16);
-    } else if ((group == 5 || (group == 255 && type == 0)) && units == 1) {  // a player name or colour: getParam8
+    } else if ((group == 5 || (group == 255 && type == 0)) && units == 1) {  // a player name or color: getParam8
         plan.set(first, Keep);
     } else if ((group == 6 || group == 7) && units == 4) {
         // A slot the game writes natively before it reads (setArgNumber, setArgString), then getParam32(1).

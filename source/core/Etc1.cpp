@@ -40,11 +40,11 @@ long fitHalf(const Rgb block[16], bool flip, bool first, Rgb base, unsigned& tab
         offsets[i] = (p.r - base.r + p.g - base.g + p.b - base.b) / 3;
         widest = std::max(widest, std::abs(offsets[i]));
     }
-    unsigned centre = 0;
+    unsigned center = 0;
     for (unsigned t = 1; t < 8; ++t)
-        if (std::abs(Modifiers[t][1] - widest) < std::abs(Modifiers[centre][1] - widest)) centre = t;
+        if (std::abs(Modifiers[t][1] - widest) < std::abs(Modifiers[center][1] - widest)) center = t;
     long best = LONG_MAX;
-    for (unsigned t = centre ? centre - 1 : 0; t <= std::min(centre + 1, 7u); ++t) {
+    for (unsigned t = center ? center - 1 : 0; t <= std::min(center + 1, 7u); ++t) {
         const int middle = (Modifiers[t][0] + Modifiers[t][1]) / 2;
         long total = 0;
         std::uint32_t chosen = 0;

@@ -420,7 +420,7 @@ reads 0. Run it after any new file joins the build.
 
 **Endianness.** The Wii's CPU is big-endian and reads its files with plain loads; the 3DS's is little-endian.
 Every original parser meets this, format by format. `source/compat/NativeResources.cpp` turns a format's
-structures native in place where original code first reads them, recognising data it already turned. RARC
+structures native in place where original code first reads them, recognizing data it already turned. RARC
 archives are first (at `JKRMemArchive`'s mount); `JKRArchive::SDIFileEntry`'s `mFlag:8 / mNameOffset:24`
 also swaps declaration order, since Metrowerks fills bitfields from the top and GCC on ARM from the bottom.
 BCSV tables turn at `JMapInfo::attach` (in place, or as a repacked copy where ARM can't load a field where it
@@ -453,7 +453,7 @@ does `TalkNodeCtrl`. Parameters are read as bytes, halves, words or text, depend
 (`source/core/Bmg.cpp`) walks each message from its INF1 offset and plans every unit once: characters and
 types are swapped; a tag's (length, group) unit keeps its bytes; parameters follow the game's reader for their
 kind. Those are: a wait's `getParam16` (group 1 type 0), a sound or font name's `getParamPtr` text (groups 2
-and 10), a player name's or colour's `getParam8` (group 5, group 255 type 0), and a number or string tag's
+and 10), a player name's or color's `getParam8` (group 5, group 255 type 0), and a number or string tag's
 slot plus `getParam32(1)` argument (groups 6 and 7). The game writes the slot natively before it reads it, and
 it is empty on the disc. FLW1's message and branch nodes read two halves after the index, event nodes one word.
 FLI1 is never read, and on the disc its declared size runs past the file, so only its block header turns. A
@@ -484,10 +484,10 @@ That needs `wchar_t` settled (below): the game reads its UTF-16 text through `wc
 open design: the command processor has the state, and turning primitives into citro3d draws is next, with the
 port's TEV-to-PICA combiner and texture conversion.
 
-**Colours as words.** nw4r's `ut::Color` and JSystem's `JUtility::TColor` turned to and from `u32` through
+**Colors as words.** nw4r's `ut::Color` and JSystem's `JUtility::TColor` turned to and from `u32` through
 memory, which on the Wii's big-endian CPU packs `0xRRGGBBAA`. On ARM the same code reverses the bytes, so a
 literal like `0x000000FF` would have been transparent red instead of opaque black, and J3D's material and
-ambient colours (`loadMatColors`, `loadAmbColors`, `J3DGDWrite_u32(*(u32*)color)`) would have gone to the GPU as
+ambient colors (`loadMatColors`, `loadAmbColors`, `J3DGDWrite_u32(*(u32*)color)`) would have gone to the GPU as
 ABGR. All three now pack and unpack the value the Wii's way (R in the top byte). The same pattern built every TEV
 stage's two BP commands (`J3DTevStage::load`, `*(u32*)&field_0x0`: the register byte, then three setting bytes),
 which on ARM would have named a setting as the register; they are packed by value too. `tests/ColorTests.cpp`
@@ -495,7 +495,7 @@ pins both, the TEV stage through GD into the port's command processor. `J3DShape
 vertex count out of a display list as a native `u16`; it is the GPU's big-endian half, so a strip of 3 would
 have counted 768 and the walk (`countVertex`, `addTexMtxIndexInDL`, which `ModelUtil` calls) run past the list.
 It reads and writes those halves big-endian now. Plain copies between same-typed structs through `u32` keep
-their bytes on either CPU and are left alone. Resource colours the game reads as `u32` (BRLYT's `vtxCols` and
+their bytes on either CPU and are left alone. Resource colors the game reads as `u32` (BRLYT's `vtxCols` and
 `textCols`) must therefore be word-swapped when their format is turned native, like any other word.
 
 **Bitfields read as words.** Metrowerks packs bitfields from each word's top bit; GCC on ARM from the bottom.
@@ -602,9 +602,9 @@ Each converter has a disc audit that reads the result back through the game's ow
 covers J3D, BTI and JPC; `--collision` compares every KCL turned in place with the repacked one).
 
 **The GX features the game scene needed.** Indexed XF loads (arrays 12 to 15: J3D's matrices and GX's light objects,
-read in the CPU's order). Lighting for colour channel 0, after Dolphin's software renderer: ambient plus each masked
+read in the CPU's order). Lighting for color channel 0, after Dolphin's software renderer: ambient plus each masked
 light, spot or specular falloff, diffuse none/signed/clamped, then the GPU's `(m * (l + (l >> 7))) >> 8`. EFB copies to
-textures: `GxCopy` encodes every colour format but RG8 and GB8 as the pixel engine writes them, including the vertical
+textures: `GxCopy` encodes every color format but RG8 and GB8 as the pixel engine writes them, including the vertical
 filter; the SDK's "no filter" setting is the taps (21, 22, 21)/64, since six-bit taps can't pass a row through
 unchanged. The renderer reads its target back for each copy and for `GXPeekZ`/`GXPeekARGB` (the screen's way round:
 EFB pixel to target index `sx * 240 + (239 - sy)`, checked against a live frame), quantised to the EFB's pixel
@@ -622,7 +622,7 @@ wants it: left = 240 - (y + h), top = 400 - (x + w).
 **TEV comparisons.** The PICA's combiner has no compare ops (`GX_TEV_COMP_*`), which compute `d + (a > b ? c : 0)`
 and friends. Image effects lean on them: `FallOutFieldDraw`'s screen fill sets alpha to `texture alpha > K0.a ? A0 :
 0` and lets an alpha test drop the zeros. With A0 = 0 that pass is invisible on the Wii. Read as an ordinary lerp,
-it painted its colour over the file select's planets. A compare whose c is zero is exactly d, so it compiles
+it painted its color over the file select's planets. A compare whose c is zero is exactly d, so it compiles
 exactly. A greater-than compare by component (RGB8, A8) or by red (R8: the bloom's bright pass, `TEXC.r > RASC.r ? 1 :
 0`) is built from saturating steps: for eight-bit inputs `a > b` is `(a - b) * 256` saturated, which is a subtract
 times four and then two doublings times four, followed by one op for `c * step + d`: four PICA stages at most, exact
@@ -641,7 +641,7 @@ image the game only ever loads as a texture, so that function (adapted) has the 
 the target is taken whole into a 256x512 texture by a raw texture copy (its rows of tiles regapped from 240 to 256
 pixels), and a quad draws the copy's rectangle into a VRAM texture of the copy's own (about screen resolution), its
 combiner summing up to three of the vertical filter's taps and turning the result into what the copy format's read
-gives: intensity as the PE's studio-range Y (a DOT3 stage), one channel for every component, or colour with alpha one
+gives: intensity as the PE's studio-range Y (a DOT3 stage), one channel for every component, or color with alpha one
 for RGB565. A draw that binds the destination address gets that texture. The Wii's memory is not written, so the CPU
 never sees these copies; every other copy (the Message Board photo, `captureDolTexture`) is encoded into memory as
 before, which also forgets any GPU copy at its address. The first copy of each kind is read back and set against the
@@ -651,7 +651,7 @@ stay the CPU's). Inside a frame citro3d's "sync" transfers only queue, so `readE
 ends the frame without showing it, reads, and begins again: on hardware the old readback ran before the GPU had drawn.
 The Star Festival's first frames then showed the per-primitive costs: `compileTev` ran for every primitive (46% of the
 3DS's CPU after Play This File), so `buildGxDraw` keeps each program by the fields it reads (stage count and stages,
-TEV and konst colours, swap tables, each stage's texture), and the ETC1 encoder for CMPR textures fits one split (the one
+TEV and konst colors, swap tables, each stage's texture), and the ETC1 encoder for CMPR textures fits one split (the one
 whose halves' averages fit the block better) in one mode (differential when the halves allow) instead of searching all
 four.
 
@@ -671,12 +671,12 @@ of the determinant of its (x, y, w) rows. Each texgen's texture matrix and dual 
 input's fourth component is always one), kept while the matrices' words are the same; one that normalizes between them
 can't fold. Vertex layouts are read once per CP change, with each indexed array's base resolved once (the host's memory
 is the Wii's addresses plus one offset) and fixed point applied by multiplying (exact for powers of two). Particles
-broke batches another way: each sets its own fading colour in TEV register C0, a combiner constant on the PICA. When a
-program reads C0, never writes it and never reads the rasterized colour, C0 takes the rasterized colour's place, in
-every vertex's colour, so the program is compiled once whatever C0 holds and a primitive whose C0 alone changed stays in
+broke batches another way: each sets its own fading color in TEV register C0, a combiner constant on the PICA. When a
+program reads C0, never writes it and never reads the rasterized color, C0 takes the rasterized color's place, in
+every vertex's color, so the program is compiled once whatever C0 holds and a primitive whose C0 alone changed stays in
 the batch (the title's draws fell from about 1,000 a frame to 23). Lighting is decoded from XF once per change (the
 control words, material, ambient, each light as floats), so a vertex only does the arithmetic, in the same order as
-before (bit for bit the same colours); when colour and alpha share their lights, each light's attenuation is worked out
+before (bit for bit the same colors); when color and alpha share their lights, each light's attenuation is worked out
 once. The FIFO, which immediate-mode drawing (particles, layouts) feeds a word at a time, used to parse its pending
 command again and move it onto itself after every word; now it waits until the length the header gave has arrived.
 Measured in the prologue's heaviest frames: draws 26,603 to 135 a frame and 3,410 ms to 552 ms; the title and the file
@@ -693,17 +693,17 @@ few times a frame; a New 3DS at 804 MHz should run faster than these numbers.
 all in display lists (J3D draws every shape as one), called again each frame with the same bytes. So the command
 processor offers each `GX_CallDisplayList` to the host first (`GxCommandProcessor::Host::displayList`). When the state
 is one the GPU path covers and the list holds only primitives, the renderer decodes it once into a mesh
-(`GxVertexPipeline::buildMesh`: model-space positions, colours, normals, each texgen's input vector, the vertex's matrix
+(`GxVertexPipeline::buildMesh`: model-space positions, colors, normals, each texgen's input vector, the vertex's matrix
 slot) kept in linear memory, and from then on draws it with the PICA's vertex shader doing the work (`shaders/gx.v.pica`):
 each slot's whole transform as uniform rows, each texgen's folded matrix, and lighting. A mesh is keyed by the list's
-address, size, first and last words, where its colour comes from, its texgens' sources and whether it is lit, and keeps
+address, size, first and last words, where its color comes from, its texgens' sources and whether it is lit, and keeps
 the CP registers it was decoded under; only its own formats' tables and the arrays it reads count, since the matrix
 arrays change every frame without touching it. The game's cache maintenance (`DCFlushRange`, `DCStoreRange`,
 `DCInvalidateRange`, `DCZeroRange`) marks memory as changed through a bitmap of the pages meshes came from and a small
 queue the renderer drains; the hook never takes the FIFO's lock, as it can run holding the CPU's (taking it hung the
 title). A mesh over changed memory is dropped. Lighting runs in the shader as `GxLighting::apply` does it: up to four
-light entries, each a light under one colour part's settings. Spot or specular attenuation and the diffuse function are
-numbers mixed in, not branches, so an actor (colour lit by lights 0 and 1, alpha by light 2 with other settings) is one
+light entries, each a light under one color part's settings. Spot or specular attenuation and the diffuse function are
+numbers mixed in, not branches, so an actor (color lit by lights 0 and 1, alpha by light 2 with other settings) is one
 loop. Positions come prescaled, as the SDK puts directional lights at 1e18 and the PICA's 24-bit floats overflow near
 1.8e19 when squared. An instruction's second source can't be a uniform (picasso: "invalid source2 register"), so zero
 and one live in a temporary. A lit slot takes ten rows (clip, modelview, normal); four fit, so a lit list naming more
@@ -730,8 +730,8 @@ stays on the GPU as `JUTTexture::capture`'s do, and the plaza takes about 80 to 
 sends a uniform row only when it differs from citro3d's copy (every row is sent once at setup, so a skipped row is known
 to be on the GPU). A vertex layout follows its arrays' new bases without being read again (J3D's `GXSetArray` before
 every shape used to rebuild it). The draw state (`readGxDrawState`, about 12,000 instructions) is looked up by every
-register it reads (the BP registers a draw reads, the TEV colours and konsts, the channels' XF words), since J3D's
-materials come back every frame; materials whose TEV colours are animated still miss, as their program depends on them.
+register it reads (the BP registers a draw reads, the TEV colors and konsts, the channels' XF words), since J3D's
+materials come back every frame; materials whose TEV colors are animated still miss, as their program depends on them.
 The plaza's frame is now about 67 ms in Azahar (logic 6, animation 5, drawing 55 of which 7 to 9 wait for the GPU
 and vblank).
 
@@ -775,11 +775,11 @@ a load now looks up in a 256-entry table whether a draw reads its register and w
 stored (most don't), and BP is the first opcode it checks. The state cache's key now holds only what the state reads for
 the TEV stages in use and the texture maps they sample (`gxDrawStateKey`, about 50 words instead of 127).
 
-**States that differed only in what isn't drawn.** The key still held all eight TEV colour words, the konst words and
-the blend register whole. Values earlier draws left in registers no stage reads, a C0 riding in the vertex colour
+**States that differed only in what isn't drawn.** The key still held all eight TEV color words, the konst words and
+the blend register whole. Values earlier draws left in registers no stage reads, a C0 riding in the vertex color
 (read where it is drawn), a C1 in its palette texel and the blend mode's dither bit (the PICA has none) split one state
 into many: the cache passed 500 entries at the file select, and in the climb to the castle refilled 1,024 entries
-every few seconds, so dozens of states a frame were read again. The key now holds only the colour registers the active
+every few seconds, so dozens of states a frame were read again. The key now holds only the color registers the active
 stages read, the konst words only when a stage reads KONST, and a marker for a C0 or C1 that can ride; where
 `readGxDrawState` kept the value after all (the riding program would be approximated and the folded one exact), the
 entry keeps the register words and holds for that value only. The file select keeps 73 states instead of about 500;
@@ -890,7 +890,7 @@ leaves.
 list i for each bit i set (lists 0 to 15, built in its constructor: the shadow capture's alpha-only silhouette, the
 silhouette through walls, the reflection's settings). Metrowerks keeps field `_k` at bit 31 - k, GCC at bit k, so every
 flag Mario's drawing sets (`_10` to `_1E`) landed past bit 15 and none of those lists ever ran: Mario's shadow capture
-drew his simple model in colour into a corner of the screen (the black shape over the plaza) instead of only into
+drew his simple model in color into a corner of the screen (the black shape over the plaza) instead of only into
 alpha. The adapted `drawIn` tests bit 31 - i. `MR::validateExCollisionParts` set the Binder's flag byte by its mask,
 0x20, which is `_2` for Metrowerks and `_5` for GCC; it names the field now. A sweep for structs read back as integers
 (`*(u32*)&`, `*(u8*)&`, unions pairing bitfields with a word) found nothing else that reads them.
@@ -900,21 +900,21 @@ green: read back as IA8, alpha byte first); `GxCopyTests` checks both. A copy ke
 for these, as the PICA's copy pass has no two-channel packing. **Depth copies** (the EFB's pixel type Z24) that stay on
 the GPU take one of z's bytes (Z8, Z8M, Z8L): the depth target is copied raw into the scratch texture, read as RGBA8
 (a D24S8 word puts z's top byte in G, then B, then A), and drawn through one stage of one-minus that byte, sampled
-nearest, or halved with the bilinear sample at each 2x2 block's centre (the byte averaged alone, within one of z's own
+nearest, or halved with the bilinear sample at each 2x2 block's center (the byte averaged alone, within one of z's own
 average's; `ImageEffectLocalUtil::capture` hands its clear flag to `JUTTexture::capture`'s mipmap, so the game's Z8
 copies are all halved), as GX's z is 0xFFFFFF less the port's nearer-is-larger, byte for byte; they are checked once
-against the CPU's encoder like the colour copies. The rest go to the CPU's encoder from the depth target read back
+against the CPU's encoder like the color copies. The rest go to the CPU's encoder from the depth target read back
 (raw D24S8): Z4 and Z8 take z's top byte, Z8M and Z8L its middle and low, Z16 its top two big-endian, Z16L its low two,
-Z24X8 all of it in RGBA8's two blocks; the copy filter blends colour only, and a halved copy averages z as one number,
-not byte by byte (`GxCopyTests`). A colour format stops by name. Flipswitch's depth-of-field blur takes one for its
+Z24X8 all of it in RGBA8's two blocks; the copy filter blends color only, and a halved copy averages z as one number,
+not byte by byte (`GxCopyTests`). A color format stops by name. Flipswitch's depth-of-field blur takes one for its
 indirect offsets, which the port leaves out, so only the copy's clear reaches the screen there. Still left: equality
-compares (the water's masks), and the second colour channel, which the PICA's combiner has no second vertex colour for.
+compares (the water's masks), and the second color channel, which the PICA's combiner has no second vertex color for.
 
 ### Particles: the title and file select
 
 The plaza ran at 30 frames a second while the title screen and file select ran at 7 to 15: the galaxy's dust stream is
 about a thousand JPA particles a frame, and each cost the renderer two draws. What each particle sends: its prim and
-env colours (`GXSetTevColor` for C0 and C1, each four BP loads, the BG half written three times as the SDK does), its
+env colors (`GXSetTevColor` for C0 and C1, each four BP loads, the BG half written three times as the SDK does), its
 position matrix (and a texture matrix for some), then `GXCallDisplayList` of a quad from `jpa_dl` (one 32-byte block).
 Four changes took the title from 97 ms a frame to 31 to 46:
 
@@ -923,8 +923,8 @@ Four changes took the title from 97 ms a frame to 31 to 46:
   port's GPU path has no such cache; the adapted SDK keeps its bookkeeping (`bpSentNot`) and sends nothing.
 - **Small lists join the batch.** A display list in one 32-byte block is read on the CPU path (`MeshSmall`) instead of
   drawn as a mesh of its own, so consecutive particles share a draw.
-- **C0 and C1 ride.** C0 already rode in the vertex colour. JPA's TEV blends env to prim by the texture
-  (lerp(C1, C0, TEXC)), and the PICA has one vertex colour, so every new C1 still started a draw (about 400 a frame).
+- **C0 and C1 ride.** C0 already rode in the vertex color. JPA's TEV blends env to prim by the texture
+  (lerp(C1, C0, TEXC)), and the PICA has one vertex color, so every new C1 still started a draw (about 400 a frame).
   On the CPU path a state may now read C1 from a unit of its own (`compileTev(material, color1FromUnit)`,
   `CombinerProgram::Palette`): each primitive's C1 is one texel of an 8x8 RGBA8 palette texture, taken in order through
   a command list (`startBuffers` starts over), so a recorded draw's texels never change; the vertices carry the
@@ -941,14 +941,14 @@ Then three more, each measured on the title (Azahar, 268 MHz):
   Now a waiting command takes just the bytes it still needs and the rest is read where it is (27 to 24.5 microseconds a
   particle).
 - **Vertex setup kept.** `GxVertexPipeline::prepare` redoes only C0's bytes, the texgen folds and the clip matrices
-  when nothing but TEV colours or XF matrix memory changed (`xfRegisterChanges` counts register loads apart).
+  when nothing but TEV colors or XF matrix memory changed (`xfRegisterChanges` counts register loads apart).
 - **Small lists decoded once.** A list in one block is decoded into `GxVertex`es on first use and drawn from them
   (`runDecoded`) until its bytes or the CP registers it was read under differ, or the memory it came from changes
   (the meshes' page marks; dropping every mesh drops these too). 24 to 19 microseconds a particle.
 
 The title then runs at 28 to 30 frames a second (33.4 to 35.8 ms), the file select 26 to 30.
 
-Later: `GXSetTevColor` wrote a colour's BG half three times (the Wii GPU's register latch wants it); the port's processor
+Later: `GXSetTevColor` wrote a color's BG half three times (the Wii GPU's register latch wants it); the port's processor
 ends in the same state after one, so the adapted SDK writes it once. A particle is then 82 bytes of commands (C0 and C1,
 two loads each; its position matrix; the list call), and the menus' render time fell from 19.75 to 18.35 microseconds a
 primitive: 84 of 92 four-second windows hold 29 to 30 frames a second, the busiest sparkle bursts 27 to 28. Also: a clip
@@ -1046,7 +1046,7 @@ mesh draw, CPU-path vertices, a batch drawn, peeks, a frame ended...), and a thr
 200 µs; the perf line shares each window's milliseconds out by zone. A store per zone costs nothing measurable (34.2 ms
 a frame without it at the Comet Observatory, 33.8 with). The GDB sampler still gives a function-level lead when it
 follows one thread (`rsp_sample.py`'s `TRACK=NAME`, the thread whose stack shows NAME), read as functions rather than
-instructions: the stub halts at block boundaries, so a tiny function called constantly takes its neighbours' samples.
+instructions: the stub halts at block boundaries, so a tiny function called constantly takes its neighbors' samples.
 
 **The Comet Observatory at 30.** At the session 8 build the Observatory ran 26 to 29 frames a second with the render
 thread busy 34.2 ms a frame. In order, each measured on the same standing-still route: the commonest commands are read
@@ -1137,7 +1137,7 @@ big-endian.
 **More byte-order traps.** Data the GPU reads must hold the Wii's bytes even when the source wrote it as wider
 integers: `MainLoopFramework`'s `clearZTexData` (Z24X8 texels as `u32`s) cleared every frame to near on ARM, and every
 3D draw then failed its depth test. The SDK's GX read `GXColor` arguments through `u32` casts (TEV, konst, fog, light
-and channel colours), and J3D read texture numbers back from its display lists with a native `u32` load. Region: Petari
+and channel colors), and J3D read texture numbers back from its display lists with a native `u32` load. Region: Petari
 matches a build that loads a Mii-name font (`MiiFont.arc`) the US disc doesn't have, and whose `main.dol` never
 names it, so the step is skipped when the archive is absent. Checking `main.dol`'s strings settles such questions.
 
@@ -1147,7 +1147,7 @@ bitfield into the word's top bits, and GCC on ARM into its bottom bits. The word
 every `GXSetTevOp` draw ran nonsense stages. The visible case was the picture font's button icons, drawn as white
 silhouettes. The adapted `GXSetTevOp` builds each word field by field by name (`smgTevColorWord`, `smgTevAlphaWord`
 in `compat/smg/GxPrivate.h`); a test pins `GX_MODULATE` to the hardware's words. Reversing the field order instead
-would break the SDK's positional initialisers, which GCC rejects. Any other bitfield struct read as an integer has
+would break the SDK's positional initializers, which GCC rejects. Any other bitfield struct read as an integer has
 the same trap; `io_reg.h`'s `si_comcsr_t` is the only other one in the SDK headers. JAudio's `JASChannel::MixConfig`
 is the same trap in a union: written as a word (`0x0150` = bus 1, nibbles 5 and 0), read as `upper:8`, `lower0:4`,
 `lower1:4`. On ARM `upper` came out as 0x50, an index far past the DSP's 12-entry bus table, so every voice's sends
@@ -1388,6 +1388,6 @@ every console, which the port carries as Dolphin does (Jaxi's call). FAT32 caps 
 
 The portable math tests check tolerances and conventions, not bit-identical Gekko rounding.
 The native validation app passes 1,069 math, 37 WPad, 190 BCSV, 1,043 J3D model/texture,
-8,810 TEV combiner, 27 original gravity, 27 NameObj, 89 scene and gravity creator, 48 collision, 21 J3D animation, 13 original actor, 6 J3D transform, 6 J3D skeleton, 14 GX command processor, 19 BMG text, 9 colour, TEV and display list word, 7 ETC1 and 8 GPU texture checks on emulated ARM
+8,810 TEV combiner, 27 original gravity, 27 NameObj, 89 scene and gravity creator, 48 collision, 21 J3D animation, 13 original actor, 6 J3D transform, 6 J3D skeleton, 14 GX command processor, 19 BMG text, 9 color, TEV and display list word, 7 ETC1 and 8 GPU texture checks on emulated ARM
 in Azahar; the GPU checks compare the hardware's ETC1 decoding against ours. Of the disc's
 7,780 materials, 6,987 translate to the combiner exactly. No physical console has been tested.

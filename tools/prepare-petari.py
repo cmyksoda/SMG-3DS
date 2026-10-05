@@ -2205,7 +2205,7 @@ adapt("src/Game/Camera/CameraShaker.cpp", "Game/Camera/CameraShaker.cpp", [
 adapt("src/JSystem/J3DGraphBase/J3DMatBlock.cpp", "JSystem/J3DGraphBase/J3DMatBlock.cpp", [
     ("    u32 tevStageNum = mTevStageNum;\n\n    for (u32 i = 0; i < 8; i++) {\n        if (mTexNo[i] != 0xffff) {",
      "    u32 tevStageNum = mTevStageNum;\n\n    for (u32 i = 0; i < ARRAY_SIZE(mTexNo); i++) {\n        if (mTexNo[i] != 0xffff) {", 1),
-    # Material and ambient colours go to the GPU as the word the Wii's load of their bytes gave: R on top.
+    # Material and ambient colors go to the GPU as the word the Wii's load of their bytes gave: R on top.
     ("#include <cstdio>\n", "#include <cstdio>\n\nstatic inline u32 smgColorWord(const GXColor& c) { return u32(c.r) << 24 | u32(c.g) << 16 | u32(c.b) << 8 | c.a; }\n", 1),
     ("    J3DGDWrite_u32(*(u32*)color);\n    J3DGDWrite_u32(*(u32*)(color + 1));",
      "    J3DGDWrite_u32(smgColorWord(color[0]));\n    J3DGDWrite_u32(smgColorWord(color[1]));", 2),
@@ -2307,8 +2307,8 @@ adapt("src/RVL_SDK/gx/GXTev.c", "RVL_SDK/gx/GXTev.c", [
      "    tevReg = ((smgTevColorWord((const tev_color_env_t*)ctmp) & ~0xFF000000) | (tevReg & 0xFF000000));", 1),
     ("    tevReg = ((*atmp & ~0xFF00000F) | (tevReg & 0xFF00000F));",
      "    tevReg = ((smgTevAlphaWord((const tev_alpha_env_t*)atmp) & ~0xFF00000F) | (tevReg & 0xFF00000F));", 1),
-    # A TEV colour's BG half goes three times for the Wii GPU's register latch; the port's processor takes it once (a
-    # particle sets two colours, so this was four of its loads).
+    # A TEV color's BG half goes three times for the Wii GPU's register latch; the port's processor takes it once (a
+    # particle sets two colors, so this was four of its loads).
     ("    GX_WRITE_RA_REG(regBG);\n    GX_WRITE_RA_REG(regBG);\n    GX_WRITE_RA_REG(regBG);\n", "    GX_WRITE_RA_REG(regBG);\n", 2),
 ])
 adapt("src/RVL_SDK/gx/GXPixel.c", "RVL_SDK/gx/GXPixel.c", [inc, ("    rgba = *(u32*)(&color);", "    rgba = smgColorWord(color);", 1)])
@@ -2329,7 +2329,7 @@ adapt("src/RVL_SDK/gx/GXLight.c", "RVL_SDK/gx/GXLight.c", [
     ("(*(u32*)(&amb_color)) >> 8", "smgColorWord(amb_color) >> 8", 2), ("*(u32*)(&amb_color))", "smgColorWord(amb_color))", 2),
     ("(*(u32*)(&mat_color)) >> 8", "smgColorWord(mat_color) >> 8", 2), ("*(u32*)(&mat_color))", "smgColorWord(mat_color))", 2),
     ("#else\nstatic inline void WriteLightObjPS(const GXLightObjInt* lt_obj, void* dest);\n#endif",
-     "#else\n// Three reserved words, the colour, then the attenuation, position and direction, as the asm stores them.\n"
+     "#else\n// Three reserved words, the color, then the attenuation, position and direction, as the asm stores them.\n"
      "static inline void WriteLightObjPS(const GXLightObjInt* lt_obj, void*) {\n"
      "    for (int i = 0; i < 3; ++i) GX_WRITE_U32(0);\n    GX_WRITE_U32(lt_obj->Color);\n"
      "    for (int i = 0; i < 3; ++i) GX_WRITE_F32(lt_obj->a[i]);\n    for (int i = 0; i < 3; ++i) GX_WRITE_F32(lt_obj->k[i]);\n"

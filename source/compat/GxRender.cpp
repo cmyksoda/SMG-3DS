@@ -159,7 +159,7 @@ struct Renderer {
     bool stateValid = false, applied = false, scissorEmpty = false, scissorWhole = true;
     u32 stateBp = 0, stateBesideColors = 0, stateColor1 = 0, stateVersion = 0, appliedVersion = 0;
     GxFrame stateFrame;
-    // The target's colour and depth read back (both four bytes a pixel, the screen's way round), until drawn on again.
+    // The target's color and depth read back (both four bytes a pixel, the screen's way round), until drawn on again.
     u32* readback[2] = {};
     bool fresh[3] = {};  // [2]: the depth tile last read back (freshTile) still holds
     unsigned freshTile = 0;
@@ -223,7 +223,7 @@ struct Renderer {
     std::unordered_set<std::uintptr_t> meshPages, texturePages;  // 4 KiB pages some mesh or texture was made from
     std::size_t meshBytes = 0;
     bool dumping = false;
-    std::uint32_t gpuXf[5] = {};  // channels, colour/alpha control, material, ambient as the state was built
+    std::uint32_t gpuXf[5] = {};  // channels, color/alpha control, material, ambient as the state was built
     unsigned dumpIndex = 0;
     u64 nextDump = 0;
     // Per-frame costs, logged every few seconds (perfLine): what each optimization is measured by.
@@ -256,10 +256,10 @@ struct Renderer {
         u32 changed[0x100] = {};  // per BP register: state rebuilds it took part in
         u32 compilesBefore = gxTevCompiles(), moviesBefore = smgMovieDecodes(), listsBefore = 0, listBytesBefore = 0, writesBefore = smgFifoWrites;
     } perf;
-    // The BP registers a draw reads and the TEV colour and konst words, as of the last state built.
+    // The BP registers a draw reads and the TEV color and konst words, as of the last state built.
     u32 bpAtBuild[0x100] = {}, colorAtBuild[8] = {}, konstAtBuild[8] = {};
 
-    // Whether C0 is all that changed since the state was built (BP 0xE0-0xE7 hold either kind of colour: by word).
+    // Whether C0 is all that changed since the state was built (BP 0xE0-0xE7 hold either kind of color: by word).
     bool onlyColor0Changed(const GxCommandProcessor& gpu) const {
         static const std::vector<std::uint8_t> addresses = [] {
             std::vector<std::uint8_t> list;
@@ -729,13 +729,13 @@ struct Renderer {
         }
     }
 
-    // C1 for states that read it from the palette unit: 8x8 RGBA8 textures of 64 colours each, taken in order through a
+    // C1 for states that read it from the palette unit: 8x8 RGBA8 textures of 64 colors each, taken in order through a
     // command list (startBuffers starts over), so the texels a recorded draw samples never change under it.
     static constexpr unsigned PaletteTextures = 64, PaletteSlots = 64;
     C3D_Tex palettes[PaletteTextures];
     unsigned paletteUsed = 0, paletteFlushed = 0;
     int batchPalette = -1;  // the palette the pending batch samples
-    u32 paletteColour = 0;  // the last texel's
+    u32 paletteColor = 0;  // the last texel's
     static unsigned morton(unsigned x, unsigned y) {
         return (x & 1) | (y & 1) << 1 | (x & 2) << 1 | (y & 2) << 2 | (x & 4) << 2 | (y & 4) << 3;
     }
@@ -743,11 +743,11 @@ struct Renderer {
         std::uint8_t c[4];
         gxColor1Bytes(gpu, c);  // in range, or the state would not read it from here
         const u32 rgba = u32(c[0]) << 24 | u32(c[1]) << 16 | u32(c[2]) << 8 | c[3];
-        if (paletteUsed && rgba == paletteColour && int((paletteUsed - 1) / PaletteSlots) == batchPalette) return;
+        if (paletteUsed && rgba == paletteColor && int((paletteUsed - 1) / PaletteSlots) == batchPalette) return;
         if (paletteUsed == PaletteTextures * PaletteSlots) pause(), resume();
         const unsigned slot = paletteUsed++, texture = slot / PaletteSlots, at = slot % PaletteSlots;
         if (int(texture) != batchPalette) flushBatch(), batchPalette = int(texture), ++stateVersion;
-        paletteColour = rgba;
+        paletteColor = rgba;
         // GX rows run down from the first; the PICA's run up from the last in memory, as tile() lays them.
         const unsigned x = at % 8, row = at / 8;
         std::memcpy(static_cast<std::uint8_t*>(palettes[texture].data) + 4 * morton(x, 7 - row), &rgba, 4);
@@ -799,7 +799,7 @@ struct Renderer {
         u32 hash = 0x811C9DC5u;
         for (std::size_t i = 0; i < count; ++i) hash = (hash ^ stateWords[i]) * 0x01000193u;
         keyHash = hash, keyCount = count;
-        // A marked colour holds for every value only if the state rides it; one whose program kept the value (exact only
+        // A marked color holds for every value only if the state rides it; one whose program kept the value (exact only
         // that way) holds for that value.
         const auto holds = [&](const CachedState& c) {
             return (!(keyMarkers & 1) || c.state.color0InVertex || (c.colors[0] == gpu.tevColor[2] && c.colors[1] == gpu.tevColor[3])) &&
@@ -1179,12 +1179,12 @@ struct Renderer {
             std::snprintf(text, sizeof text, " %08lx:%ux%u:f%u", static_cast<unsigned long>(t.address), t.width, t.height, t.format);
             maps += text;
         }
-        // The colours the combiner reads: konst and C0, and what the vertices' colour (the rasterized channel) came out as.
-        unsigned colourLo[4] = {255, 255, 255, 255}, colourHi[4] = {}, colourSum[4] = {}, counted = 0;
+        // The colors the combiner reads: konst and C0, and what the vertices' color (the rasterized channel) came out as.
+        unsigned colorLo[4] = {255, 255, 255, 255}, colorHi[4] = {}, colorSum[4] = {}, counted = 0;
         for (std::size_t i = batchStart; i < indexUsed && counted < 4096; ++i, ++counted)
             for (int c = 0; c < 4; ++c) {
                 const unsigned v = vertices[indices[i]].color[c];
-                colourLo[c] = std::min(colourLo[c], v), colourHi[c] = std::max(colourHi[c], v), colourSum[c] += v;
+                colorLo[c] = std::min(colorLo[c], v), colorHi[c] = std::max(colorHi[c], v), colorSum[c] += v;
             }
         const auto byte = [](float v) { return int(std::lround(v * 255)); };
         std::string konst;
@@ -1194,14 +1194,14 @@ struct Renderer {
                           byte(m.konstColors[k][3]));
             konst += text;
         }
-        std::fprintf(stderr, "gx dump:   colours: vertex lo %u,%u,%u,%u avg %u,%u,%u,%u hi %u,%u,%u,%u; C0=%d,%d,%d,%d%s; ksel %x/%x; xf chans %lu ctrl "
-                     "%08lx/%08lx mat %08lx amb %08lx\n", colourLo[0], colourLo[1], colourLo[2], colourLo[3], counted ? colourSum[0] / counted : 0,
-                     counted ? colourSum[1] / counted : 0, counted ? colourSum[2] / counted : 0, counted ? colourSum[3] / counted : 0, colourHi[0],
-                     colourHi[1], colourHi[2], colourHi[3], byte(m.tevColors[0][0]), byte(m.tevColors[0][1]), byte(m.tevColors[0][2]),
+        std::fprintf(stderr, "gx dump:   colors: vertex lo %u,%u,%u,%u avg %u,%u,%u,%u hi %u,%u,%u,%u; C0=%d,%d,%d,%d%s; ksel %x/%x; xf chans %lu ctrl "
+                     "%08lx/%08lx mat %08lx amb %08lx\n", colorLo[0], colorLo[1], colorLo[2], colorLo[3], counted ? colorSum[0] / counted : 0,
+                     counted ? colorSum[1] / counted : 0, counted ? colorSum[2] / counted : 0, counted ? colorSum[3] / counted : 0, colorHi[0],
+                     colorHi[1], colorHi[2], colorHi[3], byte(m.tevColors[0][0]), byte(m.tevColors[0][1]), byte(m.tevColors[0][2]),
                      byte(m.tevColors[0][3]), konst.c_str(), m.stages[0].konstColor, m.stages[0].konstAlpha, static_cast<unsigned long>(gpuXf[0]),
                      static_cast<unsigned long>(gpuXf[1]), static_cast<unsigned long>(gpuXf[2]), static_cast<unsigned long>(gpuXf[3]),
                      static_cast<unsigned long>(gpuXf[4]));
-        std::fprintf(stderr, "gx dump: draw %u: %u tris, box (%.0f,%.0f)-(%.0f,%.0f); blend %u %u/%u, colour %d alpha %d, dst alpha %d:%u, z %d/%u/%d, "
+        std::fprintf(stderr, "gx dump: draw %u: %u tris, box (%.0f,%.0f)-(%.0f,%.0f); blend %u %u/%u, color %d alpha %d, dst alpha %d:%u, z %d/%u/%d, "
                      "alpha test %u%s%u, C0 %s; tev%s; maps%s%s\n", dumpIndex++, unsigned((indexUsed - batchStart) / 3), lo[0], lo[1], hi[0], hi[1],
                      m.blend.type, m.blend.source, m.blend.destination, state_->colorUpdate, state_->alphaUpdate, state_->dstAlphaEnable, state_->dstAlpha,
                      m.depth.enable, m.depth.function, m.depth.update, m.alphaTest.compare0, m.alphaTest.op ? "|" : "&", m.alphaTest.compare1,
@@ -1220,7 +1220,7 @@ struct Renderer {
                           t.alphaIn[0], t.alphaIn[1], t.alphaIn[2], t.alphaIn[3], t.alphaOp, t.texMap == 0xFF ? -1 : t.texMap, t.channel);
             stages += text;
         }
-        std::fprintf(stderr, "gx dump: draw %u (mesh): %u tris in %zu groups, lit %d (%u entries, rgb %d alpha %d), cull %u; blend %u %u/%u, colour %d "
+        std::fprintf(stderr, "gx dump: draw %u (mesh): %u tris in %zu groups, lit %d (%u entries, rgb %d alpha %d), cull %u; blend %u %u/%u, color %d "
                      "alpha %d, dst alpha %d:%u, z %d/%u/%d, alpha test %u%s%u; tev%s\n", dumpIndex++, mesh.indexCount / 3, mesh.groups.size(), u.lit,
                      u.lights, u.rgbLit, u.alphaLit, u.reject, m.blend.type, m.blend.source, m.blend.destination, state_->colorUpdate, state_->alphaUpdate,
                      state_->dstAlphaEnable, state_->dstAlpha, m.depth.enable, m.depth.function, m.depth.update, m.alphaTest.compare0,
@@ -1230,7 +1230,7 @@ struct Renderer {
         // entries: which part of the input makes a draw come out dark.
         for (unsigned e = 0; e < u.lights; ++e) {
             const float(&l)[6][4] = u.light[e];
-            std::fprintf(stderr, "gx dump:   light %u: colour %.2f %.2f %.2f %.2f, position %.3g %.3g %.3g, direction %.3f %.3f %.3f, spot %.0f diffuse %.0f\n",
+            std::fprintf(stderr, "gx dump:   light %u: color %.2f %.2f %.2f %.2f, position %.3g %.3g %.3g, direction %.3f %.3f %.3f, spot %.0f diffuse %.0f\n",
                          e, l[0][0], l[0][1], l[0][2], l[0][3], l[1][0] * l[4][1], l[1][1] * l[4][1], l[1][2] * l[4][1], l[2][0],
                          l[2][1], l[2][2], l[5][0], l[5][1]);
         }
@@ -1242,7 +1242,7 @@ struct Renderer {
             const unsigned slot = (unsigned(v.slot) - 4) / u.slotRows;
             const float* n = u.normal[slot < GxMesh::MaxLitSlots ? slot : 0];
             std::fprintf(stderr, "gx dump:   vertex %lu (slot %u): normal %.2f %.2f %.2f, normal rows %.2f %.2f %.2f / %.2f %.2f %.2f / %.2f %.2f %.2f, "
-                         "ambient %.2f %.2f %.2f, lit colour %.0f %.0f %.0f %.0f\n", static_cast<unsigned long>(i), slot, v.normal[0], v.normal[1], v.normal[2],
+                         "ambient %.2f %.2f %.2f, lit color %.0f %.0f %.0f %.0f\n", static_cast<unsigned long>(i), slot, v.normal[0], v.normal[1], v.normal[2],
                          n[0], n[1], n[2], n[3], n[4], n[5], n[6], n[7], n[8], u.ambient[0], u.ambient[1], u.ambient[2], color[0] * 255, color[1] * 255,
                          color[2] * 255, color[3] * 255);
         }
@@ -1470,7 +1470,7 @@ struct Renderer {
         const std::uint8_t* list = gpu.memoryFunction()(address);
         if (!list || size < 3) return GxVertexPipeline::MeshUnsupported;
         if (list[0] < 0x80 || list[0] >= 0xA8) return ++perf.refusedOpcode[list[0]], ++perf.refused[GxVertexPipeline::MeshCommand], GxVertexPipeline::MeshCommand;
-        // A list in one 32-byte block (a particle's quad) is a draw of its own as a mesh; read, it joins its neighbours' draw.
+        // A list in one 32-byte block (a particle's quad) is a draw of its own as a mesh; read, it joins its neighbors' draw.
         if (size <= 32) return ++perf.refused[GxVertexPipeline::MeshSmall], GxVertexPipeline::MeshSmall;
         applyChangedMemory();
         ensureState(gpu, false);
@@ -1484,7 +1484,7 @@ struct Renderer {
         if (const unsigned why = pipeline.meshEligible()) return ++perf.refused[why], why;
         const u64 lookup = stepStart();
         gxZone = ZoneMeshLookup;
-        // The key: the list, its first and last words (another list at a freed address differs), where the colour comes
+        // The key: the list, its first and last words (another list at a freed address differs), where the color comes
         // from and the texgens' sources. The CP registers its vertices were read under are checked apart, only those it
         // uses: other formats' tables and the matrix arrays (12-15) change every frame without touching it.
         u32 key[7];
@@ -1697,7 +1697,7 @@ struct Renderer {
                 if (std::fabs(clip[r] - want.position[r]) > 1e-4f * std::max({1.0f, std::fabs(want.position[3]), std::fabs(want.position[r])}))
                     what = "position";
             for (int c = 0; c < 4 && !what; ++c)
-                if (std::abs(int(std::lround(color[c] * 255)) - int(want.color[c])) > 2) what = "colour";
+                if (std::abs(int(std::lround(color[c] * 255)) - int(want.color[c])) > 2) what = "color";
             for (unsigned t = 0; t < u.units && !what; ++t)
                 if (off(tex[t][0], want.texcoord[t][0]) || off(tex[t][1], want.texcoord[t][1])) what = "texture coordinates";
             if (!what) continue;
@@ -1705,7 +1705,7 @@ struct Renderer {
             const GxMesh::Group& in = mesh.groups[group[j]];
             std::fprintf(stderr, "gx check: mesh at 0x%08lx (%zu vertices, %zu groups, lit %d, %u light entries, %u units, slots 0x%x) vertex %zu "
                          "(list vertex %lu, group %lu of slots %u %u %u %u, slot row %.0f) differs in %s: position %.3f %.3f %.3f %.3f vs %.3f %.3f "
-                         "%.3f %.3f; colour %.0f %.0f %.0f %.0f vs %u %u %u %u; first texcoords %.3f %.3f vs %.3f %.3f; normal %.3f %.3f %.3f\n",
+                         "%.3f %.3f; color %.0f %.0f %.0f %.0f vs %u %u %u %u; first texcoords %.3f %.3f vs %.3f %.3f; normal %.3f %.3f %.3f\n",
                          static_cast<unsigned long>(address), mesh.vertices.size(), mesh.groups.size(), u.lit, u.lights, u.units, mesh.slots, j,
                          static_cast<unsigned long>(mesh.origin[j]), static_cast<unsigned long>(group[j]), in.slotMap[0], in.slotMap[1], in.slotMap[2],
                          in.slotMap[3], mesh.vertices[j].slot, what, clip[0], clip[1], clip[2], clip[3], want.position[0], want.position[1],
@@ -1761,7 +1761,7 @@ struct Renderer {
         stepEnd(9, uniforms);
         gxZone = ZoneMeshDraw;
         const u64 drawing = stepStart();
-        // GxMeshVertex: position (v0), colour (v1), three texgen inputs (v2-v4), normal (v6), slot (v5). What a draw doesn't
+        // GxMeshVertex: position (v0), color (v1), three texgen inputs (v2-v4), normal (v6), slot (v5). What a draw doesn't
         // take from the vertices is a fixed attribute, and the bytes it skips are padding (0xC is four bytes, 0xE twelve).
         // The loaders depend only on which of those the mesh has, so consecutive meshes alike keep citro3d's.
         const int layout = int(u.fixedColor) | int(u.units) << 1 | int(u.lit) << 3 | int(mesh.slots != 0) << 4;
@@ -1788,7 +1788,7 @@ struct Renderer {
             sent.meshLayout = layout, sent.meshPermutation = permutation, sent.meshComponents = components, pend(PendingMeshLayout);
             meshAttributes = *attributes;
         }
-        // A fixed value goes to its attribute's place among the seven (colour 1, texgen inputs 2-4, normal 5, slot 6), which
+        // A fixed value goes to its attribute's place among the seven (color 1, texgen inputs 2-4, normal 5, slot 6), which
         // citro3d numbers in the order they were added, not to the shader register it feeds.
         if (u.fixedColor) sendFixed(1, u.color[0], u.color[1], u.color[2], u.color[3]);
         for (unsigned unit = u.units; unit < 3; ++unit) sendFixed(2 + int(unit), 0, 0, 0, 1);
@@ -1973,7 +1973,7 @@ struct Renderer {
         }
     }
 
-    // The EFB's average colour so far, read back (dumps only): which full-screen pass changes the picture, and how.
+    // The EFB's average color so far, read back (dumps only): which full-screen pass changes the picture, and how.
     void dumpEfbAverage(const char* when) {
         const u32* pixels = readEfb(false);
         unsigned long long sum[4] = {};
@@ -2242,7 +2242,7 @@ struct Renderer {
     bool gpuCopy(const GxCommandProcessor& gpu, const GxTextureCopy& copy) {
         if (copy.format == 11 || copy.format == 12) return false;  // two channels a texel: the CPU's encoder packs them
         // A depth copy to one of z's bytes: the depth target read as RGBA8. Halved, the bilinear sample at each 2x2 block's
-        // centre averages the byte alone, within one of z's own average's.
+        // center averages the byte alone, within one of z's own average's.
         if (copy.depth && copy.format != 1 && copy.format != 8 && copy.format != 9 && copy.format != 10) return false;
         int rows[3] = {};
         std::uint8_t weights[3] = {};
@@ -2389,7 +2389,7 @@ struct Renderer {
     }
 
     // The taps summed in 64ths, then the format as encodeTextureCopy writes it: the PE's intensity (studio-range Y, by a
-    // dot product) or one channel for every component, or colour; RGB565 reads back with alpha one.
+    // dot product) or one channel for every component, or color; RGB565 reads back with alpha one.
     void copyCombiner(const GxTextureCopy& copy, unsigned taps, const std::uint8_t* weights, bool noAlpha) {
         const GPU_TEVSRC units[3] = {GPU_TEXTURE0, GPU_TEXTURE1, GPU_TEXTURE2};
         const auto byte = [](float value) { return u32(std::lround(std::clamp(value, 0.0f, 1.0f) * 255)); };
@@ -2463,14 +2463,14 @@ struct Renderer {
             R_FAILED(Y2RU_SetSendingU(u, luma / 4, static_cast<s16>(width / 2), 0)) || R_FAILED(Y2RU_SetSendingV(v, luma / 4, static_cast<s16>(width / 2), 0)) ||
             R_FAILED(Y2RU_SetReceiving(texture.data, luma * 2, tileRow, gap)) || R_FAILED(Y2RU_StartConversion()))
             stop("Y2R refusing a movie frame");
-        // Its end event is sometimes never signalled (libctru's note), so a timeout falls back to asking.
+        // Its end event is sometimes never signaled (libctru's note), so a timeout falls back to asking.
         if (R_FAILED(svcWaitSynchronization(y2rDone, 100'000'000)))
             for (bool busy = true; R_SUCCEEDED(Y2RU_IsBusyConversion(&busy)) && busy;) svcSleepThread(1'000'000);
         return true;
     }
 
     // THPGXYuv2RgbDraw: a decoded frame's planes (smg::decodeThpVideo) turned to RGB once, drawn over the EFB rectangle the
-    // game's quad covers, its colour replacing what is there (no blending, depth or alpha written).
+    // game's quad covers, its color replacing what is there (no blending, depth or alpha written).
     void movieFrame(const std::uint8_t* y, const std::uint8_t* u, const std::uint8_t* v, unsigned width, unsigned height, unsigned generation,
                     int x, int top, int w, int h) {
         MovieFrame& m = movie[generation & 1];
@@ -2613,7 +2613,7 @@ struct Renderer {
 
     static u32 copyClearColor(const GxCommandProcessor& gpu) {
         const std::uint32_t ar = gpu.bp[0x4F], gb = gpu.bp[0x50];
-        // citro3d's clear colour is 0xRRGGBBAA.
+        // citro3d's clear color is 0xRRGGBBAA.
         return (ar & 0xFF) << 24 | (gb >> 8 & 0xFF) << 16 | (gb & 0xFF) << 8 | (ar >> 8 & 0xFF);
     }
     // Its depth buffer keeps nearer as larger.

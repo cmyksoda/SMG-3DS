@@ -25,7 +25,7 @@ std::uint32_t field(std::uint32_t reg, int shift, int size) { return reg >> shif
 constexpr int VcdLo = 0x50, VcdHi = 0x60, VatA = 0x70, VatB = 0x80, VatC = 0x90, ArrayBase = 0xA0, ArrayStride = 0xB0;
 
 // The BP registers a draw reads (smg::readGxDrawState): generation mode, indirect stages, scissor, TEV orders, depth and
-// blend modes, destination alpha, the texture maps' modes, sizes and addresses, TEV stages and colours, alpha test, depth texture, konst selects.
+// blend modes, destination alpha, the texture maps' modes, sizes and addresses, TEV stages and colors, alpha test, depth texture, konst selects.
 constexpr bool drawsReadRegister(std::uint32_t address) {
     if (address == 0x00 || address == 0x20 || address == 0x21 || address == 0x40 || address == 0x41 || address == 0x42) return true;
     if ((address >= 0x10 && address <= 0x1F) || (address >= 0x28 && address <= 0x2F) || (address >= 0xC0 && address <= 0xE7) ||
@@ -36,12 +36,12 @@ constexpr bool drawsReadRegister(std::uint32_t address) {
 }
 
 // What loading each BP register does besides storing it, looked up once per load: most loads only store.
-enum : std::uint8_t { BpDrawn = 1, BpColour = 2, BpEvent = 4, BpMask = 8 };
+enum : std::uint8_t { BpDrawn = 1, BpColor = 2, BpEvent = 4, BpMask = 8 };
 constexpr std::array<std::uint8_t, 0x100> bpKinds = [] {
     std::array<std::uint8_t, 0x100> kinds{};
     for (std::uint32_t a = 0; a < 0x100; ++a) {
         if (drawsReadRegister(a)) kinds[a] |= BpDrawn;
-        if (a >= 0xE0 && a <= 0xE7) kinds[a] |= BpColour;
+        if (a >= 0xE0 && a <= 0xE7) kinds[a] |= BpColor;
         if (a == 0x45 || a == 0x47 || a == 0x48 || a == 0x52) kinds[a] |= BpEvent;
     }
     kinds[0xFE] = BpMask;
@@ -73,7 +73,7 @@ void components(const std::uint8_t* at, std::uint32_t format, std::uint32_t coun
         }
     }
 }
-// A colour's bytes by its format: RGB565, RGB888, RGB888x, RGBA4444, RGBA6666, RGBA8888.
+// A color's bytes by its format: RGB565, RGB888, RGB888x, RGBA4444, RGBA6666, RGBA8888.
 std::uint32_t colorSize(std::uint32_t format) { static const std::uint8_t sizes[] = {2, 3, 4, 2, 3, 4, 4, 4}; return sizes[format & 7]; }
 void readColor(const std::uint8_t* at, std::uint32_t format, bool native, std::uint8_t out[4]) {
     // A field of `bits` widened to eight, its top bits repeated below as the GPU widens it.
@@ -352,8 +352,8 @@ std::uint32_t GxCommandProcessor::bpRun(const std::uint8_t* at, std::uint32_t av
         }
         const std::uint32_t old = bp[address], data = mask == 0xFFFFFF ? value & 0xFFFFFF : (old & ~mask) | (value & mask);
         mask = 0xFFFFFF;
-        if (old != data) bp[address] = data, changes += kind & BpDrawn, beside += !(kind & BpColour) && (kind & BpDrawn);
-        if (!(kind & BpColour)) continue;
+        if (old != data) bp[address] = data, changes += kind & BpDrawn, beside += !(kind & BpColor) && (kind & BpDrawn);
+        if (!(kind & BpColor)) continue;
         // 0xE0-0xE7 hold a TEV color register or a konst color by their type bit: the last write of each kind.
         const bool konst = data >> 23 & 1;
         std::uint32_t& color = (konst ? tevKonst : tevColor)[address - 0xE0];

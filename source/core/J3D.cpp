@@ -69,7 +69,7 @@ void vertices(SwapPlan& plan, const Block& b) {
         const Format f = found->second;
         if (!plan.fits(start, 0, end)) return void(plan.fail("has a vertex array past its block"));
         if (attr == 11 || attr == 12) {
-            // Colours: only RGB565 and RGBA4 are halves; the rest are bytes the GPU reads in order.
+            // Colors: only RGB565 and RGBA4 are halves; the rest are bytes the GPU reads in order.
             if (f.type == 0 || f.type == 3) plan.halves(start, (end - start) / 2);
             continue;
         }
@@ -188,7 +188,7 @@ void table(SwapPlan& plan, const Block& b, std::uint32_t offset, const std::set<
     }
 }
 
-// J3DTexMtxInfo (0x64): four bytes, the centre, J3DTextureSRTInfo (with an s16 rotation), the effect matrix.
+// J3DTexMtxInfo (0x64): four bytes, the center, J3DTextureSRTInfo (with an s16 rotation), the effect matrix.
 void textureMatrix(SwapPlan& plan, std::size_t at) {
     plan.words(at + 4, 3), plan.words(at + 0x10, 2), plan.half(at + 0x18), plan.words(at + 0x1C, 2), plan.words(at + 0x24, 16);
 }
@@ -217,7 +217,7 @@ void materials(SwapPlan& plan, const Block& b) {
     table(plan, b, offset(4), cull, 4, "cull mode", [&](std::size_t at) { plan.word(at); });  // GXCullMode, int-sized
     table(plan, b, offset(13), texMtx, 0x64, "texture matrix", [&](std::size_t at) { textureMatrix(plan, at); });
     table(plan, b, offset(15), texNo, 2, "texture number", [&](std::size_t at) { plan.half(at); });
-    table(plan, b, offset(17), tevColor, 8, "TEV colour", [&](std::size_t at) { plan.halves(at, 4); });  // GXColorS10
+    table(plan, b, offset(17), tevColor, 8, "TEV color", [&](std::size_t at) { plan.halves(at, 4); });  // GXColorS10
     table(plan, b, offset(23), fog, 0x2C, "fog", [&](std::size_t at) { plan.half(at + 2), plan.words(at + 4, 4), plan.halves(at + 0x18, 10); });
     table(plan, b, offset(29), nbt, 0x10, "NBT scale", [&](std::size_t at) { plan.words(at + 4, 3); });
     // J3DIndInitData per material, read by index when the block has it (the factory's own test).
@@ -282,7 +282,7 @@ void transformKeys(SwapPlan& plan, const Block& b) {
     floats(plan, b, o(0x20), plan.be16(b.at(0x12)), "translation keys");
 }
 
-// TTK1 (J3DAnmTextureSRTKeyData): tracks (three per texture matrix), the materials and matrices they move, centres,
+// TTK1 (J3DAnmTextureSRTKeyData): tracks (three per texture matrix), the materials and matrices they move, centers,
 // keys; then the same again for post-texture matrices.
 void textureKeys(SwapPlan& plan, const Block& b) {
     if (!plan.need(b.start, 0x60, b.end, "a TTK1 header")) return;
@@ -294,14 +294,14 @@ void textureKeys(SwapPlan& plan, const Block& b) {
         keyTables(plan, b, o(post ? 0x3C : 0x14), tracks, 9, "texture key tables");
         shorts(plan, b, o(post ? 0x40 : 0x18), matrices, "texture animation materials");
         nameTable(plan, b, o(post ? 0x44 : 0x1C));
-        floats(plan, b, o(post ? 0x4C : 0x24), 3 * matrices, "texture matrix centres");
+        floats(plan, b, o(post ? 0x4C : 0x24), 3 * matrices, "texture matrix centers");
         floats(plan, b, o(post ? 0x50 : 0x28), plan.be16(b.at(base + 2)), "texture scale keys");
         shorts(plan, b, o(post ? 0x54 : 0x2C), plan.be16(b.at(base + 4)), "texture rotation keys");
         floats(plan, b, o(post ? 0x58 : 0x30), plan.be16(b.at(base + 6)), "texture translation keys");
     }
 }
 
-// TRK1 (J3DAnmTevRegKeyData): colour and konst register tables (four key tables and a register byte each), their
+// TRK1 (J3DAnmTevRegKeyData): color and konst register tables (four key tables and a register byte each), their
 // materials and names, and each channel's keys.
 void tevRegisterKeys(SwapPlan& plan, const Block& b) {
     if (!plan.need(b.start, 0x58, b.end, "a TRK1 header")) return;
@@ -325,10 +325,10 @@ void colorKeys(SwapPlan& plan, const Block& b) {
     plan.halves(b.at(0xC), 6), plan.words(b.at(0x18), 7);
     const auto o = [&](std::size_t at) { return plan.be32(b.at(at)); };
     const std::size_t count = plan.be16(b.at(0xE));
-    keyTables(plan, b, o(0x18), count, 12, "colour key tables");
-    shorts(plan, b, o(0x1C), count, "colour animation materials");
+    keyTables(plan, b, o(0x18), count, 12, "color key tables");
+    shorts(plan, b, o(0x1C), count, "color animation materials");
     nameTable(plan, b, o(0x20));
-    for (int c = 0; c < 4; ++c) shorts(plan, b, o(0x24 + 4 * c), plan.be16(b.at(0x10 + 2 * c)), "colour keys");
+    for (int c = 0; c < 4; ++c) shorts(plan, b, o(0x24 + 4 * c), plan.be16(b.at(0x10 + 2 * c)), "color keys");
 }
 
 // TPT1 (J3DAnmTexPatternFullData): per material its frames' run (max frame, offset, a texture byte, a half), then the

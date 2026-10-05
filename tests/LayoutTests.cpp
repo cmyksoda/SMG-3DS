@@ -83,7 +83,7 @@ Layout layout(std::uint32_t material0Bits = 0x0b881111, std::uint32_t textOffset
         for (float f : {0.25f, -0.5f, 45.0f, 2.0f, 3.0f}) putf(b, f);               // TexSRT
         put8(b, 1), put8(b, 4), put8(b, 30), put8(b, 0);                             // TexCoordGen
         put8(b, 1), put8(b, 0), put8(b, 0), put8(b, 0);                              // ChanCtrl
-        put8(b, 0x11), put8(b, 0x22), put8(b, 0x33), put8(b, 0x44);                  // material colour
+        put8(b, 0x11), put8(b, 0x22), put8(b, 0x33), put8(b, 0x44);                  // material color
         put8(b, 0xE4), put8(b, 0xE4), put8(b, 0xE4), put8(b, 0xE4);                  // TevSwapMode x4
         for (int i = 0; i < 32; ++i) put8(b, i);                                     // TevStage x2
         put8(b, 7), put8(b, 0), put8(b, 128), put8(b, 0);                            // AlphaCompare
@@ -150,7 +150,7 @@ void layouts() {
     check(std::strcmp(pic->name, "Pic") == 0 && pic->flag == 1 && pic->basePosition == 4 && pic->alpha == 200 && pic->translate.x == 2.5f &&
           pic->translate.y == -2.0f && pic->rotate.z == 90.0f && pic->scale.y == 1.0f && pic->size.width == 608, "a pane reads through res::Pane");
     const nw4r::ut::Color vertex(pic->vtxCols[0]);
-    check(vertex.r == 0x11 && vertex.g == 0x22 && vertex.b == 0x33 && vertex.a == 0x44, "a vertex colour becomes the ut::Color the Wii built from it");
+    check(vertex.r == 0x11 && vertex.g == 0x22 && vertex.b == 0x33 && vertex.a == 0x44, "a vertex color becomes the ut::Color the Wii built from it");
     const auto* coords = reinterpret_cast<const float*>(d + l.pic + sizeof(res::Picture));
     check(pic->materialIdx == 0 && pic->texCoordNum == 1 && coords[2] == 1.0f && coords[7] == 1.0f, "a picture's material and texture coordinates read natively");
 
@@ -160,7 +160,7 @@ void layouts() {
           txt->textAlignment == 1 && txt->fontSize.height == 26 && txt->lineSpace == 2, "a text box reads through res::TextBox");
     check(text[0] == 'H' && text[1] == 0x3042 && text[2] == 0, "its text reads as native UTF-16 units");
     const nw4r::ut::Color black(txt->textCols[0]), white(txt->textCols[1]);
-    check(black.r == 0 && black.a == 0xFF && white.g == 0xFF, "text colours become ut::Colors by value");
+    check(black.r == 0 && black.a == 0xFF && white.g == 0xFF, "text colors become ut::Colors by value");
 
     const auto* wnd = reinterpret_cast<const res::Window*>(d + l.wnd);
     const auto* content = reinterpret_cast<const res::WindowContent*>(d + l.wnd + wnd->contentOffset);
@@ -173,7 +173,7 @@ void layouts() {
     const auto* offsets = reinterpret_cast<const std::uint32_t*>(d + l.mat + sizeof(res::MaterialList));
     const auto* m0 = reinterpret_cast<const res::Material*>(d + l.mat + offsets[0]);
     check(mat->materialNum == 2 && std::strcmp(m0->name, "M0") == 0 && m0->tevCols[2].g == -2 && m0->tevCols[0].b == 300 &&
-          m0->tevCols[1].a == -1024 && m0->tevKCols[3].b == 3, "a material's name and TEV colours read through res::Material");
+          m0->tevCols[1].a == -1024 && m0->tevKCols[3].b == 3, "a material's name and TEV colors read through res::Material");
     check(m0->resNum.GetTexMapNum() == 1 && m0->resNum.GetTevStageNum() == 2 && m0->resNum.HasBlendMode() && m0->resNum.GetMatColNum() == 1,
           "its resource bits read as nw4r's MaterialResourceNum takes them");
     const std::uint8_t* r = d + l.material0 + sizeof(res::Material);
@@ -181,8 +181,8 @@ void layouts() {
     const auto* srt = reinterpret_cast<const TexSRT*>(r + 4);
     check(texMap->texIdx == 0 && texMap->GetWarpModeS() == GX_REPEAT && texMap->GetWarpModeT() == GX_MIRROR && srt->translate.y == -0.5f &&
           srt->rotate == 45.0f && srt->scale.y == 3.0f, "a texture map and texture SRT read natively");
-    const auto* colour = reinterpret_cast<const nw4r::ut::Color*>(r + 32);
-    check(colour->r == 0x11 && colour->a == 0x44 && r[36] == 0xE4 && r[40] == 0 && r[71] == 31 && r[72] == 7 && r[79] == 3,
+    const auto* color = reinterpret_cast<const nw4r::ut::Color*>(r + 32);
+    check(color->r == 0x11 && color->a == 0x44 && r[36] == 0xE4 && r[40] == 0 && r[71] == 31 && r[72] == 7 && r[79] == 3,
           "byte-wise resources keep their bytes");
     const auto* m1 = reinterpret_cast<const res::Material*>(d + l.mat + offsets[1]);
     const auto* indirect = reinterpret_cast<const TexSRT*>(d + l.material1 + sizeof(res::Material));
