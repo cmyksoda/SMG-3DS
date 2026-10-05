@@ -885,6 +885,82 @@ bool wrapBand(const ModelMaterial& m, std::uint8_t grayMaps, CombinerProgram& ou
     out = p;
     return true;
 }
+
+// OceanSphere's water lines: P = 2 K0 T0 T1 from two gray textures, C0 added where P's red byte equals A0's (an R8
+// equality), then lerp(C1, C2, P): its base color plus (C2 - C1) C0 on the lines. Six stages carry G = 2 T0 T1 in alpha
+// beside two edges sharpened on 2G at the line's limits, midpoints on them so a line keeps its width. Approximate: G
+// past one saturates (both texels past 0.7) and each edge spreads over about a quarter of a step.
+bool equalLine(const ModelMaterial& m, std::uint8_t grayMaps, CombinerProgram& out) {
+    if (m.tevStageCount != 4) return false;
+    const TevStage* s = m.stages;
+    const auto color = [](const TevStage& t, std::initializer_list<int> in, int op, int bias, int scale, int clamp) {
+        return std::equal(in.begin(), in.end(), t.colorIn) && t.colorOp == op && t.colorBias == bias && t.colorScale == scale &&
+               t.colorClamp == clamp && t.colorReg == 0;
+    };
+    const auto gray = [&](const TevStage& t) {
+        if (t.texMap >= 8 || m.textures[t.texMap] < 0 || !(grayMaps >> t.texMap & 1)) return false;
+        const std::uint8_t* swap = m.swapTables[t.texSwap & 3];
+        return swap[0] < 3 && swap[1] < 3 && swap[2] < 3;
+    };
+    const TevStage& last = s[3];
+    if (!color(s[0], {15, 8, 14, 15}, 0, 0, 0, 1) || !color(s[1], {15, 8, 0, 15}, 0, 0, 1, 1) || !color(s[2], {0, 3, 2, 0}, 9, 3, 0, 0) ||
+        !color(s[3], {4, 6, 0, 15}, 0, 0, 0, 1) || !gray(s[0]) || !gray(s[1]) || last.alphaIn[0] != 2 || last.alphaIn[1] != 7 ||
+        last.alphaIn[2] != 7 || last.alphaIn[3] != 7 || last.alphaOp || last.alphaBias || last.alphaScale || last.alphaReg)
+        return false;
+    const auto& c0 = m.tevColors[0];
+    float k0[3], c1[3], d[3], slope[3], line[3];
+    for (int i = 0; i < 3; ++i) {
+        k0[i] = konst(m, s[0].konstColor, i), c1[i] = wrapByte(m.tevColors[1][i]), d[i] = wrapByte(m.tevColors[2][i]) - c1[i];
+        slope[i] = d[i] * k0[i], line[i] = d[i] * c0[i];
+    }
+    const float a0 = wrapByte(c0[3]), step = 1 / 255.0f, sharp = 1 / 256.0f;
+    if (!(k0[0] > 0) || !(a0 >= step)) return false;
+    // The line's limits in 2G (P's red byte rounds to A0's), each edge's midpoint on its limit.
+    const float rise = 2 * (a0 - step / 2) / k0[0] - sharp / 2, fall = 2 * (a0 + step / 2) / k0[0] - sharp / 2;
+    const auto unit = [](float v) { return v >= 0 && v <= 1; };
+    for (int i = 0; i < 3; ++i)
+        // On a line P + C0 stays under the wrap, so the line only adds (C2 - C1) C0.
+        if (!unit(c1[i]) || !unit(d[i]) || !unit(slope[i]) || !unit(line[i]) || k0[i] * (a0 + step) / k0[0] + c0[i] > 1) return false;
+    if (!unit(rise) || !unit(fall)) return false;
+    CombinerProgram p;
+    p.unitCount = 2;
+    p.units[0] = {m.textures[s[0].texMap], static_cast<std::uint8_t>(s[0].texCoord < 8 ? s[0].texCoord : 0)};
+    p.units[1] = {m.textures[s[1].texMap], static_cast<std::uint8_t>(s[1].texCoord < 8 ? s[1].texCoord : 0)};
+    using F = CombineFunc;
+    using S = CombineSource;
+    using O = CombineOperand;
+    const auto stage = [&](int i, F cf, std::uint8_t cs, std::initializer_list<std::pair<S, O>> cin, F af,
+                           std::initializer_list<std::pair<S, O>> ain) -> CombineStage& {
+        CombineStage& t = p.stages[i];
+        t.colorFunc = cf, t.colorScale = cs, t.alphaFunc = af, t.alphaScale = 1;
+        int n = 0;
+        for (const auto& [source, operand] : cin) t.colorSource[n] = source, t.colorOperand[n++] = operand;
+        n = 0;
+        for (const auto& [source, operand] : ain) t.alphaSource[n] = source, t.alphaOperand[n++] = operand;
+        return t;
+    };
+    // 2G in color (only the lines read it), G in alpha.
+    stage(0, F::Modulate, 4, {{S::Texture0, O::Red}, {S::Texture1, O::Red}}, F::Modulate, {{S::Texture0, O::Red}, {S::Texture1, O::Red}})
+        .alphaScale = 2;
+    // Red rises at the line's lower limit, blue at its upper one, sharpened 4 x 8 x 8; alpha keeps G.
+    stage(1, F::Subtract, 4, {{S::Previous, O::Color}, {S::Constant, O::Color}}, F::Replace, {{S::Previous, O::Alpha}}).constant = {rise, 0, fall, 0};
+    stage(2, F::Add, 4, {{S::Previous, O::Color}, {S::Previous, O::Color}}, F::Replace, {{S::Previous, O::Alpha}});
+    stage(3, F::Add, 4, {{S::Previous, O::Color}, {S::Previous, O::Color}}, F::Replace, {{S::Previous, O::Alpha}});
+    // The base, C1 + (C2 - C1) K0 G; alpha the line, between the edges.
+    CombineStage& base = stage(4, F::MultiplyAdd, 1, {{S::Previous, O::Alpha}, {S::Constant, O::Color}, {S::Buffer, O::Color}}, F::Modulate,
+                               {{S::Previous, O::Red}, {S::Previous, O::OneMinusBlue}});
+    base.constant = {slope[0], slope[1], slope[2], 0};
+    // The line's (C2 - C1) C0 added; alpha A1, as the last GX stage gives.
+    CombineStage& lines = stage(5, F::MultiplyAdd, 1, {{S::Previous, O::Alpha}, {S::Constant, O::Color}, {S::Previous, O::Color}}, F::Replace,
+                                {{S::Constant, O::Alpha}});
+    lines.constant = {line[0], line[1], line[2], wrapByte(m.tevColors[1][3])};
+    p.bufferColor = {c1[0], c1[1], c1[2], 0};
+    p.stageCount = 6;
+    p.exact = false;
+    p.approximation = "an equality's line";
+    out = p;
+    return true;
+}
 } // namespace
 
 CombinerProgram compileTev(const ModelMaterial& material, bool color1FromUnit, std::uint8_t grayMaps) {
@@ -901,6 +977,7 @@ CombinerProgram compileTev(const ModelMaterial& material, bool color1FromUnit, s
             if (const auto program = compile(folded, known, color1FromUnit); program.exact) return program;
     }
     if (CombinerProgram band; wrapBand(material, grayMaps, band)) return band;
+    if (CombinerProgram line; equalLine(material, grayMaps, line)) return line;
     return previous;
 }
 namespace {

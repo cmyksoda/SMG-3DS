@@ -734,6 +734,46 @@ void waterBand(std::mt19937& rng) {
     check(!colored.approximation || std::strcmp(colored.approximation, "a compare's wrap band"), "not for textures that could be colored");
 }
 
+// OceanSphere's front face (its own colors): an R8 equality adds C0 where P's red byte is A0's, then lerp(C1, C2, P).
+// Through equalLine its lines appear, and it misses fewer points than the translation without them.
+void oceanSphereLines(std::mt19937& rng) {
+    smg::ModelMaterial m;
+    m.textures[0] = 0, m.textures[1] = 1;
+    m.tevColors[0] = {0x48 / 255.0f, 0x80 / 255.0f, 0xBE / 255.0f, 0x1C / 255.0f};
+    m.tevColors[1] = {0, 0x51 / 255.0f, 0x70 / 255.0f, 0x6F / 255.0f};
+    m.tevColors[2] = {1, 1, 1, 1};
+    m.konstColors[0] = {0x78 / 255.0f, 1, 1, 0};
+    m.tevStageCount = 4;
+    const std::uint8_t color[4][4]{{15, 8, 14, 15}, {15, 8, 0, 15}, {0, 3, 2, 0}, {4, 6, 0, 15}};
+    const std::uint8_t alpha[4][4]{{7, 7, 7, 7}, {7, 7, 7, 7}, {7, 7, 7, 7}, {2, 7, 7, 7}};
+    const std::uint8_t map[4]{0, 1, 0xFF, 0xFF};
+    for (int i = 0; i < 4; ++i) {
+        auto& s = m.stages[i];
+        s = {};
+        std::copy(color[i], color[i] + 4, s.colorIn), std::copy(alpha[i], alpha[i] + 4, s.alphaIn);
+        s.texMap = s.texCoord = map[i], s.channel = i == 3 ? 4 : 0xFF, s.konstColor = 0x0c;
+    }
+    m.stages[1].colorScale = 1;
+    m.stages[2].colorOp = 9, m.stages[2].colorBias = 3, m.stages[2].colorClamp = 0, m.stages[2].alphaClamp = 0;
+    m.stages[3].alphaClamp = 0;
+    const auto lines = smg::compileTev(m, false, 0b11), plain = smg::compileTev(m);
+    check(lines.approximation && !std::strcmp(lines.approximation, "an equality's line"), "OceanSphere's lines are recognized");
+    std::uniform_int_distribution<int> byte(0, 145);
+    int offLines = 0, offPlain = 0, onLine = 0;
+    for (int i = 0; i < 4000; ++i) {
+        Inputs in{};
+        for (int t = 0; t < 2; ++t) in.texture[t][0] = in.texture[t][1] = in.texture[t][2] = in.texture[t][3] = byte(rng) / 255.0f;
+        const auto g = tev(m, in);
+        float a = 0, b = 0;
+        for (const auto& [program, gap] : {std::pair{&lines, &a}, std::pair{&plain, &b}}) {
+            const auto q = pica(*program, in);
+            for (int c = 0; c < 4; ++c) *gap = std::max(*gap, std::fabs(g[c] - q[c]));
+        }
+        offLines += a > 3 / 255.0f, offPlain += b > 3 / 255.0f, onLine += b > 3 / 255.0f;
+    }
+    check(onLine > 10 && offLines * 2 < offPlain, "and misses less than half the points the version without lines does");
+}
+
 int runCombinerTests() {
     std::mt19937 rng(1234);
     realMaterial(rng);
@@ -747,6 +787,7 @@ int runCombinerTests() {
     flagPanel(rng);
     lavaHalved(rng);
     waterBand(rng);
+    oceanSphereLines(rng);
     compareWithoutC(rng);
     compareAddsC(rng);
     sixTapBlur(rng);
