@@ -190,6 +190,10 @@ public:
     std::size_t run(const std::uint8_t* data, std::uint16_t count, GxDrawVertex* vertices, std::uint16_t first, std::uint16_t* indices);
     // The same from vertices read already (a small display list decoded once).
     std::size_t runDecoded(const GxVertex* decoded, std::uint16_t count, GxDrawVertex* vertices, std::uint16_t first, std::uint16_t* indices);
+    // Another pass over the primitive `program` just ran for (from data, or decoded): its position and color as `program`
+    // gave them, only the texture coordinates worked out. False where that doesn't hold (lines, points, an atlas).
+    bool runPass(const std::uint8_t* data, const GxVertex* decoded, std::uint16_t count, const GxDrawVertex* program, GxDrawVertex* vertices,
+                 std::uint16_t first, std::uint16_t* indices, std::size_t& written);
     static constexpr std::size_t maxIndices(std::size_t count) { return 3 * count; }
     static constexpr std::size_t maxVertices(std::uint8_t kind, std::size_t count) { return kind >= 0xA8 ? 4 * count : count; }
     static constexpr std::size_t maxIndices(std::uint8_t kind, std::size_t count) { return kind >= 0xA8 ? 6 * count : 3 * count; }

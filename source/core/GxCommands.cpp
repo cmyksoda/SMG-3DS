@@ -211,6 +211,14 @@ void GxVertexLayout::read(const std::uint8_t* at, GxVertex& vertex) const {
     }
 }
 
+void GxVertexLayout::readPositionNormal(const std::uint8_t* at, GxVertex& vertex) const {
+    if (matrixIndex_) vertex.matrixIndex = *at++;
+    if (texMatrixIndexes_)
+        for (int i = 0; i < 8; ++i) if (texMatrixIndexes_ >> i & 1) vertex.texMatrixIndex[i] = *at++;
+    if (position_.type) position_.decode(position_, at, vertex.position);
+    if (normal_.type) normal_.decode(normal_, at, vertex.normal);
+}
+
 std::uint16_t GxVertexLayout::indexedArrays() const {
     std::uint16_t arrays = 0;
     const Attribute* attributes[12] = {&position_, &normal_, &color_[0], &color_[1], &texcoord_[0], &texcoord_[1], &texcoord_[2],

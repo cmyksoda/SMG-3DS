@@ -756,6 +756,29 @@ std::size_t GxVertexPipeline::runDecoded(const GxVertex* decoded, std::uint16_t 
     return triangles(vertices, count, first, indices);
 }
 
+bool GxVertexPipeline::runPass(const std::uint8_t* data, const GxVertex* decoded, std::uint16_t count, const GxDrawVertex* program,
+                                GxDrawVertex* vertices, std::uint16_t first, std::uint16_t* indices, std::size_t& written) {
+    if (kind_ >= 0xA8 || atlasUnit_ >= 0) return false;
+    bool positionsOnly = true;
+    for (unsigned u = 0; u < units_; ++u) positionsOnly &= !texgens_[u].palette && texgens_[u].source <= 1;
+    const GxVertexLayout& layout = gpu_->layout(preparedFormat_);
+    GxVertex v;
+    for (std::uint16_t i = 0; i < count; ++i) {
+        if (decoded) v = decoded[i];
+        else if (positionsOnly) layout.readPositionNormal(data + i * layout.size, v);
+        else layout.read(data + i * layout.size, v);
+        GxDrawVertex& d = vertices[i];
+        std::memcpy(d.position, program[i].position, sizeof d.position), std::memcpy(d.color, program[i].color, sizeof d.color);
+        for (unsigned u = 0; u < units_; ++u) {
+            if (texgens_[u].palette) d.texcoord[u][0] = palette_[0], d.texcoord[u][1] = palette_[1];
+            else texgen(texgens_[u], v, d.texcoord[u]);
+        }
+    }
+    verticesWritten = count;
+    written = triangles(vertices, count, first, indices);
+    return true;
+}
+
 std::size_t GxVertexPipeline::widen(GxDrawVertex* vertices, std::uint16_t count, std::uint16_t first, std::uint16_t* indices) {
     const GxDrawVertex* const from = vertices + 3 * count;
     const bool points = kind_ == 0xB8;

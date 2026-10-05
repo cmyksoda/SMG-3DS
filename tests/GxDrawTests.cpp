@@ -593,6 +593,37 @@ void meshRefresh() {
     check(same, "and out of order, each takes the list vertex its origin names");
 }
 
+// A pass over the primitive the program just ran takes the program's positions and colors and works out only its own
+// coordinates: over the same state, exactly the program's vertices and triangles again.
+void passReuse() {
+    auto owned = std::make_unique<smg::GxCommandProcessor>(host());
+    smg::GxCommandProcessor& gpu = *owned;
+    Stream s;
+    clearState(s);
+    s.bp(0xC008FFF8);
+    s.cp(0x50, 2 << 9), s.cp(0x70, 1 | 4 << 1 | 1 << 21);  // position: an 8-bit index into float XYZ; texture 0 direct
+    s.cp(0xA0, 0x100), s.cp(0xB0, 12);
+    gpu.put(s.bytes.data(), static_cast<std::uint32_t>(s.bytes.size()));
+    for (int i = 0; i < 4; ++i) {
+        const float p[3] = {30.0f * (i & 1), 30.0f * (i >> 1), 10};
+        std::memcpy(memory.data() + 0x100 + 12 * i, p, 12);
+    }
+    Stream list;
+    for (unsigned c : {0u, 1u, 3u, 2u}) list.u8(c), list.u8(c & 1), list.u8(c >> 1);
+    smg::GxDrawState state;
+    smg::readGxDrawState(gpu, state);
+    smg::GxVertexPipeline pipeline;
+    std::vector<smg::GxDrawVertex> ran(4), again(4);
+    std::vector<std::uint16_t> ranIndices(6), againIndices(6);
+    std::size_t written = 0;
+    const bool prepared = pipeline.prepare(gpu, state, {}, 0x80, 0);
+    const std::size_t triangles = pipeline.run(list.bytes.data(), 4, ran.data(), 0, ranIndices.data());
+    bool same = prepared && pipeline.runPass(list.bytes.data(), nullptr, 4, ran.data(), again.data(), 0, againIndices.data(), written) &&
+                written == triangles && !std::memcmp(ranIndices.data(), againIndices.data(), 2 * triangles);
+    for (int i = 0; same && i < 4; ++i) same = !std::memcmp(&ran[i], &again[i], sizeof ran[i]);
+    check(same, "a pass over the program's primitive gives its vertices again, coordinates worked out anew");
+}
+
 // What gx.v.pica works out for a lit mesh's vertex: the color (0-1).
 void shaderLighting(const smg::GxMeshUniforms& u, const smg::GxMeshVertex& v, float out[4]) {
     float clip[4], tex[smg::CombinerProgram::MaxUnits][2];
@@ -1021,6 +1052,7 @@ int runGxDrawTests() {
     litMeshSlotTexgens();
     linesAndPoints();
     meshRefresh();
+    passReuse();
     drawStateKey();
     std::printf("%u GX draw checks passed\n", checks);
     return 0;

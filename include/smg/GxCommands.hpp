@@ -23,6 +23,8 @@ public:
     void rebase(const GxCommandProcessor& gpu);
     // Overwrites the attributes the format has; the others keep what `vertex` held.
     void read(const std::uint8_t* at, GxVertex& vertex) const;
+    // Only the matrix indexes, the position and the normal, which come first.
+    void readPositionNormal(const std::uint8_t* at, GxVertex& vertex) const;
     // The arrays (0 position, 1 normal, 2-3 colors, 4-11 texture coordinates) this format reads by index, a bit each.
     std::uint16_t indexedArrays() const;
     // Widens [lo, hi) over the array elements the vertex at `at` reads by index (what a cached copy depends on).

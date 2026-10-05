@@ -734,7 +734,7 @@ struct Renderer {
         }
         indexUsed += written;
         used += pipeline.verticesWritten;
-        if (remade) stagePasses(gpu, kind, format, count, data, decoded);
+        if (remade) stagePasses(gpu, kind, format, count, data, decoded, vertices + first);
         fresh[0] = fresh[1] = fresh[2] = false;  // a readback must flush what's pending first
     }
 
@@ -1952,7 +1952,7 @@ struct Renderer {
     std::vector<std::vector<std::uint16_t>> passIndices;
     std::size_t passIndicesWaiting = 0;
     void stagePasses(const GxCommandProcessor& gpu, std::uint8_t kind, std::uint8_t format, std::uint16_t count, const std::uint8_t* data,
-                     const GxVertex* decoded) {
+                     const GxVertex* decoded, const GxDrawVertex* program) {
         passStates.resize(state_->passes.size()), passIndices.resize(state_->passes.size());
         for (std::size_t i = 0; i < state_->passes.size(); ++i) {
             const GxDrawState::Pass& pass = state_->passes[i];
@@ -1964,8 +1964,11 @@ struct Renderer {
             const std::size_t at = waiting.size();
             waiting.resize(at + GxVertexPipeline::maxIndices(kind, count));
             const auto first = static_cast<std::uint16_t>(used);
-            const std::size_t written = decoded ? pipeline.runDecoded(decoded, count, vertices + used, first, waiting.data() + at)
-                                                : pipeline.run(data, count, vertices + used, first, waiting.data() + at);
+            // The pass draws where the program did, its colors the same: only its coordinates are new.
+            std::size_t written = 0;
+            if (!pipeline.runPass(data, decoded, count, program, vertices + used, first, waiting.data() + at, written))
+                written = decoded ? pipeline.runDecoded(decoded, count, vertices + used, first, waiting.data() + at)
+                                  : pipeline.run(data, count, vertices + used, first, waiting.data() + at);
             waiting.resize(at + written), used += pipeline.verticesWritten, passIndicesWaiting += written;
         }
     }
