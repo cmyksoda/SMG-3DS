@@ -47,11 +47,13 @@ CombinerProgram compileTev(const ModelMaterial& material, bool color1FromUnit = 
 // Exact but where a source-alpha material's sum saturates once and the passes' do apart.
 struct TevPass {
     // Its color times its alpha added (under the material's alpha test), its color added where its alpha equals
-    // reference, its color added (under the alpha test), or its color over the rest by its alpha.
-    enum Blend : std::uint8_t { AddTimesAlpha, AddWhereEqual, Add, Over };
+    // reference, its color added (under the alpha test), its color over the rest by its alpha; or, under the alpha
+    // test, its color taken from the rest, the rest times its color, or the rest times one plus its color.
+    enum Blend : std::uint8_t { AddTimesAlpha, AddWhereEqual, Add, Over, Sub, Scale, Gain };
     ModelMaterial material;
     Blend blend = AddTimesAlpha;
     std::uint8_t reference = 0;
+    bool writesAlpha = false;  // its alpha replaces the rest's: the first pass left out the stage that made it
 };
 struct TevPasses {
     ModelMaterial first;

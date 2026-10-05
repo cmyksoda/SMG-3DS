@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstring>
 #include <set>
+#include <tuple>
 #include <vector>
 
 namespace smg {
@@ -1237,16 +1238,12 @@ bool alwaysShown(const ModelMaterial& m) {
     return t.op == 1 ? first || second : t.op == 0 && first && second;
 }
 
-// The last stage's lerp from PREV (within 0..1) to x by a scalar, neither read from PREV: a pass of x drawn over the
-// rest with that scalar as its alpha, the first pass leaving PREV. The scalar takes alpha's place, so no alpha test.
-// The stages before stay for the registers x and the scalar may read.
-bool overPass(const ModelMaterial& m, std::uint8_t grayMaps, TevPass& pass) {
+// A pass of the last stage's x drawn over the rest by its scalar input `by` (halved when asked) as the pass's alpha.
+// The scalar takes alpha's place, so no alpha test; the stages before stay for the registers x and the scalar read.
+bool overOf(const ModelMaterial& m, std::uint8_t grayMaps, std::uint8_t x, std::uint8_t by, bool half, TevPass& pass) {
     const unsigned last = m.tevStageCount - 1u;
     const TevStage& s = m.stages[last];
-    const std::uint8_t x = s.colorIn[1], by = s.colorIn[2];
-    if (s.colorIn[0] != 0 || s.colorIn[3] != ColorZero || s.colorOp || s.colorBias || s.colorScale || (s.colorReg & 3) || x <= 1 ||
-        !alwaysShown(m) || !inUnit(m, last, 0))
-        return false;
+    if (x <= 1 || by <= 1 || !alwaysShown(m)) return false;
     ModelMaterial e = m;
     TevStage& t = e.stages[last];
     std::uint8_t alpha = 0, konst = 0;
@@ -1270,11 +1267,134 @@ bool overPass(const ModelMaterial& m, std::uint8_t grayMaps, TevPass& pass) {
     }
     default: return false;
     }
+    if (half && alpha == 6) return false;  // the konst can't hold both
     t.colorIn[0] = t.colorIn[1] = t.colorIn[2] = ColorZero, t.colorIn[3] = x;
-    t.alphaIn[0] = t.alphaIn[1] = t.alphaIn[2] = AlphaZero, t.alphaIn[3] = alpha;
+    t.colorOp = t.colorBias = t.colorScale = 0, t.colorClamp = 1;
+    t.alphaIn[0] = t.alphaIn[2] = AlphaZero, t.alphaIn[1] = t.alphaIn[3] = AlphaZero;
+    if (half) t.alphaIn[1] = alpha, t.alphaIn[2] = 6, konst = 4;
+    else t.alphaIn[3] = alpha;
     t.alphaOp = t.alphaBias = t.alphaScale = 0, t.alphaClamp = 1, t.alphaReg = 0, t.konstAlpha = konst;
     clearDead(e);
     pass.material = e, pass.blend = TevPass::Over;
+    return true;
+}
+
+// The last stage's lerp from PREV (within 0..1) to x by a scalar, neither read from PREV: x drawn over the rest by the
+// scalar, the first pass leaving PREV.
+bool overPass(const ModelMaterial& m, std::uint8_t grayMaps, TevPass& pass) {
+    const unsigned last = m.tevStageCount - 1u;
+    const TevStage& s = m.stages[last];
+    if (s.colorIn[0] != 0 || s.colorIn[3] != ColorZero || s.colorOp || s.colorBias || s.colorScale || (s.colorReg & 3) || !inUnit(m, last, 0))
+        return false;
+    return overOf(m, grayMaps, s.colorIn[1], s.colorIn[2], false, pass);
+}
+
+// A pass of a constant color under the material's alpha chain (so its alpha test too), through a konst whose color no
+// alpha stage reads.
+bool constantPass(const ModelMaterial& m, TevPass::Blend blend, const float rgb[3], TevPass& pass) {
+    int slot = -1;
+    for (int k = 0; k < 4 && slot < 0; ++k) {
+        bool read = false;
+        for (unsigned i = 0; i < m.tevStageCount; ++i) {
+            const TevStage& s = m.stages[i];
+            read |= std::count(s.alphaIn, s.alphaIn + 4, 6) && s.konstAlpha >= 0x10 && s.konstAlpha < 0x1c && (s.konstAlpha & 3) == k;
+        }
+        if (!read) slot = k;
+    }
+    if (slot < 0) return false;
+    pass.material = m, pass.blend = blend;
+    ModelMaterial& e = pass.material;
+    for (int c = 0; c < 3; ++c) e.konstColors[slot][c] = rgb[c];
+    TevStage& t = e.stages[m.tevStageCount - 1u];
+    t.colorIn[0] = t.colorIn[1] = t.colorIn[2] = ColorZero, t.colorIn[3] = 14;
+    t.colorOp = t.colorBias = t.colorScale = 0, t.colorClamp = 1, t.konstColor = std::uint8_t(0x0c + slot);
+    clearDead(e);
+    return true;
+}
+
+// A color input that no input changes: a constant, the konst, or a register no stage before writes.
+bool fixedInput(const ModelMaterial& m, unsigned stage, std::uint8_t in, float v[3]) {
+    for (int c = 0; c < 3; ++c) {
+        if (in == ColorZero) v[c] = 0;
+        else if (in == 12) v[c] = 1;
+        else if (in == 13) v[c] = 0.5f;
+        else if (in == 14) v[c] = konst(m, m.stages[stage].konstColor, c);
+        else if (in <= 7 && in > 1 && producer(m, stage, in) < 0) v[c] = m.tevColors[(in / 2 + 3) % 4][in & 1 ? 3 : c];
+        else return false;
+    }
+    return true;
+}
+
+// The last stage as passes finishing PREV (within 0..1, as the framebuffer holds it), the first pass leaving it. An
+// affine g PREV + h is Sub (-h / g where h < 0), Scale and Gain (g), then Add (h where h > 0), saturating as GX does
+// once. PREV plus a lerp from PREV to x by t is first x drawn over by t / 2, then the same with g = 2. A sum with a
+// -1/2 bias is drawn halved without it (never past one), then Sub 1/4 and a Gain for each doubling to its scale.
+bool finishPasses(const ModelMaterial& m, std::uint8_t grayMaps, ModelMaterial& first, std::vector<TevPass>& out) {
+    const unsigned last = m.tevStageCount - 1u;
+    const TevStage& s = m.stages[last];
+    if ((s.colorReg & 3) || s.colorOp > 1 || s.colorBias == 3 || !s.colorClamp || !inUnit(m, last, 0)) return false;
+    const float scale = s.colorScale == 1 ? 2 : s.colorScale == 2 ? 4 : s.colorScale == 3 ? 0.5f : 1;
+    const float bias = s.colorBias == 1 ? 0.5f : s.colorBias == 2 ? -0.5f : 0;
+    const std::uint8_t* in = s.colorIn;
+    bool prev[4], fixed[4];
+    float v[4][3];
+    for (int j = 0; j < 4; ++j) prev[j] = in[j] == 0, fixed[j] = !prev[j] && fixedInput(m, last, in[j], v[j]);
+    float g[3], h[3];
+    out.clear();
+    const bool affine = (prev[0] || fixed[0]) && (prev[1] || fixed[1]) && (prev[2] || fixed[2]) && (prev[3] || fixed[3]) &&
+                        (prev[0] || prev[1] || prev[2] || prev[3]) && !(prev[2] && (prev[0] || prev[1]));
+    if (affine) {
+        for (int c = 0; c < 3; ++c) {
+            const auto f = [&](float p) {
+                const auto at = [&](int j) { return prev[j] ? p : j < 3 ? wrapByte(v[j][c]) : v[j][c]; };
+                const float lerp = at(0) * (1 - at(2)) + at(1) * at(2);
+                return scale * (at(3) + (s.colorOp ? -lerp : lerp) + bias);
+            };
+            h[c] = f(0), g[c] = f(1) - h[c];
+        }
+    } else if (!s.colorOp && prev[0] && prev[3] && !prev[1] && !prev[2] && !fixed[2]) {
+        // P + P (1 - t) + x t + bias = 2 (P (1 - t / 2) + x t / 2) + bias
+        TevPass over;
+        if (!overOf(m, grayMaps, in[1], in[2], true, over)) return false;
+        out.push_back(over);
+        for (int c = 0; c < 3; ++c) g[c] = 2 * scale, h[c] = scale * bias;
+    } else if (!s.colorOp && s.colorBias == 2 && s.colorScale != 2 && inUnit(m, last, in[3])) {
+        first.stages[last].colorBias = 0, first.stages[last].colorScale = 3;
+        const float quarter[3]{0.25f, 0.25f, 0.25f}, one[3]{1, 1, 1};
+        TevPass pass;
+        if (!constantPass(m, TevPass::Sub, quarter, pass)) return false;
+        out.push_back(pass);
+        for (int k = s.colorScale == 3 ? 0 : s.colorScale == 0 ? 1 : 2; k > 0; --k) {
+            if (!constantPass(m, TevPass::Gain, one, pass)) return false;
+            out.push_back(pass);
+        }
+        return true;
+    } else {
+        return false;
+    }
+    float sub[3], times[3], gain[3], add[3];
+    bool anySub = false, anyScale = false, anyGain = false, anyAdd = false;
+    for (int c = 0; c < 3; ++c) {
+        if (g[c] <= 0 || g[c] > 2 || -h[c] > g[c]) return false;
+        sub[c] = std::max(-h[c], 0.0f) / g[c], times[c] = std::min(g[c], 1.0f), gain[c] = std::max(g[c], 1.0f) - 1, add[c] = std::min(std::max(h[c], 0.0f), 1.0f);
+        anySub |= sub[c] > 0, anyScale |= times[c] < 1, anyGain |= gain[c] > 0, anyAdd |= add[c] > 0;
+    }
+    for (const auto& [any, blend, rgb] : {std::tuple{anySub, TevPass::Sub, sub}, std::tuple{anyScale, TevPass::Scale, times},
+                                          std::tuple{anyGain, TevPass::Gain, gain}, std::tuple{anyAdd, TevPass::Add, add}}) {
+        TevPass pass;
+        if (!any) continue;
+        if (!constantPass(m, blend, rgb, pass)) return false;
+        out.push_back(pass);
+    }
+    // The first pass ends before the last stage when that stage's alpha only passes PREV's on, or when no alpha test
+    // reads it: then the last pass writes the material's alpha.
+    const bool alphaPasses = !s.alphaOp && !s.alphaBias && !s.alphaScale && !(s.alphaReg & 3) &&
+                             ((s.alphaIn[0] == AlphaZero && s.alphaIn[2] == AlphaZero && s.alphaIn[3] == 0) ||
+                              (s.alphaIn[0] == 0 && s.alphaIn[2] == AlphaZero && s.alphaIn[3] == AlphaZero)) &&
+                             (!s.alphaClamp || inUnit(m, last, 1));
+    if (out.empty()) return false;
+    if (alphaPasses || (alwaysShown(m) && out.back().blend != TevPass::Over)) --first.tevStageCount, out.back().writesAlpha = !alphaPasses;
+    else passColor(first.stages[last]);
     return true;
 }
 } // namespace
@@ -1322,6 +1442,11 @@ bool splitTev(const ModelMaterial& m, TevPasses& out, std::uint8_t grayMaps) {
         if (!additive(s)) break;
     }
     if (overLast) out.extra.push_back(over);
+    if (k < 0 && opaque && !overLast && !compileTev(out.first, false, grayMaps).exact) {
+        TevPasses finished;
+        finished.first = m;
+        if (finishPasses(m, grayMaps, finished.first, finished.extra)) clearDead(finished.first), out = std::move(finished);
+    }
     if (out.extra.empty() || unitsRead(out.first) > CombinerProgram::MaxUnits) return false;
     for (const TevPass& pass : out.extra)
         if (unitsRead(pass.material) > CombinerProgram::MaxUnits) return false;

@@ -511,7 +511,7 @@ void readPasses(GxDrawState& out) {
         bool same = program.unitCount <= first.unitCount;
         for (unsigned u = 0; same && u < program.unitCount; ++u)
             same = program.units[u].texture == first.units[u].texture && program.units[u].texCoord == first.units[u].texCoord;
-        passes.push_back({program, pass.blend, pass.reference, same});
+        passes.push_back({program, pass.blend, pass.reference, pass.writesAlpha, same});
     }
     out.program = first, out.passes = std::move(passes);
     out.color0InVertex = out.color1InTexture = false, out.paletteUnit = 0;

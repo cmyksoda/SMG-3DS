@@ -195,7 +195,12 @@ inline Rgba drawnInPasses(const smg::ModelMaterial& m, const smg::TevPasses& pas
         if (!shown) continue;
         const float by = pass.blend == smg::TevPass::AddTimesAlpha || pass.blend == smg::TevPass::Over ? x[3] : 1;
         const float keep = pass.blend == smg::TevPass::Over ? 1 - x[3] : 1;
-        for (int c = 0; c < 3; ++c) dst[c] = std::min(1.0f, x[c] * by + dst[c] * keep);
+        for (int c = 0; c < 3; ++c) {
+            if (pass.blend == smg::TevPass::Sub) dst[c] = std::max(0.0f, dst[c] - x[c]);
+            else if (pass.blend == smg::TevPass::Scale) dst[c] *= x[c];
+            else if (pass.blend == smg::TevPass::Gain) dst[c] = std::min(1.0f, dst[c] + dst[c] * x[c]);
+            else dst[c] = std::min(1.0f, x[c] * by + dst[c] * keep);
+        }
     }
     return dst;
 }

@@ -1890,9 +1890,12 @@ struct Renderer {
                 p.equation = p.alphaEquation = GPU_BLEND_ADD;
                 const bool byAlpha = pass.blend == TevPass::AddTimesAlpha || pass.blend == TevPass::Over;
                 p.source = byAlpha ? GPU_SRC_ALPHA : GPU_ONE, p.destination = pass.blend == TevPass::Over ? GPU_ONE_MINUS_SRC_ALPHA : GPU_ONE;
-                p.alphaSource = GPU_ZERO, p.alphaDestination = GPU_ONE;
+                p.alphaSource = pass.writesAlpha ? GPU_ONE : GPU_ZERO, p.alphaDestination = pass.writesAlpha ? GPU_ZERO : GPU_ONE;
                 if (pass.blend == TevPass::AddWhereEqual) p.alphaTest = true, p.alphaFunc = GPU_EQUAL, p.alphaReference = pass.reference;
                 if (pass.blend == TevPass::Over) p.alphaTest = false;
+                if (pass.blend == TevPass::Sub) p.equation = GPU_BLEND_REVERSE_SUBTRACT;  // the rest less the pass
+                if (pass.blend == TevPass::Scale) p.source = GPU_ZERO, p.destination = GPU_SRC_COLOR;
+                if (pass.blend == TevPass::Gain) p.source = GPU_DST_COLOR;
                 stateEntry->passPixels.push_back(p);
             }
         }

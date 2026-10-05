@@ -68,6 +68,7 @@ struct GxDrawState {
         CombinerProgram program;
         TevPass::Blend blend = TevPass::AddTimesAlpha;
         std::uint8_t reference = 0;
+        bool writesAlpha = false;
         bool sameUnits = false;  // its units sample what the program's do, unit by unit: the same vertices serve it
     };
     std::vector<Pass> passes;

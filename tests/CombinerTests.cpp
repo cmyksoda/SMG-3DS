@@ -422,14 +422,16 @@ void waterPasses(std::mt19937& rng) {
 }
 
 // A material split into passes, each translating exactly, whose drawing over the frame is GX's.
-void checkPasses(const smg::ModelMaterial& m, std::uint8_t gray, smg::TevPass::Blend last, std::mt19937& rng, const char* what) {
+void checkPasses(const smg::ModelMaterial& m, std::uint8_t gray, std::vector<smg::TevPass::Blend> kinds, std::mt19937& rng, const char* what) {
     smg::TevPasses passes;
-    check(!smg::compileTev(m, false, gray).exact && smg::splitTev(m, passes, gray) && passes.extra.size() == 1 && passes.extra[0].blend == last, what);
+    bool split = !smg::compileTev(m, false, gray).exact && smg::splitTev(m, passes, gray) && passes.extra.size() == kinds.size();
+    for (std::size_t i = 0; split && i < kinds.size(); ++i) split = passes.extra[i].blend == kinds[i];
+    check(split, what);
     std::vector<smg::CombinerProgram> programs{smg::compileTev(passes.first, false, gray)};
     for (const auto& pass : passes.extra) programs.push_back(smg::compileTev(pass.material, false, gray));
     bool exact = true;
     for (const auto& p : programs) exact &= p.exact;
-    check(exact, "and both passes translate exactly");
+    check(exact, "and every pass translates exactly");
     std::uniform_int_distribution<int> byte(0, 255);
     for (int i = 0; i < 2000; ++i) {
         auto in = byteInputs(rng);
@@ -472,7 +474,7 @@ void orbitSkyOver(std::mt19937& rng) {
     m.stages[1].colorClamp = m.stages[2].colorClamp = 0;
     for (int i = 1; i < 4; ++i) m.stages[i].alphaClamp = 0;
     m.alphaTest.op = 1;
-    checkPasses(m, 0x0a, smg::TevPass::Over, rng, "a sky lerping to a constant by a fourth, gray map splits into a pass over the rest");
+    checkPasses(m, 0x0a, {smg::TevPass::Over}, rng, "a sky lerping to a constant by a fourth, gray map splits into a pass over the rest");
 }
 
 // CrestModel's mat_crest: C2 = the first map lit plus the second times K0, plus the fourth map times the fifth's
@@ -490,7 +492,64 @@ void crestTerm(std::mt19937& rng) {
     m.stages[3].konstColor = 0x0d;
     for (int i = 1; i < 4; ++i) m.stages[i].alphaClamp = 0;
     m.alphaTest.op = 1;
-    checkPasses(m, 0x1f, smg::TevPass::Add, rng, "an opaque sum of five samples splits its last term into an added pass");
+    checkPasses(m, 0x1f, {smg::TevPass::Add}, rng, "an opaque sum of five samples splits its last term into an added pass");
+}
+
+// The Comet Luma's body (TicoComet's Body_v): six stages' worth, then PREV + lerp(PREV, 1, t) - 1/2 by a gray map:
+// t / 2 of white drawn over the first three stages, then less a quarter, then doubled.
+void cometLumaFinish(std::mt19937& rng) {
+    const std::uint8_t color[4][4]{{4, 8, 10, 2}, {1, 14, 1, 0}, {8, 6, 10, 0}, {0, 12, 8, 0}};
+    const std::uint8_t alpha[4][4]{{4, 6, 5, 1}, {7, 6, 5, 1}, {7, 4, 5, 0}, {7, 6, 6, 7}};
+    const std::uint8_t map[4]{0, 0, 1, 2};
+    auto m = stagesOf(4, color, alpha, map);
+    m.stages[1].texMap = m.stages[1].texCoord = 0xff;
+    m.tevColors[0] = {-122 / 255.0f, -79 / 255.0f, -17 / 255.0f, -74 / 255.0f}, m.tevColors[1] = {201 / 255.0f, 21 / 255.0f, 40 / 255.0f, 0};
+    m.tevColors[2] = {-141 / 255.0f, 0, 21 / 255.0f, 1}, m.tevColors[3] = {0, 0, 0, 0};
+    m.konstColors[0] = {1, 20 / 255.0f, 1, 0};
+    const std::uint8_t konstAlpha[4]{0x07, 0x06, 0x1c, 0x00}, konstColor[4]{0x0c, 0x0c, 0x00, 0x00};
+    for (int i = 0; i < 4; ++i) m.stages[i].konstAlpha = konstAlpha[i], m.stages[i].konstColor = konstColor[i];
+    m.stages[0].alphaScale = 2, m.stages[1].colorScale = 1, m.stages[3].colorBias = 2, m.stages[3].alphaScale = 2;
+    m.stages[2].alphaClamp = m.stages[3].alphaClamp = 0;
+    m.alphaTest.op = 1;
+    checkPasses(m, 0x06, {smg::TevPass::Over, smg::TevPass::Sub, smg::TevPass::Gain}, rng,
+                "PREV plus a lerp from PREV less a half splits into white over by half the map, a quarter less and a doubling");
+}
+
+// Freezeflame's ice rock (IceMountainPlanet's Rock_015_C_v): (PREV + lerp(APREV, R, T) - 1/2) / 2, drawn without its
+// bias (never past one), then less a quarter.
+void iceRockFinish(std::mt19937& rng) {
+    const std::uint8_t color[3][4]{{15, 8, 10, 2}, {4, 10, 1, 0}, {1, 10, 8, 0}};
+    const std::uint8_t alpha[3][4]{{4, 2, 5, 1}, {7, 4, 0, 7}, {0, 7, 7, 7}};
+    const std::uint8_t map[3]{0, 0, 2};
+    auto m = stagesOf(3, color, alpha, map);
+    m.stages[2].texCoord = 1;
+    m.tevColors[0] = {76 / 255.0f, 76 / 255.0f, 52 / 255.0f, -89 / 255.0f}, m.tevColors[1] = {56 / 255.0f, 72 / 255.0f, 113 / 255.0f, 93 / 255.0f};
+    m.tevColors[2] = {0, 0, 0, 1}, m.tevColors[3] = {0, 0, 0, 0};
+    m.konstColors[0] = {1, 1, 1, 9 / 255.0f};
+    m.stages[0].konstAlpha = 0x05, m.stages[1].konstColor = 0x07, m.stages[1].konstAlpha = 0x00;
+    m.stages[0].alphaScale = 1, m.stages[2].colorBias = 2, m.stages[2].colorScale = 3;
+    m.stages[1].alphaClamp = m.stages[2].alphaClamp = 0;
+    m.alphaTest.op = 1;
+    checkPasses(m, 0x00, {smg::TevPass::Sub}, rng, "a halved sum less a half splits into the sum halved and a quarter less");
+}
+
+// The tomb spider's body (TombSpider's lambert30_v): 2 (lerp(C1, C0, PREV) - 1/2), affine in PREV: less 0.502, then
+// times 1.804.
+void tombSpiderFinish(std::mt19937& rng) {
+    const std::uint8_t color[4][4]{{15, 12, 10, 2}, {15, 10, 1, 0}, {15, 8, 10, 0}, {4, 2, 0, 15}};
+    const std::uint8_t alpha[4][4]{{4, 6, 5, 1}, {7, 6, 6, 7}, {0, 7, 7, 7}, {7, 6, 6, 7}};
+    const std::uint8_t map[4]{1, 0, 0, 0};
+    auto m = stagesOf(4, color, alpha, map);
+    m.stages[3].texMap = m.stages[3].texCoord = 0xff;
+    m.tevColors[0] = {242 / 255.0f, 242 / 255.0f, 242 / 255.0f, -41 / 255.0f}, m.tevColors[1] = {12 / 255.0f, 12 / 255.0f, 12 / 255.0f, 4 / 255.0f};
+    m.tevColors[2] = {1, 1, 1, 1}, m.tevColors[3] = {0, 0, 0, 0};
+    m.konstColors[0] = {1, 1, 1, 9 / 255.0f};
+    const std::uint8_t konstAlpha[4]{0x07, 0x00, 0x1c, 0x00}, konstColor[4]{0x0c, 0x07, 0x0c, 0x07};
+    for (int i = 0; i < 4; ++i) m.stages[i].konstAlpha = konstAlpha[i], m.stages[i].konstColor = konstColor[i];
+    m.stages[0].alphaScale = 2, m.stages[1].colorScale = 3, m.stages[3].colorBias = 2, m.stages[3].colorScale = 1, m.stages[3].alphaScale = 2;
+    for (int i = 1; i < 4; ++i) m.stages[i].alphaClamp = 0;
+    m.alphaTest.op = 1;
+    checkPasses(m, 0x02, {smg::TevPass::Sub, smg::TevPass::Gain}, rng, "a last stage affine in PREV splits into a subtraction and a gain");
 }
 
 // SearchBeamer's beam: (the texture lit + C0) / 2, C0 past one in red and below zero in green and blue.
@@ -982,6 +1041,9 @@ int runCombinerTests() {
     searchBeam(rng);
     bossLava(rng);
     forceJumpGlow(rng);
+    cometLumaFinish(rng);
+    iceRockFinish(rng);
+    tombSpiderFinish(rng);
     electricRail(rng);
     gearmoBody(rng);
     chainChompBody(rng);
