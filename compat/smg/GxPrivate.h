@@ -26,6 +26,8 @@ void smgGXLoadIndexedNow(unsigned command, unsigned index, unsigned target);
 void smgGXFifoBytes(const void* bytes, unsigned size);
 // Floats into the FIFO, each as GX_WRITE_F32 writes it, with one look for room (a matrix's rows).
 void smgGXFifoFloats(const f32* values, unsigned count);
+// An immediate XF load (GX_WRITE_U8 of its opcode, GX_WRITE_U32 of `reg`, then the floats) with one look for room.
+void smgGXFifoXfLoad(u32 reg, const f32* values, unsigned count);
 // GXCallDisplayList with the list's commands copied into the FIFO now (GXDisplayList.c): for lists the game rewrites
 // every frame, which the render thread would otherwise read a frame late.
 void smgGXCallDisplayListNow(const void* list, u32 nbytes);

@@ -2414,6 +2414,12 @@ adapt("src/RVL_SDK/gx/GXTransform.c", "RVL_SDK/gx/GXTransform.c", [
     (gx_writers, gx_writers_c, 1), (gx_matrices, gx_matrices_c, 1), inc,
     ("    GX_WRITE_U8(CP_OPCODE(0, CP_CMD_XF_IDXLDREG_C));\n    GX_WRITE_U32(reg);",
      "    smgGXLoadIndexedNow(CP_OPCODE(0, CP_CMD_XF_IDXLDREG_C), reg >> 16, reg & 0xFFFF);", 1),
+    # A matrix sent whole (every particle sends one): the same bytes, with one look for room.
+    ("    GX_WRITE_U8(CP_OPCODE(0, CP_CMD_XF_LOADREGS));\n    GX_WRITE_U32(reg);\n    WriteMTXPS4x3(mtx, (volatile void*)GX_FIFO_ADDR);\n",
+     "    smgGXFifoXfLoad(reg, &mtx[0][0], 12);\n", 1),
+    ("    GX_WRITE_U8(CP_OPCODE(0, CP_CMD_XF_LOADREGS));\n    GX_WRITE_U32(reg);\n\n    if (type == GX_MTX3x4) {\n"
+     "        WriteMTXPS4x3(mtx, (volatile void*)GX_FIFO_ADDR);\n    } else {\n        WriteMTXPS4x2(mtx, (volatile void*)GX_FIFO_ADDR);\n    }\n",
+     "    smgGXFifoXfLoad(reg, &mtx[0][0], count);\n", 1),
 ])
 # GXSetArray's matrix and light arrays are where an indexed load reads (smgGXLoadIndexedNow).
 adapt("src/RVL_SDK/gx/GXAttr.c", "RVL_SDK/gx/GXAttr.c", [

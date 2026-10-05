@@ -344,6 +344,19 @@ void copyToFifo(u8* to, const u8* from, unsigned size) {
 }
 } // namespace
 
+namespace {
+// The write point is kept in a local: a store through it may alias smgFifoAt itself, which is otherwise read again each word.
+u8* putFloats(u8* at, const f32* values, unsigned count) {
+    for (unsigned i = 0; i < count; ++i, at += 4) {
+        u32 word;
+        __builtin_memcpy(&word, &values[i], 4);
+        word = __builtin_bswap32(word);
+        __builtin_memcpy(at, &word, 4);
+    }
+    return at;
+}
+} // namespace
+
 void smgGXFifoFloats(const f32* values, unsigned count) {
     const unsigned bytes = 4 * count;
     if (getThreadLocalStorage() != smgFifoThread || !sRenderThread) {
@@ -351,13 +364,23 @@ void smgGXFifoFloats(const f32* values, unsigned count) {
         return;
     }
     if (smgFifoAt + bytes > smgFifoEnd) makeRoom(bytes);
-    for (unsigned i = 0; i < count; ++i) {
-        u32 word;
-        __builtin_memcpy(&word, &values[i], 4);
-        word = __builtin_bswap32(word);
-        __builtin_memcpy(smgFifoAt + 4 * i, &word, 4);
+    smgFifoAt = putFloats(smgFifoAt, values, count);
+}
+
+void smgGXFifoXfLoad(u32 reg, const f32* values, unsigned count) {
+    constexpr u8 LoadXf = 0x10;  // CP_OPCODE(0, CP_CMD_XF_LOADREGS)
+    const unsigned bytes = 5 + 4 * count;
+    if (getThreadLocalStorage() != smgFifoThread || !sRenderThread) {
+        smgGXFifo_u8(LoadXf), smgGXFifo_u32(reg);
+        for (unsigned i = 0; i < count; ++i) smgGXFifo_f32(values[i]);
+        return;
     }
-    smgFifoAt += bytes;
+    if (smgFifoAt + bytes > smgFifoEnd) makeRoom(bytes);
+    u8* at = smgFifoAt;
+    at[0] = LoadXf;
+    reg = __builtin_bswap32(reg);
+    __builtin_memcpy(at + 1, &reg, 4);
+    smgFifoAt = putFloats(at + 5, values, count);
 }
 
 void smgGXFifoBytes(const void* bytes, unsigned size) {
