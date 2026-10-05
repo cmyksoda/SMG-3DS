@@ -350,6 +350,68 @@ struct Compiler {
         return program.stageCount + ops.size() > CombinerProgram::MaxStages ? unsupported() : ops;
     }
 
+    // lerp(a, b, c) as one term: an argument as it is, or ops leaving it in temp.
+    Arg lerpTerm(const Arg& a, const Arg& b, const Arg& c, bool alpha, std::vector<Op>& ops) {
+        const Arg temp = kind(Arg::Temp, alpha ? CombineOperand::Alpha : CombineOperand::Color);
+        if (zero(c) || a == b) return a;
+        if (one(c)) return b;
+        if (zero(a) && zero(b)) return kind(Arg::Zero);
+        if (zero(a)) ops.push_back({CombineFunc::Modulate, {b, c}});
+        else if (zero(b)) ops.push_back({CombineFunc::Modulate, {a, invert(c)}});
+        else ops.push_back({CombineFunc::Interpolate, {b, a, c}});
+        return temp;
+    }
+
+    // An unclamped sum read only as the next stage's d, which saturates: together they are one sum of terms within
+    // 0..1 and a bias of at least -1. Kept at half scale it saturates only where the whole would, so the first half
+    // is (d + lerp) / 2, the second adds lerp / 2, applies both biases and doubles.
+    std::vector<Op> halfFirst(const Arg& a, const Arg& b, const Arg& c, const Arg& d, bool alpha) {
+        std::vector<Op> ops;
+        const Arg t = lerpTerm(a, b, c, alpha, ops), half = constant(0.5f);
+        if (zero(t)) ops.push_back({CombineFunc::Modulate, {d, half}});
+        else if (zero(d)) ops.push_back({CombineFunc::Modulate, {t, half}});
+        else ops.push_back({CombineFunc::Interpolate, {t, d, half}});
+        return ops;
+    }
+    std::vector<Op> halfSecond(const Arg& a, const Arg& b, const Arg& c, float bias, bool alpha) {
+        std::vector<Op> ops;
+        const Arg temp = kind(Arg::Temp, alpha ? CombineOperand::Alpha : CombineOperand::Color);
+        const Arg sum = kind(Arg::Prev, alpha ? CombineOperand::Alpha : CombineOperand::Color), half = constant(0.5f);
+        const Arg t = lerpTerm(a, b, c, alpha, ops);
+        if (t.kind == Arg::One) ops.push_back({CombineFunc::Add, {sum, half}});
+        else if (t.kind == Arg::Constant) ops.push_back({CombineFunc::Add, {sum, constant(t.value[0] / 2, t.value[1] / 2, t.value[2] / 2)}});
+        else if (!zero(t)) ops.push_back({CombineFunc::MultiplyAdd, {t, half, sum}});
+        const Arg h = ops.empty() ? sum : temp;
+        if (bias < -0.75f) ops.push_back({CombineFunc::Subtract, {h, half}, 2});
+        else if (bias < -0.25f) ops.push_back({CombineFunc::AddSigned, {h, h}});
+        else if (bias < 0.25f) ops.push_back({CombineFunc::Add, {h, h}});
+        else ops.push_back({CombineFunc::Add, {h, constant(bias / 2)}, 2});
+        return ops;
+    }
+
+    // Whether stage i's part is the first half of such a sum with stage i + 1.
+    bool fusesNext(unsigned i, bool alpha) {
+        if (i + 1 >= m.tevStageCount) return false;
+        const TevStage& s = m.stages[i], &n = m.stages[i + 1];
+        const auto plainAdd = [&](const TevStage& t, bool clamp) {
+            return !(alpha ? t.alphaOp : t.colorOp) && !(alpha ? t.alphaScale : t.colorScale) && (alpha ? t.alphaBias : t.colorBias) != 3 &&
+                   bool(alpha ? t.alphaClamp : t.colorClamp) == clamp;
+        };
+        if (!plainAdd(s, false) || !plainAdd(n, true)) return false;
+        const int reg = (alpha ? s.alphaReg : s.colorReg) & 3;
+        if (((alpha ? n.alphaReg : n.colorReg) & 3) != reg) return false;
+        const std::uint8_t mine = static_cast<std::uint8_t>(alpha ? reg : reg * 2);
+        const std::uint8_t* in = alpha ? n.alphaIn : n.colorIn;
+        if (in[3] != mine || in[0] == mine || in[1] == mine || in[2] == mine) return false;
+        if (alpha) for (int k = 0; k < 4; ++k) if (n.colorIn[k] == reg * 2 + 1) return false;
+        const float biases = biasValue(alpha ? s.alphaBias : s.colorBias) + biasValue(alpha ? n.alphaBias : n.colorBias);
+        return biases >= -1 && !stageRange(s, alpha, false).inUnit() && inputRange(s, (alpha ? s.alphaIn : s.colorIn)[3], alpha, true).inUnit();
+    }
+    static float biasValue(std::uint8_t bias) { return bias == 1 ? 0.5f : bias == 2 ? -0.5f : 0; }
+    float pendingBias[2]{0, 0};
+    bool pending[2]{false, false};
+    bool fuseAllowed = true, fusedAny = false;
+
     // (k +/- t) * scale for a constant k outside 0..1, as GX saturates it: the positive and negative
     // parts of k never meet in one component, so a subtract and an add apply them without clipping.
     std::vector<Op> signedSum(Form form, Arg x, Arg y, Arg a, Arg b, Arg c, Arg d, bool subtract, std::uint8_t bias,
@@ -638,7 +700,11 @@ struct Compiler {
                     if (raw.lo >= -1024 / 255.0f && raw.hi <= 1023 / 255.0f) wraps[part] = wrapShift(results[part]);
                 }
             }
-            Arg d[2]{colorInput(s, s.colorIn[3], true), alphaInput(s, s.alphaIn[3], true)};
+            const bool fuse[2]{fuseAllowed && fusesNext(i, false), fuseAllowed && fusesNext(i, true)};
+            fusedAny |= fuse[0] || fuse[1];
+            // The second half's d is the half sum, never read as a register.
+            Arg d[2]{pending[0] ? kind(Arg::Zero) : colorInput(s, s.colorIn[3], true),
+                     pending[1] ? kind(Arg::Zero) : alphaInput(s, s.alphaIn[3], true)};
             for (int part = 0; part < 2; ++part) {
                 // The output is scaled after d is added, so d moves by the shift over the scale.
                 const std::uint8_t scale = part ? s.alphaScale : s.colorScale;
@@ -646,11 +712,21 @@ struct Compiler {
                 if (!wraps[part] || !shiftConstant(d[part], wraps[part] / factor)) continue;
                 results[part] = {results[part].lo - wraps[part], results[part].hi - wraps[part]};
             }
-            const auto colorOps = build(colorInput(s, s.colorIn[0]), colorInput(s, s.colorIn[1]), colorInput(s, s.colorIn[2]),
-                                        d[0], s.colorOp, s.colorBias, s.colorScale, false);
-            const auto alphaOps = build(alphaInput(s, s.alphaIn[0]), alphaInput(s, s.alphaIn[1]), alphaInput(s, s.alphaIn[2]),
-                                        d[1], s.alphaOp, s.alphaBias, s.alphaScale, true);
+            const auto ops = [&](bool alpha) {
+                const auto input = [&](int k) { return alpha ? alphaInput(s, s.alphaIn[k]) : colorInput(s, s.colorIn[k]); };
+                const int part = alpha ? 1 : 0;
+                const std::uint8_t bias = alpha ? s.alphaBias : s.colorBias;
+                if (pending[part]) return halfSecond(input(0), input(1), input(2), pendingBias[part] + biasValue(bias), alpha);
+                if (fuse[part]) return halfFirst(input(0), input(1), input(2), d[part], alpha);
+                return build(input(0), input(1), input(2), d[part], alpha ? s.alphaOp : s.colorOp, bias, alpha ? s.alphaScale : s.colorScale, alpha);
+            };
+            const auto colorOps = ops(false);
+            const auto alphaOps = ops(true);
             emit(colorOps, alphaOps);
+            for (int part = 0; part < 2; ++part) {
+                pending[part] = fuse[part];
+                pendingBias[part] = biasValue(part ? s.alphaBias : s.colorBias);
+            }
             // Only one previous value survives in the combiner; older register writes are lost.
             const std::uint8_t outputs[2]{static_cast<std::uint8_t>(s.colorReg & 3), static_cast<std::uint8_t>(s.alphaReg & 3)};
             for (int part = 0; part < 2; ++part) {
@@ -672,13 +748,26 @@ struct Compiler {
 } // namespace
 
 namespace {
+// Half-scale sums take more stages; one that no longer fits in six is translated without them.
+CombinerProgram translate(const ModelMaterial& material, bool leading, bool known, bool color1, bool& wantsLeading) {
+    Compiler compiler(material, leading, known, color1);
+    const auto program = compiler.run();
+    wantsLeading = compiler.wantsLeading;
+    if (program.exact || !compiler.fusedAny || std::strcmp(program.approximation, "more than six stages")) return program;
+    Compiler plain(material, leading, known, color1);
+    plain.fuseAllowed = false;
+    const auto fewer = plain.run();
+    wantsLeading = plain.wantsLeading;
+    return fewer;
+}
+
 CombinerProgram compile(const ModelMaterial& material, bool known, bool color1) {
-    Compiler direct(material, false, known, color1);
-    const auto program = direct.run();
-    if (program.exact || !direct.wantsLeading) return program;
+    bool wantsLeading = false, unused = false;
+    const auto program = translate(material, false, known, color1, wantsLeading);
+    if (program.exact || !wantsLeading) return program;
     // Stage 0 cannot read the buffer color; spending a stage lets stage 1 read it instead.
     // A clamp between ops is a smaller error than a wrong constant.
-    const auto shifted = Compiler(material, true, known, color1).run();
+    const auto shifted = translate(material, true, known, color1, unused);
     return shifted.exact || std::strcmp(shifted.approximation, "more than two constants") ? shifted : program;
 }
 void clearDead(ModelMaterial& m);
