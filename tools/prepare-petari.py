@@ -2250,6 +2250,13 @@ adapt("src/Game/Player/MarioSound.cpp", "Game/Player/MarioSound.cpp", [
     ("        switch (soundlist[index]._8._4[0] & 0x3) {", "        switch ((soundlist[index]._8._0 >> 24) & 0x3) {", 2),
     ("        switch (soundlist[index]._8._4[0] & ~0x3) {", "        switch ((soundlist[index]._8._0 >> 24) & ~0x3) {", 1),
 ])
+# A rush's end info sets its damage kind by bitfield and Mario's rush reads it from the word (bits 24-27, where
+# Metrowerks put it); GCC on a little-endian target fills from the bottom, so the declarations swap places there.
+adapt("include/Game/Player/RushEndInfo.hpp", "include/Game/Player/RushEndInfo.hpp", [
+    ("            u32 _0 : 4;\n            u32 mDamageType : 4;\n            u32 _8 : 24;\n",
+     "#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__\n            u32 _8 : 24;\n            u32 mDamageType : 4;\n            u32 _0 : 4;\n#else\n"
+     "            u32 _0 : 4;\n            u32 mDamageType : 4;\n            u32 _8 : 24;\n#endif\n", 1),
+])
 # The effect tables' flag words are written as words and read by byte, the Wii's first byte being the top one.
 adapt("src/Game/Player/MarioEffect.cpp", "Game/Player/MarioEffect.cpp", [
     ("            u8 mByte0;\n            u8 mByte1;\n            u8 mByte2;\n            u8 mByte3;\n",
