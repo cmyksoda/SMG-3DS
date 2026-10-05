@@ -635,6 +635,20 @@ struct Renderer {
         if (auto found = textures.find(key); found != textures.end()) return found->second;
         if (map.format == 8 || map.format == 9 || map.format == 10) stop("a palette texture");
         const Step converting(perf, 11);
+        const auto power = [](unsigned v) { return v >= 8 && v <= 1024 && !(v & (v - 1)); };
+        if (map.format == static_cast<int>(GxFormat::I8) && power(map.width) && power(map.height)) {
+            // Straight into LA8, without decoding to RGBA first: SnowFloor's footprints redraw theirs every frame.
+            C3D_Tex& texture = textures[key];
+            if (!withRoom([&] { return C3D_TexInit(&texture, map.width, map.height, GPU_LA8); })) stop("a texture the PICA takes no memory for");
+            tileIntensity8(static_cast<const std::uint8_t*>(OSPhysicalToCached(map.address)), map.width, map.height,
+                           static_cast<std::uint8_t*>(texture.data));
+            C3D_TexFlush(&texture);
+            C3D_TexSetFilter(&texture, map.magFilter ? GPU_LINEAR : GPU_NEAREST, (map.minFilter & 4) ? GPU_LINEAR : GPU_NEAREST);
+            C3D_TexSetWrap(&texture, wrapMode(map.wrapS), wrapMode(map.wrapT));
+            const auto [lo, hi] = textureRange(key);
+            markPages(lo, hi, texturePages);
+            return texture;
+        }
         ModelTexture source;
         source.format = static_cast<GxFormat>(map.format);
         source.wrapS = map.wrapS, source.wrapT = map.wrapT;

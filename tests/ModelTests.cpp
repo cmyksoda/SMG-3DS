@@ -1,10 +1,12 @@
 #include "BmdFixture.hpp"
 #include <smg/Mesh.hpp>
 #include <smg/Model.hpp>
+#include <smg/Texture.hpp>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <vector>
 
 namespace {
 unsigned checks = 0;
@@ -181,9 +183,32 @@ void meshes() {
     check(fits && mesh.indices.size() == 69999, "large shapes split at whole triangles");
 }
 
+// The renderer's direct path for I8 (SnowFloor's footprints, drawn anew each frame): every texel lands where
+// decoding and the PICA tiler put it, rows from the bottom in 8x8 Morton tiles, both LA8 bytes its intensity.
+void intensityTiles() {
+    const unsigned width = 16, height = 8;
+    Data i8(width * height);
+    for (std::size_t i = 0; i < i8.size(); ++i) i8[i] = static_cast<std::uint8_t>(i * 37 + 11);
+    const auto decoded = image(smg::GxFormat::I8, width, height, i8);
+    std::vector<std::uint8_t> la8(width * height * 2);
+    smg::tileIntensity8(i8.data(), width, height, la8.data());
+    const auto morton = [](unsigned x, unsigned y) {
+        return (x & 1) | ((y & 1) << 1) | ((x & 2) << 1) | ((y & 2) << 2) | ((x & 4) << 2) | ((y & 4) << 3);
+    };
+    bool same = true;
+    for (unsigned y = 0; y < height; ++y)
+        for (unsigned x = 0; x < width; ++x) {
+            const std::uint8_t want = static_cast<std::uint8_t>(decoded.pixels[(height - 1 - y) * width + x] >> 24);
+            const unsigned texel = ((y / 8) * (width / 8) + x / 8) * 64 + morton(x, y);
+            same &= la8[texel * 2] == want && la8[texel * 2 + 1] == want;
+        }
+    check(same, "I8 tiles straight into the PICA's LA8 layout");
+}
+
 int runModelTests() {
     models();
     textures();
+    intensityTiles();
     meshes();
     std::printf("%u J3D model/texture checks passed\n", checks);
     return 0;

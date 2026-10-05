@@ -18,6 +18,9 @@ struct Image {
 };
 
 std::size_t gxImageSize(GxFormat format, unsigned width, unsigned height);
+// An I8 image straight into the PICA's LA8 (both bytes the intensity, as GX gives it alpha too), rows bottom first in
+// 8x8 Morton tiles, as decoding and the PICA tiler make it. Width and height powers of two, at least 8.
+void tileIntensity8(const std::uint8_t* gx, unsigned width, unsigned height, std::uint8_t* la8);
 // Decodes the first mip level. Palette formats need the palette's entries in `palette`.
 bool decodeGxImage(Bytes source, GxFormat format, unsigned width, unsigned height, Bytes palette,
                    GxPalette paletteFormat, Image& output, std::string& error);
