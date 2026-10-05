@@ -823,10 +823,24 @@ adapt("src/JSystem/J3DGraphAnimator/J3DCluster.cpp", "JSystem/J3DGraphAnimator/J
     ("    buffer->swapVtxPosArrayPointer();\n    buffer->swapVtxNrmArrayPointer();\n",
      "    if (smgSwapSinceDrawn(buffer)) {\n        buffer->swapVtxPosArrayPointer();\n        buffer->swapVtxNrmArrayPointer();\n    }\n", 1),
 ])
+# The shape's display list is the GPU's, big-endian: its primitives' vertex counts and 16-bit indices are read so
+# (a native load gave an index past the fur's index array).
 adapt("src/Game/Util/FurShader.cpp", "Game/Util/FurShader.cpp", [
-    ('#include "Game/Util/FurShader.hpp"\n', '#include "Game/Util/FurShader.hpp"\n\nextern "C" int smgSwapSinceDrawn(const void* owner);\n', 1),
+    ('#include "Game/Util/FurShader.hpp"\n',
+     '#include "Game/Util/FurShader.hpp"\n\nextern "C" int smgSwapSinceDrawn(const void* owner);\n'
+     'static inline u16 smgListHalf(const u8* p) { return u16(p[0] << 8 | p[1]); }\n', 1),
     ("    pModel->mVertexBuffer.swapTransformedVtxPos();\n",
      "    if (smgSwapSinceDrawn(&pModel->mVertexBuffer)) {\n        pModel->mVertexBuffer.swapTransformedVtxPos();\n    }\n", 1),
+    ("        return *reinterpret_cast< u16* >(pRead + 1);", "        return smgListHalf(pRead + 1);", 1),
+    ("                u16 pos = *reinterpret_cast< u16* >(pVertex + posOffset);\n"
+     "                u16 nrm = *reinterpret_cast< u16* >(pVertex + nrmOffset);\n"
+     "                u16 tex = *reinterpret_cast< u16* >(pVertex + texOffset);",
+     "                u16 pos = smgListHalf(pVertex + posOffset);\n"
+     "                u16 nrm = smgListHalf(pVertex + nrmOffset);\n"
+     "                u16 tex = smgListHalf(pVertex + texOffset);", 1),
+    ("                s32 count = *reinterpret_cast< u16* >(pRead + 1);", "                s32 count = smgListHalf(pRead + 1);", 1),
+    ("                    u16 pos = *reinterpret_cast< u16* >((pRead + stride * i) + (posOffset + 3));",
+     "                    u16 pos = smgListHalf((pRead + stride * i) + (posOffset + 3));", 1),
 ])
 # A prohibited section ends with a yield, so a thread the Wii's scheduler held back runs. The port's scheduler holds
 # none back (OSDisableScheduler only counts): a higher thread waiting for the CPU runs as the section lets it go, so
