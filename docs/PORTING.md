@@ -1097,6 +1097,19 @@ the alpha ops, which would overwrite it). Good Egg's rolling Chain Chomps, the I
 then. The disc's models went from 7,266 of 7,780 materials exact to 7,306; 14 still need more than six stages (the
 Comet Luma's body takes about eight ops of color alone). `SMG_LIST_APPROXIMATED=1` makes the audit name each one.
 
+**What the approximated materials really are.** A material's audit reason is only its first, which can hide the real
+fault. Measured against the TEV model on random byte inputs and on each model's own triangles (the interpolated vertex
+color as the rasterized color, texels at the interpolated UVs), most "approximated" materials draw right: none of the
+228 "unclamped output" ones differs on their real inputs (they wrap only where a vertex alpha near zero pushes a sum past
+one, which the Wii would show dark too). Two real faults came out of it. The combiner's buffer was written once per
+program, so a material that needed an earlier value a second time read a stale one (Kingfin's bones); a later stage may
+now write it again once the earlier value's readers are done, as a write shows two stages on. And an unclamped GX sum
+read only as the next stage's d, which saturates (the Starshroom's hull: vertex color plus a lerp minus a half, up to
+1.5, then plus vertex color times a texture minus a half), is now kept at half scale: `halfFirst` makes (d + lerp) / 2,
+`halfSecond` adds lerp / 2, applies both biases and doubles. The half sum saturates only where the whole is at least two,
+which any total bias of -1 or more still saturates, so it's exact; one that no longer fits in six stages is compiled
+without it. 7,411 of 7,780 materials translate exactly.
+
 **Development settings.** Keys in `settings.ini` for development only, written back only when on: `dev.skip_story=1`
 skips the prologue's storybook and movies; `dev.gx_dump=1` dumps a frame's draws to the log once a minute;
 `dev.gx_null=1` draws nothing, to measure the game's own work; `dev.gx_timing=1` adds the renderer's parts to the perf
