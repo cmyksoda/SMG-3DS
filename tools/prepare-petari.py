@@ -2130,6 +2130,11 @@ adapt("src/Game/Player/MarioSound.cpp", "Game/Player/MarioSound.cpp", [
     ("        switch (soundlist[index]._8._4[0] & 0x3) {", "        switch ((soundlist[index]._8._0 >> 24) & 0x3) {", 2),
     ("        switch (soundlist[index]._8._4[0] & ~0x3) {", "        switch ((soundlist[index]._8._0 >> 24) & ~0x3) {", 1),
 ])
+# The effect tables' flag words are written as words and read by byte, the Wii's first byte being the top one.
+adapt("src/Game/Player/MarioEffect.cpp", "Game/Player/MarioEffect.cpp", [
+    ("            u8 mByte0;\n            u8 mByte1;\n            u8 mByte2;\n            u8 mByte3;\n",
+     "            u8 mByte3;\n            u8 mByte2;\n            u8 mByte1;\n            u8 mByte0;\n", 2),
+])
 # The draw-state bits these constants set as Metrowerks packs bitfields (from the top): fields 0xB and 0x12.
 adapt("src/Game/Player/MarioJump.cpp", "Game/Player/MarioJump.cpp", [
     ("        _1C_WORD |= 0x00100000;", "        _1C._B = true;", 1),
