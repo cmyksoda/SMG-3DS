@@ -1312,6 +1312,7 @@ bool splitTev(const ModelMaterial& m, TevPasses& out, std::uint8_t grayMaps) {
     for (int j = int(end) - 1; j > k && saturates && !compileTev(out.first, false, grayMaps).exact; --j) {
         const TevStage& s = m.stages[j];
         if ((s.colorReg & 3) || s.colorOp || s.colorBias == 2 || !nonNegative(m, unsigned(j), s.colorIn[3])) break;
+        if (unsigned(j) == end - 1 && s.colorIn[3] == ColorZero) break;  // the first pass would keep nothing
         const bool sampled = std::any_of(s.colorIn, s.colorIn + 3, [](std::uint8_t in) { return in == 8 || in == 9; });
         if (sampled || unitsRead(out.first) <= CombinerProgram::MaxUnits) {
             out.extra.push_back(termPass(m, unsigned(j), opaque ? TevPass::Add : TevPass::AddTimesAlpha));
