@@ -324,6 +324,7 @@ struct Renderer {
         const u64 start = svcGetSystemTick();
         C3D_FrameBegin(0);
         ++framesBegun;
+        freeRetired();
         perf.syncTicks += svcGetSystemTick() - start;
         C3D_FrameDrawOn(target);
         if (clearPending) C3D_RenderTargetClear(target, C3D_CLEAR_ALL, clearColor, clearDepth);
@@ -605,6 +606,14 @@ struct Renderer {
         paletteFlushed = paletteUsed;
     }
 
+    // Textures whose memory the game rewrote, kept until the GPU is done with what was queued before (C3D_FrameBegin
+    // waits for it), so the frame needn't stop for them.
+    std::vector<C3D_Tex> retired;
+    void freeRetired() {
+        for (C3D_Tex& t : retired) C3D_TexDelete(&t);
+        retired.clear();
+    }
+
     // Ends the frame drawn so far without showing it; resume() begins again on the same target once the GPU is done, so
     // the vertex buffer can start over. Inside a frame citro3d's "sync" transfers only queue: readbacks go between.
     void pause() {
@@ -618,6 +627,7 @@ struct Renderer {
         const GxZoneScope zone(ZonePause);
         C3D_FrameBegin(0);
         ++framesBegun;
+        freeRetired();
         C3D_FrameDrawOn(target);
         C3D_RenderTargetSetOutput(target, GFX_TOP, GFX_LEFT, DisplayTransferFlags);
         startBuffers();
@@ -1348,9 +1358,8 @@ struct Renderer {
             for (auto it = textures.begin(); textureTouched && it != textures.end();) {
                 const auto [lo, hi] = textureRange(it->first);
                 if (lo >= end[i] || start[i] >= hi) { ++it; continue; }
-                if (inFrame && !paused) pause(), resume(), paused = true;  // the GPU may still read it
                 if (atlasAddresses.count(std::get<0>(it->first))) dropAtlases();
-                C3D_TexDelete(&it->second), ++perf.texturesInvalidated;
+                retired.push_back(it->second), ++perf.texturesInvalidated;
                 it = textures.erase(it);
                 stateValid = applied = false;  // its textures may be gone
                 forgetSent();
