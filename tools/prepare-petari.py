@@ -828,6 +828,12 @@ adapt("src/Game/Util/FurShader.cpp", "Game/Util/FurShader.cpp", [
     ("    pModel->mVertexBuffer.swapTransformedVtxPos();\n",
      "    if (smgSwapSinceDrawn(&pModel->mVertexBuffer)) {\n        pModel->mVertexBuffer.swapTransformedVtxPos();\n    }\n", 1),
 ])
+# A prohibited section ends with a yield, so a thread the Wii's scheduler held back runs. The port's scheduler holds
+# none back (OSDisableScheduler only counts): a higher thread waiting for the CPU runs as the section lets it go, so
+# the yield is only a kernel call, once for each material whose display list is patched.
+adapt("src/Game/Util/SchedulerUtil.cpp", "Game/Util/SchedulerUtil.cpp", [
+    ("    OSEnableScheduler();\n    OSYieldThread();\n", "    OSEnableScheduler();\n", 1),
+])
 # Material and packet display lists are double-buffered by calcAnim as well: their commands go into the FIFO when called.
 adapt("src/JSystem/J3DGraphBase/J3DPacket.cpp", "JSystem/J3DGraphBase/J3DPacket.cpp", [
     ("#include <mem.h>\n", "#include <mem.h>\n#include <smg/GxPrivate.h>\n", 1),
