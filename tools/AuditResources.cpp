@@ -31,6 +31,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <map>
@@ -799,11 +800,15 @@ int main(int argc, char** argv) {
             smg::Model model;
             if (smg::loadModel({storage.data()+entry.offset,entry.size},model,256u*1024*1024,error)) {
                 triangles += model.vertices.size()/3;
+                // SMG_LIST_APPROXIMATED=1: each approximated material by where it is, to study them.
+                static const bool list = std::getenv("SMG_LIST_APPROXIMATED");
                 for (const auto& material : model.materials) {
                     ++materials;
                     const auto program = smg::compileTev(material);
                     if (program.exact) ++exact;
                     else ++approximations[program.approximation];
+                    if (!program.exact && list)
+                        std::fprintf(stderr, "approximated (%s): %s :: %s :: %s\n", program.approximation, path.c_str(), entry.path.c_str(), material.name.c_str());
                 }
                 continue;
             }
