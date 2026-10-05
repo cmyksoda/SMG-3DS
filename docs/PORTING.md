@@ -962,7 +962,11 @@ changed-memory queue's lock when nothing is pending and compares its 32 bytes by
 
 A depth peek (the star pointer's `GXPeekZ` at a draw sync each frame) pauses the frame and waits for the GPU, then copies
 back only the 8x8 tile of the depth buffer that holds the pixel (256 bytes, `C3D_SyncTextureCopy`); it took 1.2 ms a frame
-copying the whole buffer. Checked against the whole readback at 188,700 points, none different.
+copying the whole buffer. Checked against the whole readback at 188,700 points, none different. Peeks answered from
+the frame before, and copies the GPU keeps, queue their transfers behind the draws: citro3d's GX queue holds 32 jobs
+until the next `C3D_FrameBegin` empties it, a copy or a peek takes two (the command list so far, then the transfer)
+and a frame's end two more, so `roomInQueue` ends and begins the frame again before a full queue would panic in
+libctru's `gxCmdQueueAdd` (Bowser's second battle, whose effects copy that often in one frame).
 
 **Draw syncs before the next step.** Deferring the GPU wait to the next logic step (above) let that step's logic run
 before the drawn frame's draw-sync callbacks: with the render thread seconds behind (a scene's first textures), the
