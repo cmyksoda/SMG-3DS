@@ -296,6 +296,11 @@ adapt("include/Game/Util/MathUtil.hpp", "include/Game/Util/MathUtil.hpp", [
     ("inline void clampMax(f32* pValue, f32 max) NO_INLINE {", "NO_INLINE inline void clampMax(f32* pValue, f32 max) {", 1),
     # Only GXColor is used; the whole GX header defines the Wii's hardware FIFO in every user.
     ("#include <revolution/gx.h>", "#include <revolution/gx/GXStruct.h>", 1),
+    # Each directional particle asks it (a quarter of Dusty Dune's game thread is those): inline, the same compares.
+    ("    bool isNearZero(const TVec3f& rVec, f32 tolerance = 0.001f);",
+     "    inline bool isNearZero(const TVec3f& rVec, f32 tolerance = 0.001f) {\n"
+     "        return !(rVec.x > tolerance || rVec.x < -tolerance || rVec.y > tolerance || rVec.y < -tolerance || rVec.z > tolerance ||\n"
+     "                 rVec.z < -tolerance);\n    }", 1),
 ])
 
 adapt("src/Game/Util/MathUtil.cpp", "Game/Util/MathUtil.cpp", [
@@ -310,6 +315,35 @@ adapt("src/Game/Util/MathUtil.cpp", "Game/Util/MathUtil.cpp", [
     ('#include "Game/System/GameSystem.hpp"\n#include "Game/System/GameSystemObjHolder.hpp"\n',
      '#include <smg/GameRandom.hpp>\n', 1),
     ('#include "Game/Util/SingletonHolder.hpp"\n', '', 1),
+    ('''    bool isNearZero(const TVec3f& rVec, f32 tolerance) {
+        if (rVec.x > tolerance) {
+            return false;
+        }
+
+        if (rVec.x < -tolerance) {
+            return false;
+        }
+
+        if (rVec.y > tolerance) {
+            return false;
+        }
+
+        if (rVec.y < -tolerance) {
+            return false;
+        }
+
+        if (rVec.z > tolerance) {
+            return false;
+        }
+
+        if (rVec.z < -tolerance) {
+            return false;
+        }
+
+        return true;
+    }
+
+''', '', 1),
     ("SingletonHolder< GameSystem >::get()->mObjHolder->mRandom.rand()", "smgGameRandom().rand()", 1),
     # Paired-single bodies with no other branch; these are what the assembly computes.
     ("""    }  // clang-format on
