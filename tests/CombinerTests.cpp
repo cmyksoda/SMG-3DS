@@ -721,6 +721,34 @@ void starshroomHull(std::mt19937& rng) {
     }
 }
 
+// The valve switch: stage 1 writes its color to C2, so stage 2 reads C2 as the combiner's previous output and the
+// older PREV from the buffer, kept there by the stage that made it.
+void valveSwitch(std::mt19937& rng) {
+    smg::ModelMaterial m;
+    for (int i = 0; i < 3; ++i) m.textures[i] = i;
+    m.tevStageCount = 3;
+    const std::uint8_t color[3][4]{{15, 10, 8, 15}, {15, 8, 14, 15}, {15, 8, 6, 0}};
+    const std::uint8_t alpha[3][4]{{7, 5, 4, 7}, {5, 7, 7, 7}, {5, 7, 7, 7}};
+    const std::uint8_t map[3]{0, 2, 1};
+    for (int i = 0; i < 3; ++i) {
+        auto& s = m.stages[i];
+        s = {};
+        std::copy(color[i], color[i] + 4, s.colorIn), std::copy(alpha[i], alpha[i] + 4, s.alphaIn);
+        s.texMap = s.texCoord = map[i], s.channel = 4;
+    }
+    m.stages[1].konstColor = 0x06, m.stages[1].colorReg = 3, m.stages[1].alphaClamp = 0;
+    m.stages[2].colorScale = 1, m.stages[2].alphaClamp = 0;
+    const auto program = smg::compileTev(m);
+    check(program.exact, "the valve switch translates exactly");
+    for (int i = 0; i < 300; ++i) {
+        const auto in = byteInputs(rng);
+        if (same(gx(m, in), pica(program, in))) continue;
+        dump(m, program, in);
+        check(false, "and matches GX on byte inputs");
+        break;
+    }
+}
+
 int runCombinerTests() {
     std::mt19937 rng(1234);
     realMaterial(rng);
@@ -729,6 +757,7 @@ int runCombinerTests() {
     previousTwice(rng);
     kingfinBone(rng);
     starshroomHull(rng);
+    valveSwitch(rng);
     compareWithoutC(rng);
     compareAddsC(rng);
     sixTapBlur(rng);

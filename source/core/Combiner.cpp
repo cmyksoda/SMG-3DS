@@ -12,10 +12,11 @@ using Rgba = std::array<float, 4>;
 // One combiner input before stage allocation. Prev is the GX previous value entering the
 // stage; Temp is the result of the op just before, inside the same GX stage.
 struct Arg {
-    enum Kind : std::uint8_t { Zero, One, Constant, Prev, Temp, Texture, Raster } kind = Zero;
+    // Saved: a register's older value, which the combiner stage that made it keeps in the buffer.
+    enum Kind : std::uint8_t { Zero, One, Constant, Prev, Temp, Texture, Raster, Saved } kind = Zero;
     CombineOperand operand = CombineOperand::Color;
     float value[3]{}; // constant rgb, or the alpha in value[0] for alpha args
-    std::uint8_t unit = 0;
+    std::uint8_t unit = 0;  // the texture unit, or for Saved the stage whose output it is
     bool operator==(const Arg& o) const {
         if (kind != o.kind) return false;
         if (kind == Constant) return value[0] == o.value[0] && value[1] == o.value[1] && value[2] == o.value[2];
@@ -116,6 +117,7 @@ struct Compiler {
     bool wantsLeading = false;
     int saved[2]{-1, -1};   // the stage whose output the buffer keeps, per color and alpha
     int firstSaved[2]{-1, -1}, savedRead[2]{-1, -1};  // the first such stage; the last stage reading the kept output
+    int producer[4][2];  // the combiner stage whose output each register part holds, or -1
     int constantLast[2]{-1, -1};
 
     // What each register can hold (color, alpha), signed as GX keeps it; unclamped stages can leave 0..1.
@@ -135,6 +137,7 @@ struct Compiler {
             ranges[i][1] = {r[3], r[3]};
         }
         for (auto& row : unitFor) for (int& unit : row) unit = -1;
+        for (auto& row : producer) row[0] = row[1] = -1;
         if (color1FromUnit) ranges[2][0] = ranges[2][1] = {0, 1};
     }
 
@@ -154,8 +157,14 @@ struct Compiler {
             return constant(d ? known.lo : wrapByte(known.lo));
         }
         if (!known.inUnit()) approximate("unclamped value");
-        if (live[part] != index) approximate("overwritten register read");
-        return kind(Arg::Prev, operand);
+        if (live[part] == index) return kind(Arg::Prev, operand);
+        if (producer[index][part] < 0) {
+            approximate("overwritten register read");
+            return kind(Arg::Prev, operand);
+        }
+        Arg older = kind(Arg::Saved, operand);
+        older.unit = static_cast<std::uint8_t>(producer[index][part]);
+        return older;
     }
 
     Arg palette(bool alphaPart, bool colorInput) {
@@ -491,19 +500,15 @@ struct Compiler {
                CombineSource& source, CombineOperand& operand) {
         // The buffer keeps color and alpha apart; what matters is the component read, not the combiner.
         const bool readsAlpha = arg.operand == CombineOperand::Alpha || arg.operand == CombineOperand::OneMinusAlpha;
-        const int part = arg.kind == Arg::Prev ? (readsAlpha ? 1 : 0) : (alpha ? 1 : 0);
+        const int part = arg.kind == Arg::Prev || arg.kind == Arg::Saved ? (readsAlpha ? 1 : 0) : (alpha ? 1 : 0);
         operand = arg.operand;
-        switch (arg.kind) {
-        case Arg::Prev: {
-            source = CombineSource::Previous;
-            if (index == first) return;
-            // Keep the incoming value by letting the stage that made it write the buffer. A later stage may write it
-            // again once the earlier value's readers are done: a write shows two stages on.
-            const int maker = first - 1;
+        // Keep a value by letting the stage that made it write the buffer. A later stage may write it again once the
+        // earlier value's readers are done: a write shows two stages on.
+        const auto keep = [&](int maker, const char* otherwise) {
             const bool replaces = saved[part] >= 0 && saved[part] != maker;
             if (maker < 0 || maker > 3 || constantLast[part] > maker + 1 || index < maker + 2 ||
                 (replaces && (maker < saved[part] || savedRead[part] > maker + 1))) {
-                approximate("previous value needed twice");
+                approximate(otherwise);
                 return;
             }
             if (firstSaved[part] < 0) firstSaved[part] = maker;
@@ -511,8 +516,16 @@ struct Compiler {
             saved[part] = maker;
             program.bufferUpdate[part] |= 1 << maker;
             source = CombineSource::Buffer;
+        };
+        switch (arg.kind) {
+        case Arg::Prev:
+            source = CombineSource::Previous;
+            if (index != first) keep(first - 1, "previous value needed twice");
             return;
-        }
+        case Arg::Saved:
+            source = CombineSource::Previous;
+            keep(arg.unit, "overwritten register read");
+            return;
         case Arg::Temp: source = CombineSource::Previous; return;
         case Arg::Texture: source = static_cast<CombineSource>(static_cast<int>(CombineSource::Texture0) + arg.unit); return;
         case Arg::Raster: source = CombineSource::Primary; return;
@@ -733,6 +746,7 @@ struct Compiler {
                 written[outputs[part]][part] = true;
                 live[part] = outputs[part];
                 ranges[outputs[part]][part] = results[part];
+                producer[outputs[part]][part] = ready[part] - 1;
             }
         }
         if (live[0] != 0 || live[1] != 0) approximate("output left in a register");
