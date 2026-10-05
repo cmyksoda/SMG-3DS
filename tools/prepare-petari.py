@@ -842,6 +842,12 @@ adapt("src/Game/Util/FurShader.cpp", "Game/Util/FurShader.cpp", [
     ("                    u16 pos = *reinterpret_cast< u16* >((pRead + stride * i) + (posOffset + 3));",
      "                    u16 pos = smgListHalf((pRead + stride * i) + (posOffset + 3));", 1),
 ])
+# The fur map is an IA8 texture the GPU reads by byte, alpha first: its texels are stored as the Wii's halves were.
+adapt("src/Game/Util/FurDrawer.cpp", "Game/Util/FurDrawer.cpp", [
+    ("        pPixels[i] = 255;", "        pPixels[i] = __builtin_bswap16(255);", 1),
+    ("            pPixels[x + width * y] = (u16(255.0f * mThickness[type]) << 8) | u16(255 - mLengthMap[type]);",
+     "            pPixels[x + width * y] = __builtin_bswap16((u16(255.0f * mThickness[type]) << 8) | u16(255 - mLengthMap[type]));", 1),
+])
 # A prohibited section ends with a yield, so a thread the Wii's scheduler held back runs. The port's scheduler holds
 # none back (OSDisableScheduler only counts): a higher thread waiting for the CPU runs as the section lets it go, so
 # the yield is only a kernel call, once for each material whose display list is patched.
