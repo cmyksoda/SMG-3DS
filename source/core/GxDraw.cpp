@@ -458,14 +458,19 @@ std::size_t gxDrawStateKey(const GxCommandProcessor& gpu, std::uint32_t* out, bo
 }
 
 namespace {
+// The maps whose formats give equal red, green and blue (I4, I8, IA4 and IA8).
+std::uint8_t grayMaps(const GxDrawState& state) {
+    std::uint8_t maps = 0;
+    for (int map = 0; map < 8; ++map) maps = static_cast<std::uint8_t>(maps | (state.textures[map].format <= 3) << map);
+    return maps;
+}
+
 void readProgram(const GxCommandProcessor& gpu, GxDrawState& out, bool palette) {
     readTev(gpu, out);
     readPixel(gpu, out);
     std::uint8_t identitySwap = 0;
     if (!color0CanRide(gpu, out.material, identitySwap)) {
-        std::uint8_t grayMaps = 0;  // I4, I8, IA4 and IA8 give equal red, green and blue
-        for (int map = 0; map < 8; ++map) grayMaps = static_cast<std::uint8_t>(grayMaps | (out.textures[map].format <= 3) << map);
-        out.program = cachedTev(out.material, false, grayMaps);
+        out.program = cachedTev(out.material, false, grayMaps(out));
         return;
     }
     // Compiled with C0 read as the rasterized color and its value left out, so every C0 shares one program.
@@ -494,18 +499,19 @@ void readProgram(const GxCommandProcessor& gpu, GxDrawState& out, bool palette) 
 
 // A material one pass can't draw exactly is drawn in passes when it splits, each exact, with C0 and C1 read as constants.
 void readPasses(GxDrawState& out) {
+    const std::uint8_t gray = grayMaps(out);
     TevPasses split;
-    if (out.program.exact || !splitTev(out.material, split)) return;
-    const CombinerProgram first = cachedTev(split.first);
+    if (out.program.exact || !splitTev(out.material, split, gray)) return;
+    const CombinerProgram first = cachedTev(split.first, false, gray);
     if (!first.exact) return;
     std::vector<GxDrawState::Pass> passes;
     for (const TevPass& pass : split.extra) {
-        const CombinerProgram& program = cachedTev(pass.material);
+        const CombinerProgram& program = cachedTev(pass.material, false, gray);
         if (!program.exact) return;
         bool same = program.unitCount <= first.unitCount;
         for (unsigned u = 0; same && u < program.unitCount; ++u)
             same = program.units[u].texture == first.units[u].texture && program.units[u].texCoord == first.units[u].texCoord;
-        passes.push_back({program, pass.alphaEqual, pass.reference, same});
+        passes.push_back({program, pass.blend, pass.reference, same});
     }
     out.program = first, out.passes = std::move(passes);
     out.color0InVertex = out.color1InTexture = false, out.paletteUnit = 0;

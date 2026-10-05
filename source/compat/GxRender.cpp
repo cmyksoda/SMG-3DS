@@ -1888,9 +1888,11 @@ struct Renderer {
             for (const auto& pass : state_->passes) {
                 PicaPixel p = preparePixel(state_->material, pass.program);
                 p.equation = p.alphaEquation = GPU_BLEND_ADD;
-                p.source = pass.alphaEqual ? GPU_ONE : GPU_SRC_ALPHA, p.destination = GPU_ONE;
+                const bool byAlpha = pass.blend == TevPass::AddTimesAlpha || pass.blend == TevPass::Over;
+                p.source = byAlpha ? GPU_SRC_ALPHA : GPU_ONE, p.destination = pass.blend == TevPass::Over ? GPU_ONE_MINUS_SRC_ALPHA : GPU_ONE;
                 p.alphaSource = GPU_ZERO, p.alphaDestination = GPU_ONE;
-                if (pass.alphaEqual) p.alphaTest = true, p.alphaFunc = GPU_EQUAL, p.alphaReference = pass.reference;
+                if (pass.blend == TevPass::AddWhereEqual) p.alphaTest = true, p.alphaFunc = GPU_EQUAL, p.alphaReference = pass.reference;
+                if (pass.blend == TevPass::Over) p.alphaTest = false;
                 stateEntry->passPixels.push_back(p);
             }
         }

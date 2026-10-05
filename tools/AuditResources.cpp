@@ -61,6 +61,14 @@ std::uint8_t grayMaps(const smg::Model& model, const smg::ModelMaterial& m) {
     return maps;
 }
 
+// The material as passes (splitTev) that each translate exactly, as the renderer then draws it.
+bool splitExactly(const smg::ModelMaterial& m, std::uint8_t gray, smg::TevPasses& passes, std::vector<smg::CombinerProgram>& programs) {
+    if (!smg::splitTev(m, passes, gray)) return false;
+    programs = {smg::compileTev(passes.first, false, gray)};
+    for (const auto& pass : passes.extra) programs.push_back(smg::compileTev(pass.material, false, gray));
+    return std::all_of(programs.begin(), programs.end(), [](const smg::CombinerProgram& p) { return p.exact; });
+}
+
 Measure measureOnModel(const smg::Model& model, unsigned index) {
     using namespace tevmodel;
     smg::ModelMaterial m = model.materials[index];
@@ -68,6 +76,9 @@ Measure measureOnModel(const smg::Model& model, unsigned index) {
     int modelTexture[8];
     for (int i = 0; i < 8; ++i) modelTexture[i] = m.textures[i], m.textures[i] = m.textures[i] >= 0 ? i : -1;
     const auto program = smg::compileTev(m, false, gray);
+    smg::TevPasses passes;
+    std::vector<smg::CombinerProgram> programs;
+    const bool split = !program.exact && splitExactly(m, gray, passes, programs);
     const auto sourceAlpha = [](int f) { return f == 4 || f == 5; };
     const bool alphaUsed = !(m.alphaTest.compare0 == 7 && m.alphaTest.compare1 == 7) ||
                            (m.blend.type == 1 && (sourceAlpha(m.blend.source) || sourceAlpha(m.blend.destination)));
@@ -118,10 +129,15 @@ Measure measureOnModel(const smg::Model& model, unsigned index) {
                     }
                     in.texture[map] = texel(model.textures[modelTexture[map]], s, t);
                 }
-                const Rgba g = tev(m, in), q = pica(program, in);
                 float gap = 0;
-                for (int i = 0; i < 3; ++i) gap = std::max(gap, std::fabs(g[i] - q[i]));
-                if (alphaUsed) gap = std::max(gap, std::fabs(g[3] - q[3]));
+                if (split) {
+                    const Rgba dst{unit(rng), unit(rng), unit(rng), 1}, g = drawn(m, in, dst), q = drawnInPasses(m, passes, programs, in, dst);
+                    for (int i = 0; i < 3; ++i) gap = std::max(gap, std::fabs(g[i] - q[i]));
+                } else {
+                    const Rgba g = tev(m, in), q = pica(program, in);
+                    for (int i = 0; i < 3; ++i) gap = std::max(gap, std::fabs(g[i] - q[i]));
+                    if (alphaUsed) gap = std::max(gap, std::fabs(g[3] - q[3]));
+                }
                 result.worst = std::max(result.worst, gap);
                 off += gap > 3 / 255.0f;
                 ++points;
@@ -710,7 +726,7 @@ int main(int argc, char** argv) {
     }
     if (ec) { std::fprintf(stderr,"Directory traversal: %s\n",ec.message().c_str()); return 2; }
     std::sort(archives.begin(), archives.end());
-    std::size_t tables=0, records=0, resources=0, errors=0, modelCount=0, triangles=0, materials=0, exact=0, visiblyOff=0;
+    std::size_t tables=0, records=0, resources=0, errors=0, modelCount=0, triangles=0, materials=0, exact=0, inPasses=0, visiblyOff=0;
     std::size_t bcsvInPlace=0, bcsvRepack=0, bcsvDiffer=0;
     std::vector<float> xanimeGaps;
     std::size_t brks=0, brkErrors=0, brkUnmatched=0, skinChecked=0, skinWrong=0, j3dChecked=0, j3dWrong=0, xanimeChecked=0, bcks=0, bckErrors=0;
@@ -890,11 +906,17 @@ int main(int argc, char** argv) {
                 for (unsigned index = 0; index < model.materials.size(); ++index) {
                     const auto& material = model.materials[index];
                     ++materials;
-                    const auto program = smg::compileTev(material, false, grayMaps(model, material));
+                    const std::uint8_t gray = grayMaps(model, material);
+                    const auto program = smg::compileTev(material, false, gray);
+                    smg::TevPasses passes;
+                    std::vector<smg::CombinerProgram> programs;
+                    const bool split = !program.exact && splitExactly(material, gray, passes, programs);
                     if (program.exact) ++exact;
+                    else if (split) ++inPasses;
                     else ++approximations[program.approximation];
                     if (program.exact || !list) continue;
-                    std::fprintf(stderr, "approximated (%s): %s :: %s :: %s", program.approximation, path.c_str(), entry.path.c_str(), material.name.c_str());
+                    std::fprintf(stderr, "%s (%s): %s :: %s :: %s", split ? "in passes" : "approximated", program.approximation, path.c_str(),
+                                 entry.path.c_str(), material.name.c_str());
                     if (measure) {
                         const Measure m = measureOnModel(model, index);
                         std::fprintf(stderr, ": %.1f%% of its surface off (worst %.3f)", 100 * m.share, m.worst);
@@ -916,10 +938,10 @@ int main(int argc, char** argv) {
         std::size_t failed = 0;
         for (const auto& [reason, count] : modelErrors) { std::printf("%6zu  %s\n", count, reason.c_str()); failed += count; }
         std::printf("%zu models, %zu loaded, %zu triangles\n", modelCount, modelCount - failed, triangles);
-        std::printf("%zu materials, %zu translated to the 3DS combiner exactly\n", materials, exact);
+        std::printf("%zu materials, %zu translated to the 3DS combiner exactly, %zu more as passes that each do\n", materials, exact, inPasses);
         for (const auto& [reason, count] : approximations) std::printf("%6zu  approximated: %s\n", count, reason.c_str());
         if (std::getenv("SMG_MEASURE_APPROXIMATED"))
-            std::printf("%zu of the approximated draw more than 1%% of their own surface off by over 3/255\n", visiblyOff);
+            std::printf("%zu of the rest draw more than 1%% of their own surface off by over 3/255\n", visiblyOff);
         std::printf("%zu BRK files, %zu failed to load, %zu name no material of their archive's models\n", brks, brkErrors, brkUnmatched);
         std::printf("%zu models reposed at their bind pose and skinned, %zu differ from what the loader baked\n", skinChecked, skinWrong);
         std::printf("%zu skeletons through JSystem's J3DModelLoader and J3DModel, %zu differ from the port's matrices\n", j3dChecked, j3dWrong);

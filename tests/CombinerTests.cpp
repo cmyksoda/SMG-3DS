@@ -405,10 +405,11 @@ void waterPasses(std::mt19937& rng) {
         for (std::size_t e = 0; e < passes.extra.size(); ++e) {
             const auto& pass = passes.extra[e];
             const Rgba x = pica(programs[e + 1], in);
-            const bool drawn = pass.alphaEqual ? std::lround(x[3] * 255) == pass.reference : x[3] > 0;
-            lines += drawn && pass.alphaEqual;
+            const bool equal = pass.blend == smg::TevPass::AddWhereEqual;
+            const bool drawn = equal ? std::lround(x[3] * 255) == pass.reference : x[3] > 0;
+            lines += drawn && equal;
             if (drawn)
-                for (int c = 0; c < 3; ++c) got[c] = std::min(1.0f, got[c] + (pass.alphaEqual ? x[c] : x[c] * x[3]));
+                for (int c = 0; c < 3; ++c) got[c] = std::min(1.0f, got[c] + (equal ? x[c] : x[c] * x[3]));
         }
         ++compared;
         if (std::abs(got[0] - want[0]) <= 2 / 255.0f && std::abs(got[1] - want[1]) <= 2 / 255.0f && std::abs(got[2] - want[2]) <= 2 / 255.0f) continue;
@@ -418,6 +419,78 @@ void waterPasses(std::mt19937& rng) {
         break;
     }
     check(compared > 1000 && lines > 50, "over inputs on and off the bright lines");
+}
+
+// A material split into passes, each translating exactly, whose drawing over the frame is GX's.
+void checkPasses(const smg::ModelMaterial& m, std::uint8_t gray, smg::TevPass::Blend last, std::mt19937& rng, const char* what) {
+    smg::TevPasses passes;
+    check(!smg::compileTev(m, false, gray).exact && smg::splitTev(m, passes, gray) && passes.extra.size() == 1 && passes.extra[0].blend == last, what);
+    std::vector<smg::CombinerProgram> programs{smg::compileTev(passes.first, false, gray)};
+    for (const auto& pass : passes.extra) programs.push_back(smg::compileTev(pass.material, false, gray));
+    bool exact = true;
+    for (const auto& p : programs) exact &= p.exact;
+    check(exact, "and both passes translate exactly");
+    std::uniform_int_distribution<int> byte(0, 255);
+    for (int i = 0; i < 2000; ++i) {
+        auto in = byteInputs(rng);
+        for (int map = 0; map < 8; ++map)
+            if (gray >> map & 1) in.texture[map][1] = in.texture[map][2] = in.texture[map][0];
+        const Rgba dst{byte(rng) / 255.0f, byte(rng) / 255.0f, byte(rng) / 255.0f, 1};
+        const Rgba want = drawn(m, in, dst), got = drawnInPasses(m, passes, programs, in, dst);
+        if (std::abs(got[0] - want[0]) <= 2 / 255.0f && std::abs(got[1] - want[1]) <= 2 / 255.0f && std::abs(got[2] - want[2]) <= 2 / 255.0f) continue;
+        dump(m, programs[0], in);
+        std::printf("want %.3f %.3f %.3f got %.3f %.3f %.3f\n", want[0], want[1], want[2], got[0], got[1], got[2]);
+        check(false, "and the passes draw what GX draws");
+        break;
+    }
+}
+
+smg::ModelMaterial stagesOf(unsigned count, const std::uint8_t (*color)[4], const std::uint8_t (*alpha)[4], const std::uint8_t* map) {
+    smg::ModelMaterial m;
+    m.tevStageCount = static_cast<std::uint8_t>(count);
+    for (unsigned i = 0; i < count; ++i) {
+        auto& s = m.stages[i];
+        s = {};
+        std::copy(color[i], color[i] + 4, s.colorIn), std::copy(alpha[i], alpha[i] + 4, s.alphaIn);
+        s.texMap = s.texCoord = map[i], s.channel = 4;
+        m.textures[map[i]] = map[i];
+    }
+    return m;
+}
+
+// Cosmos Garden's sky (GreenPlanetOrbitSky's GreenPlanetMat_v): two maps lerped by a third, then that lerped to K0 by
+// a fourth, gray: four samples, drawn as the first three and K0 over them by the fourth.
+void orbitSkyOver(std::mt19937& rng) {
+    const std::uint8_t color[4][4]{{8, 15, 15, 15}, {8, 15, 15, 15}, {6, 0, 8, 15}, {0, 14, 8, 15}};
+    const std::uint8_t alpha[4][4]{{7, 4, 5, 7}, {5, 7, 7, 7}, {5, 7, 7, 7}, {5, 7, 7, 7}};
+    const std::uint8_t map[4]{0, 2, 1, 3};
+    auto m = stagesOf(4, color, alpha, map);
+    for (auto& c : m.tevColors) c = {1, 1, 1, 1};
+    m.tevColors[3] = {0, 0, 0, 0};
+    m.konstColors[0] = {226 / 255.0f, 226 / 255.0f, 208 / 255.0f, 1};
+    m.stages[0].colorReg = 3;
+    m.stages[1].colorClamp = m.stages[2].colorClamp = 0;
+    for (int i = 1; i < 4; ++i) m.stages[i].alphaClamp = 0;
+    m.alphaTest.op = 1;
+    checkPasses(m, 0x0a, smg::TevPass::Over, rng, "a sky lerping to a constant by a fourth, gray map splits into a pass over the rest");
+}
+
+// CrestModel's mat_crest: C2 = the first map lit plus the second times K0, plus the fourth map times the fifth's
+// signed doubling: five samples, drawn as C2 and the last term added on.
+void crestTerm(std::mt19937& rng) {
+    const std::uint8_t color[4][4]{{15, 8, 10, 15}, {15, 8, 14, 0}, {8, 15, 15, 15}, {15, 8, 0, 6}};
+    const std::uint8_t alpha[4][4]{{7, 4, 5, 7}, {5, 7, 7, 7}, {5, 7, 7, 7}, {5, 7, 7, 7}};
+    const std::uint8_t map[4]{0, 1, 4, 3};
+    auto m = stagesOf(4, color, alpha, map);
+    m.textures[2] = 2;
+    m.tevColors[0] = {0, 0, 0, 1}, m.tevColors[1] = m.tevColors[2] = {1, 1, 1, 1}, m.tevColors[3] = {0, 0, 0, 0};
+    m.konstColors[0] = {111 / 255.0f, 94 / 255.0f, 65 / 255.0f, 1};
+    m.stages[1].colorReg = 3;
+    m.stages[2].colorBias = 2, m.stages[2].colorScale = 1;
+    m.stages[3].konstColor = 0x0d;
+    for (int i = 1; i < 4; ++i) m.stages[i].alphaClamp = 0;
+    m.alphaTest.op = 1;
+    checkPasses(m, 0x1f, smg::TevPass::Add, rng, "an opaque sum of five samples splits its last term into an added pass");
 }
 
 // ElectricRailMoving's SparkMat, from the disc: (C0 + TEXC x C2 - 1/2) x 4, then A1 > the second map's red ? that : 0.
@@ -836,6 +909,8 @@ int runCombinerTests() {
     compareAddsC(rng);
     sixTapBlur(rng);
     waterPasses(rng);
+    orbitSkyOver(rng);
+    crestTerm(rng);
     electricRail(rng);
     gearmoBody(rng);
     chainChompBody(rng);

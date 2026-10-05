@@ -1053,10 +1053,12 @@ namespace {
 // HALF 13, KONST 14, ZERO 15; alpha APREV 0, A0-A2 1-3, TEXA 4, RASA 5, KONST 6, ZERO 7.
 constexpr std::uint8_t ColorZero = 15, AlphaZero = 7;
 
-void passColor(TevStage& s) {
-    s.colorIn[0] = s.colorIn[1] = s.colorIn[2] = ColorZero, s.colorIn[3] = 0;
-    s.colorOp = s.colorBias = s.colorScale = 0;
+// The stage's color left as its d alone, biased and scaled.
+void dOnly(TevStage& s) {
+    s.colorIn[0] = s.colorIn[1] = s.colorIn[2] = ColorZero;
+    s.colorOp = 0;
 }
+void passColor(TevStage& s) { dOnly(s), s.colorIn[3] = 0, s.colorBias = s.colorScale = 0; }
 
 // d + a term that reads nothing of PREV, unscaled: a stage the ones before it can be split from.
 bool additive(const TevStage& s) {
@@ -1080,6 +1082,45 @@ void clearDead(ModelMaterial& m) {
         for (const std::uint8_t in : s.alphaIn)
             if (in <= 3) alpha |= 1u << in;
     }
+}
+
+// The stage writing the register a color input reads before stage `before`, or -1 for the material's starting value.
+int producer(const ModelMaterial& m, unsigned before, std::uint8_t in) {
+    for (int i = int(before) - 1; i >= 0; --i)
+        if (((in & 1 ? m.stages[i].alphaReg : m.stages[i].colorReg) & 3) == in / 2) return i;
+    return -1;
+}
+
+// A color input (as stage `before` reads it) that is never negative: only d can be, as a, b and c read 8 bits, and
+// a sum or a compare (adding c or nothing) keeps d's sign.
+bool nonNegative(const ModelMaterial& m, unsigned before, std::uint8_t in) {
+    if (in > 7) return true;
+    const int w = producer(m, before, in);
+    if (w < 0) {
+        const auto& v = m.tevColors[(in / 2 + 3) % 4];
+        return in & 1 ? v[3] >= 0 : std::min({v[0], v[1], v[2]}) >= 0;
+    }
+    const TevStage& s = m.stages[w];
+    if (in & 1) {
+        if (s.alphaClamp) return true;
+        static constexpr std::uint8_t toColor[8]{1, 3, 5, 7, 15, 15, 15, 15};
+        return (s.alphaOp == 0 || s.alphaOp >= 8) && s.alphaBias != 2 && nonNegative(m, unsigned(w), toColor[s.alphaIn[3] & 7]);
+    }
+    return s.colorClamp || ((s.colorOp == 0 || s.colorOp >= 8) && s.colorBias != 2 && nonNegative(m, unsigned(w), s.colorIn[3]));
+}
+
+// A color input (as stage `before` reads it) within 0..1: saturated, or a lerp of bytes with nothing added.
+bool inUnit(const ModelMaterial& m, unsigned before, std::uint8_t in) {
+    if (in > 7) return true;
+    const int w = producer(m, before, in);
+    if (w < 0) {
+        const auto& v = m.tevColors[(in / 2 + 3) % 4];
+        const auto unit = [](float x) { return x >= 0 && x <= 1; };
+        return in & 1 ? unit(v[3]) : unit(v[0]) && unit(v[1]) && unit(v[2]);
+    }
+    const TevStage& s = m.stages[w];
+    if (in & 1) return s.alphaClamp || (!s.alphaOp && !s.alphaBias && !s.alphaScale && s.alphaIn[3] == AlphaZero);
+    return s.colorClamp || (!s.colorOp && !s.colorBias && !s.colorScale && s.colorIn[3] == ColorZero);
 }
 
 unsigned unitsRead(const ModelMaterial& m) {
@@ -1164,36 +1205,82 @@ bool equalityPass(const ModelMaterial& m, unsigned k, TevPass& pass) {
     last.alphaIn[0] = last.alphaIn[1] = last.alphaIn[2] = AlphaZero, last.alphaIn[3] = 0;
     last.konstColor = compare.konstColor;
     clearDead(e);
-    pass.material = e, pass.alphaEqual = true, pass.reference = std::uint8_t(std::lround(std::clamp(b, 0.0f, 1.0f) * 255));
+    pass.material = e, pass.blend = TevPass::AddWhereEqual, pass.reference = std::uint8_t(std::lround(std::clamp(b, 0.0f, 1.0f) * 255));
     return true;
 }
 
-// Stage j's term alone, under the whole alpha chain: added times alpha, it is what the stage added to the blend.
-TevPass termPass(const ModelMaterial& m, unsigned j) {
+// Stage j's term alone (the later stages passing it on), under the whole alpha chain: what the stage added.
+TevPass termPass(const ModelMaterial& m, unsigned j, TevPass::Blend blend) {
     TevPass pass;
-    pass.material = m;
-    for (unsigned i = 0; i < m.tevStageCount; ++i) {
-        TevStage& s = pass.material.stages[i];
-        if (i < j) std::fill(s.colorIn, s.colorIn + 4, ColorZero), s.colorOp = s.colorBias = s.colorScale = 0;
-        else if (i == j) s.colorIn[3] = ColorZero;
-        else passColor(s);
-    }
+    pass.material = m, pass.blend = blend;
+    pass.material.stages[j].colorIn[3] = ColorZero, pass.material.stages[j].colorBias = 0;
+    for (unsigned i = j + 1; i < m.tevStageCount; ++i) passColor(pass.material.stages[i]);
     clearDead(pass.material);
     return pass;
 }
+
+bool alwaysShown(const ModelMaterial& m) {
+    const auto all = [](std::uint8_t compare, std::uint8_t reference) { return compare == 7 || (compare == 6 && !reference); };
+    const auto& t = m.alphaTest;
+    const bool first = all(t.compare0, t.reference0), second = all(t.compare1, t.reference1);
+    return t.op == 1 ? first || second : t.op == 0 && first && second;
+}
+
+// The last stage's lerp from PREV (within 0..1) to x by a scalar, neither read from PREV: a pass of x drawn over the
+// rest with that scalar as its alpha, the first pass leaving PREV. The scalar takes alpha's place, so no alpha test.
+// The stages before stay for the registers x and the scalar may read.
+bool overPass(const ModelMaterial& m, std::uint8_t grayMaps, TevPass& pass) {
+    const unsigned last = m.tevStageCount - 1u;
+    const TevStage& s = m.stages[last];
+    const std::uint8_t x = s.colorIn[1], by = s.colorIn[2];
+    if (s.colorIn[0] != 0 || s.colorIn[3] != ColorZero || s.colorOp || s.colorBias || s.colorScale || (s.colorReg & 3) || x <= 1 ||
+        !alwaysShown(m) || !inUnit(m, last, 0))
+        return false;
+    ModelMaterial e = m;
+    TevStage& t = e.stages[last];
+    std::uint8_t alpha = 0, konst = 0;
+    switch (by) {
+    case 3: case 5: case 7: alpha = std::uint8_t((by - 1) / 2); break;
+    case 9: alpha = 4; break;
+    case 11: alpha = 5; break;
+    case 12: alpha = 6, konst = 0; break;
+    case 13: alpha = 6, konst = 4; break;
+    case 14:
+        if (s.konstColor >= 0x08 && s.konstColor < 0x10) return false;  // three components
+        alpha = 6, konst = s.konstColor;
+        break;
+    case 8: {
+        if (!(grayMaps >> s.texMap & 1)) return false;
+        // The texture's alpha read from its red, through a table the stage's raster color doesn't use.
+        const std::uint8_t table = s.rasSwap == 1 ? 2 : 1, red = m.swapTables[s.texSwap][0];
+        std::copy(m.swapTables[s.texSwap], m.swapTables[s.texSwap] + 3, e.swapTables[table]);
+        e.swapTables[table][3] = red, t.texSwap = table, alpha = 4;
+        break;
+    }
+    default: return false;
+    }
+    t.colorIn[0] = t.colorIn[1] = t.colorIn[2] = ColorZero, t.colorIn[3] = x;
+    t.alphaIn[0] = t.alphaIn[1] = t.alphaIn[2] = AlphaZero, t.alphaIn[3] = alpha;
+    t.alphaOp = t.alphaBias = t.alphaScale = 0, t.alphaClamp = 1, t.alphaReg = 0, t.konstAlpha = konst;
+    clearDead(e);
+    pass.material = e, pass.blend = TevPass::Over;
+    return true;
+}
 } // namespace
 
-bool splitTev(const ModelMaterial& m, TevPasses& out) {
-    if (m.blend.type != 1 || m.blend.source != 4) return false;  // GX_BM_BLEND from GX_BL_SRCALPHA
+bool splitTev(const ModelMaterial& m, TevPasses& out, std::uint8_t grayMaps) {
+    const bool overAlpha = m.blend.type == 1 && m.blend.source == 4;  // GX_BM_BLEND from GX_BL_SRCALPHA
+    const bool opaque = m.blend.type == 0 || (m.blend.type == 1 && m.blend.source == 1 && m.blend.destination == 0);
+    if ((!overAlpha && !opaque) || !m.tevStageCount) return false;
     int k = -1;
-    for (unsigned i = 0; i < m.tevStageCount; ++i) {
-        const TevStage& s = m.stages[i];
-        if ((s.colorReg & 3) || (s.alphaReg & 3)) return false;
-        if (s.colorOp == 9 && k < 0) k = int(i);
-        else if (s.colorOp > 1 || s.alphaOp > 1) return false;
-    }
+    for (unsigned i = 0; i < m.tevStageCount && k < 0; ++i)
+        if (m.stages[i].colorOp == 9) k = int(i);
     out.first = m, out.extra.clear();
     if (k >= 0) {
+        for (unsigned i = 0; i < m.tevStageCount; ++i) {
+            const TevStage& s = m.stages[i];
+            if (!overAlpha || (s.colorReg & 3) || (s.alphaReg & 3) || (i != unsigned(k) && (s.colorOp > 1 || s.alphaOp > 1))) return false;
+        }
         const TevStage& s = m.stages[k];
         if (s.colorIn[0] || s.colorIn[3] || s.colorBias || s.colorScale || !passesAllShown(m)) return false;
         for (unsigned i = unsigned(k) + 1; i < m.tevStageCount; ++i)
@@ -1203,15 +1290,26 @@ bool splitTev(const ModelMaterial& m, TevPasses& out) {
         passColor(out.first.stages[k]);
         out.extra.push_back(equal);
     }
+    TevPass over;
+    const bool overLast = k < 0 && opaque && overPass(m, grayMaps, over);
+    const unsigned end = m.tevStageCount - overLast;  // the stages a term may be split from
+    if (overLast) passColor(out.first.stages[end]);
     clearDead(out.first);
-    for (int j = int(m.tevStageCount) - 1; j > k && unitsRead(out.first) > CombinerProgram::MaxUnits; --j) {
+    // A term splits from a sum into PREV whose d (and bias) is never negative, the stages after it adding terms of their
+    // own; added by the blend, saturating, the passes' sum is GX's when the sum saturates too.
+    const bool saturates = !opaque || m.stages[end - 1].colorClamp;
+    for (int j = int(end) - 1; j > k && saturates && !compileTev(out.first, false, grayMaps).exact; --j) {
         const TevStage& s = m.stages[j];
+        if ((s.colorReg & 3) || s.colorOp || s.colorBias == 2 || !nonNegative(m, unsigned(j), s.colorIn[3])) break;
+        const bool sampled = std::any_of(s.colorIn, s.colorIn + 3, [](std::uint8_t in) { return in == 8 || in == 9; });
+        if (sampled || unitsRead(out.first) <= CombinerProgram::MaxUnits) {
+            out.extra.push_back(termPass(m, unsigned(j), opaque ? TevPass::Add : TevPass::AddTimesAlpha));
+            dOnly(out.first.stages[j]);
+            clearDead(out.first);
+        }
         if (!additive(s)) break;
-        if (std::none_of(s.colorIn, s.colorIn + 3, [](std::uint8_t in) { return in == 8 || in == 9; })) continue;
-        out.extra.push_back(termPass(m, unsigned(j)));
-        passColor(out.first.stages[j]);
-        clearDead(out.first);
     }
+    if (overLast) out.extra.push_back(over);
     if (out.extra.empty() || unitsRead(out.first) > CombinerProgram::MaxUnits) return false;
     for (const TevPass& pass : out.extra)
         if (unitsRead(pass.material) > CombinerProgram::MaxUnits) return false;

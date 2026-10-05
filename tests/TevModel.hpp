@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <vector>
 
 namespace tevmodel {
 using Rgba = std::array<float, 4>;
@@ -147,6 +148,56 @@ inline Rgba pica(const smg::CombinerProgram& p, const Inputs& in) {
         if (i < 4 && (p.bufferUpdate[1] & (1 << i))) next[3] = out[3];
     }
     return previous;
+}
+
+// GX's alpha test: two compares of the alpha byte, joined by and, or, xor or xnor.
+inline bool alphaPasses(const smg::ModelMaterial& m, float alpha) {
+    const long a = std::lround(alpha * 255);
+    const auto compare = [a](std::uint8_t c, long r) {
+        switch (c) {
+        case 0: return false;
+        case 1: return a < r;
+        case 2: return a == r;
+        case 3: return a <= r;
+        case 4: return a > r;
+        case 5: return a != r;
+        case 6: return a >= r;
+        default: return true;
+        }
+    };
+    const auto& t = m.alphaTest;
+    const bool x = compare(t.compare0, t.reference0), y = compare(t.compare1, t.reference1);
+    return t.op == 0 ? x && y : t.op == 1 ? x || y : t.op == 2 ? x != y : x == y;
+}
+
+// A color c drawn over dst by the material's blend: replacing it, or by c's alpha with dst kept, added or weighed.
+inline Rgba blended(const smg::ModelMaterial& m, const Rgba& c, Rgba dst) {
+    if (m.blend.type != 1 || m.blend.source != 4) return c;
+    const float keep = m.blend.destination == 1 ? 1 : m.blend.destination == 5 ? 1 - c[3] : 0;
+    for (int i = 0; i < 3; ++i) dst[i] = std::min(1.0f, c[i] * c[3] + dst[i] * keep);
+    return dst;
+}
+
+// What GX draws over dst, and what passes split from it (splitTev) draw over dst in turn as the renderer blends them.
+inline Rgba drawn(const smg::ModelMaterial& m, const Inputs& in, const Rgba& dst) {
+    const Rgba c = tev(m, in);
+    return alphaPasses(m, c[3]) ? blended(m, c, dst) : dst;
+}
+inline Rgba drawnInPasses(const smg::ModelMaterial& m, const smg::TevPasses& passes, const std::vector<smg::CombinerProgram>& programs,
+                          const Inputs& in, Rgba dst) {
+    const Rgba first = pica(programs[0], in);
+    if (alphaPasses(m, first[3])) dst = blended(m, first, dst);
+    for (std::size_t e = 0; e < passes.extra.size(); ++e) {
+        const smg::TevPass& pass = passes.extra[e];
+        const Rgba x = pica(programs[e + 1], in);
+        const bool shown = pass.blend == smg::TevPass::Over ||
+                           (pass.blend == smg::TevPass::AddWhereEqual ? std::lround(x[3] * 255) == pass.reference : alphaPasses(m, x[3]));
+        if (!shown) continue;
+        const float by = pass.blend == smg::TevPass::AddTimesAlpha || pass.blend == smg::TevPass::Over ? x[3] : 1;
+        const float keep = pass.blend == smg::TevPass::Over ? 1 - x[3] : 1;
+        for (int c = 0; c < 3; ++c) dst[c] = std::min(1.0f, x[c] * by + dst[c] * keep);
+    }
+    return dst;
 }
 
 inline bool same(const Rgba& a, const Rgba& b) {

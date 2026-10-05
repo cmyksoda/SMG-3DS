@@ -42,14 +42,15 @@ struct CombinerProgram {
 // texture maps (a bit each) whose format gives every texel equal red, green and blue (I4, I8, IA4, IA8).
 CombinerProgram compileTev(const ModelMaterial& material, bool color1FromUnit = false, std::uint8_t grayMaps = 0);
 
-// A material one PICA pass can't draw (an R8 equality compare, more texture samples than units) as passes whose blended
-// results add up to it: the first blended as the material says, each extra one added over it. Exact but where GX's
-// sum saturates once and the passes' do apart.
+// A material one PICA pass can't draw (an R8 equality compare, more texture samples or stages than it has) as passes
+// whose blended results make it up: the first blended as the material says, each extra one drawn over it in turn.
+// Exact but where a source-alpha material's sum saturates once and the passes' do apart.
 struct TevPass {
+    // Its color times its alpha added (under the material's alpha test), its color added where its alpha equals
+    // reference, its color added (under the alpha test), or its color over the rest by its alpha.
+    enum Blend : std::uint8_t { AddTimesAlpha, AddWhereEqual, Add, Over };
     ModelMaterial material;
-    // Drawn only where its alpha equals reference, its color added as it is; else under the material's alpha test, its
-    // color added times its alpha.
-    bool alphaEqual = false;
+    Blend blend = AddTimesAlpha;
     std::uint8_t reference = 0;
 };
 struct TevPasses {
@@ -57,5 +58,5 @@ struct TevPasses {
     std::vector<TevPass> extra;
 };
 // False when the material fits one pass, or isn't of a shape split here (its compare or the rest of it not additive).
-bool splitTev(const ModelMaterial& material, TevPasses& out);
+bool splitTev(const ModelMaterial& material, TevPasses& out, std::uint8_t grayMaps = 0);
 } // namespace smg
