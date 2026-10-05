@@ -1,6 +1,12 @@
 #include <3ds.h>
 #include <cstdio>
 
+// The draw-state and combiner code checked here runs on the render thread's 128 KB stack in the game; splitting a
+// material into passes holds several materials at once, past libctru's default for the main thread.
+extern "C" {
+u32 __stacksize__ = 0x20000;
+}
+
 int runMathTests();
 int runPadTests();
 int runBcsvTests();
