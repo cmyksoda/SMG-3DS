@@ -245,6 +245,7 @@ void AIInit(u8*) {
         for (int i = 0; i < WaveBuffers; ++i) sWaves[i].data_pcm16 = sWaveMemory + i * MaxBuffer / 2, sWaves[i].status = NDSP_WBUF_FREE;
     } else {
         std::fputs("The 3DS's DSP (NDSP) would not start, so the game's audio runs silent (is dspfirm.cdc on the SD card?)\n", stderr);
+        std::puts("No sound: sdmc:/3ds/dspfirm.cdc is missing");  // the bottom screen, where a player sees it
     }
     const BOOL enabled = OSDisableInterrupts();
     __OSSetInterruptHandler(__OS_INTERRUPT_DSP_AI, aiInterrupt);
