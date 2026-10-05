@@ -1132,9 +1132,21 @@ scalar as its alpha (a gray map's red read into alpha by a swap table): Cosmos G
 White Room's light streams split the same way. The audit measures a split material by drawing its passes over a random
 background against GX's blend (`drawn`, `drawnInPasses`). On the way: dropping stages nothing reads (`clearDead`)
 followed PREV only, so a stage writing C1 for the last stage was cleared and the grass masks compiled "exactly" as a
-different material (99% off on their own triangles); it now follows every register. 7,449 of 7,780 materials translate
-exactly and 6 more as passes; on their own triangles 29 still differ visibly: recipes longer than six stages (the Comet
-Luma's body needs about eight), PlanetDisk's wrap, and SunshineMario's compares (placed nowhere).
+different material (99% off on their own triangles); it now follows every register.
+
+A last stage can also be finished by passes over what the first drew (`finishPasses`), which the blend saturates as
+GX's clamp does once: `TevPass::Sub` takes a constant away (reverse subtract), `Scale` multiplies by one below one
+(the destination times the source color), `Gain` by one to two (the source times the destination, plus it). A last
+stage affine in PREV, g PREV + h (its other inputs fixed), is Sub -h / g, Scale or Gain g, then Add h: the tomb
+spider. PREV plus a lerp from PREV to x by t is x drawn over by t / 2, then g = 2: the Comet Luma's body. A sum with a
+-1/2 bias halved, doubled or neither is drawn halved without the bias (never past one), then a quarter less and a
+Gain per doubling: Freezeflame's ice rock. When the first pass leaves out a last stage whose alpha did work and no
+alpha test reads it, the last pass writes the material's alpha. The models blend in full precision; the 3DS rounds to
+eight bits between passes, a level or two at most. Two compiler folds helped others: a term of two constants is one
+constant, and a chain's lerp between constants is a slope plus a constant (BossPlanetR50, ForceJumpPlanetA).
+7,452 of 7,780 materials translate exactly and 18 more as passes, every split one 0.0% off; on their own triangles
+14 still differ visibly: SunshineMario's compares (placed nowhere, 11), AirBubble's alpha (2.4%), a water band (1%)
+and PlanetDisk's wrap (placed nowhere).
 
 **Development settings.** Keys in `settings.ini` for development only, written back only when on: `dev.skip_story=1`
 skips the prologue's storybook and movies; `dev.gx_dump=1` dumps a frame's draws to the log once a minute;
