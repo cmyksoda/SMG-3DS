@@ -584,6 +584,13 @@ void meshRefresh() {
         same = near(out[i].position[0], 2 * mesh.vertices[i].position[0]) && near(out[i].position[2], 20) && out[i].slot == mesh.vertices[i].slot &&
                near(out[i].source[0][0], mesh.vertices[i].source[0][0]);
     check(same, "decoded again from the moved array, each vertex takes its new position and keeps the rest");
+    // A lit mesh's groups copy vertices out of order: each takes the list vertex its origin names.
+    const std::vector<std::uint32_t> reversed{3, 2, 1, 0};
+    std::vector<smg::GxMeshVertex> gathered(4);
+    same = pipeline.refreshMesh(list.bytes.data(), static_cast<std::uint32_t>(list.bytes.size()), reversed.data(), mesh.vertices.data(),
+                                gathered.data(), gathered.size());
+    for (std::size_t i = 0; same && i < 4; ++i) same = near(gathered[i].position[0], out[3 - i].position[0]) && near(gathered[i].position[1], out[3 - i].position[1]);
+    check(same, "and out of order, each takes the list vertex its origin names");
 }
 
 // What gx.v.pica works out for a lit mesh's vertex: the color (0-1).

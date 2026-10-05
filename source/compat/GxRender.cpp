@@ -595,6 +595,8 @@ struct Renderer {
     // Meshes and textures flush their own memory when made, so a frame's end flushes only these and the command list:
     // C3D_FrameEnd(0) would flush the whole linear heap each time, which a real console pays for in cache lines.
     void flushVertices() {
+        if (refreshHi > refreshLo) GSPGPU_FlushDataCache(reinterpret_cast<void*>(refreshLo), refreshHi - refreshLo);
+        refreshLo = UINTPTR_MAX, refreshHi = 0;
         if (used > flushed) GSPGPU_FlushDataCache(vertices + flushed, (used - flushed) * sizeof(GxDrawVertex));
         if (indexUsed > indexFlushed) GSPGPU_FlushDataCache(indices + indexFlushed, (indexUsed - indexFlushed) * sizeof(std::uint16_t));
         flushed = used, indexFlushed = indexUsed;
@@ -1584,6 +1586,7 @@ struct Renderer {
     std::uint8_t* refreshArena[2] = {};
     std::size_t refreshUsed[2] = {};
     u32 refreshFrame[2] = {~0u, ~0u};
+    std::uintptr_t refreshLo = UINTPTR_MAX, refreshHi = 0;  // refreshed since the last command list, flushed with it
     bool refreshMesh(CachedMesh& m, const std::uint8_t* list, std::uint32_t size) {
         const std::size_t bytes = (m.vertexCount * sizeof(GxMeshVertex) + 15) & ~std::size_t(15);
         const unsigned k = framesShown & 1;
@@ -1595,7 +1598,8 @@ struct Renderer {
         if (!pipeline.refreshMesh(list, size, m.origin.data(), static_cast<const GxMeshVertex*>(m.block), into, m.vertexCount)) return false;
         static const bool checking = smgDevGxCheck();
         if (checking) checkRefresh(list, size, m, into);
-        GSPGPU_FlushDataCache(into, bytes);
+        refreshLo = std::min(refreshLo, reinterpret_cast<std::uintptr_t>(into));
+        refreshHi = std::max(refreshHi, reinterpret_cast<std::uintptr_t>(into) + bytes);
         m.vertices = into, m.vertexPhysical = osConvertVirtToPhys(into), m.refreshedFrame = framesShown;
         ++perf.meshesRefreshed, perf.meshVerticesRefreshed += m.vertexCount;
         return true;

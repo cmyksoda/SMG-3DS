@@ -1093,7 +1093,13 @@ void GxVertexPipeline::meshAttributes(const GxVertex& v, bool fromVertex, GxMesh
 bool GxVertexPipeline::refreshMesh(const std::uint8_t* list, std::uint32_t size, const std::uint32_t* origin, const GxMeshVertex* built,
                                    GxMeshVertex* out, std::size_t count) const {
     const bool fromVertex = meshColorFromVertex();
-    std::vector<GxMeshVertex> fresh;
+    // An unlit mesh keeps its list's vertices in order, decoded straight into place; a lit one's groups copy them in
+    // triangle order, gathered from a scratch kept between refreshes (moving meshes refresh every frame).
+    bool inOrder = true;
+    for (std::size_t i = 0; i < count && inOrder; ++i) inOrder = origin[i] == i;
+    thread_local std::vector<GxMeshVertex> fresh;
+    fresh.clear();
+    std::size_t decoded = 0;
     for (std::uint32_t at = 0; at < size;) {
         const std::uint8_t op = list[at];
         if (op == 0x00) {
@@ -1105,12 +1111,14 @@ bool GxVertexPipeline::refreshMesh(const std::uint8_t* list, std::uint32_t size,
         const GxVertexLayout& layout = gpu_->layout(op & 7);
         if (at + 3 + std::uint32_t(vertices) * layout.size > size) return false;
         GxVertex v;
-        for (std::uint16_t i = 0; i < vertices; ++i) {
+        for (std::uint16_t i = 0; i < vertices && (!inOrder || decoded < count); ++i, ++decoded) {
             layout.read(list + at + 3 + std::uint32_t(i) * layout.size, v);
-            meshAttributes(v, fromVertex, fresh.emplace_back());
+            if (!inOrder) meshAttributes(v, fromVertex, fresh.emplace_back());
+            else meshAttributes(v, fromVertex, out[decoded]), out[decoded].slot = built[decoded].slot;
         }
         at += 3 + std::uint32_t(vertices) * layout.size;
     }
+    if (inOrder) return decoded >= count;
     for (std::size_t i = 0; i < count; ++i) {
         if (origin[i] >= fresh.size()) return false;
         out[i] = fresh[origin[i]], out[i].slot = built[i].slot;
