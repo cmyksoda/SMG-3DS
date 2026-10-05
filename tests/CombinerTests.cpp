@@ -493,6 +493,26 @@ void crestTerm(std::mt19937& rng) {
     checkPasses(m, 0x1f, smg::TevPass::Add, rng, "an opaque sum of five samples splits its last term into an added pass");
 }
 
+// SearchBeamer's beam: (the texture lit + C0) / 2, C0 past one in red and below zero in green and blue.
+void searchBeam(std::mt19937& rng) {
+    const std::uint8_t color[2][4]{{15, 8, 10, 15}, {0, 15, 15, 2}};
+    const std::uint8_t alpha[2][4]{{7, 4, 5, 7}, {7, 4, 6, 1}};
+    const std::uint8_t map[2]{0, 1};
+    auto m = stagesOf(2, color, alpha, map);
+    m.tevColors[0] = {271 / 255.0f, -73 / 255.0f, -162 / 255.0f, -110 / 255.0f};
+    m.stages[1].colorScale = 3, m.stages[1].alphaScale = 2, m.stages[1].konstAlpha = 0;
+    m.blend = {1, 4, 1, 0};
+    const auto program = smg::compileTev(m);
+    check(program.exact, "a halved sum with a register past one and below zero translates exactly");
+    for (int i = 0; i < 300; ++i) {
+        const auto in = byteInputs(rng);
+        if (same(tev(m, in), pica(program, in))) continue;
+        dump(m, program, in);
+        check(false, "and matches GX on byte inputs");
+        break;
+    }
+}
+
 // ElectricRailMoving's SparkMat, from the disc: (C0 + TEXC x C2 - 1/2) x 4, then A1 > the second map's red ? that : 0.
 // Its first op multiplies a texture by a constant; the zero it leaves unused once took the other constant's slot.
 void electricRail(std::mt19937& rng) {
@@ -911,6 +931,7 @@ int runCombinerTests() {
     waterPasses(rng);
     orbitSkyOver(rng);
     crestTerm(rng);
+    searchBeam(rng);
     electricRail(rng);
     gearmoBody(rng);
     chainChompBody(rng);

@@ -547,10 +547,13 @@ struct Compiler {
             // k - t: a component with k at or below zero saturates to zero, as max(0, 0 - t) does.
             ops.push_back({CombineFunc::Subtract, {constant(positive[0], positive[1], positive[2]), t}});
         } else {
-            if (beyondOne && factor == 0.5f && !anyNegative) {
-                // Halved, a k up to two is a constant within one: t / 2 + k / 2.
+            if (beyondOne && factor == 0.5f) {
+                // Halved, a k up to two is a constant within one: t / 2 + k / 2, its negative components taken after.
+                float up[3], down[3];
+                for (int i = 0; i < 3; ++i) up[i] = std::min(std::max(k[i], 0.0f) / 2, 1.0f), down[i] = std::min(std::max(-k[i], 0.0f) / 2, 1.0f);
                 ops.push_back({CombineFunc::Modulate, {t, constant(0.5f)}});
-                ops.push_back({CombineFunc::Add, {temp, constant(std::min(k[0] / 2, 1.0f), std::min(k[1] / 2, 1.0f), std::min(k[2] / 2, 1.0f))}});
+                ops.push_back({CombineFunc::Add, {temp, constant(up[0], up[1], up[2])}});
+                if (anyNegative) ops.push_back({CombineFunc::Subtract, {temp, constant(down[0], down[1], down[2])}});
                 return ops;
             }
             // A sum past one saturates the same whether k or one was added, unless it is halved after.
