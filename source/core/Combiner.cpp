@@ -1064,15 +1064,21 @@ bool additive(const TevStage& s) {
            std::none_of(s.colorIn, s.colorIn + 3, [](std::uint8_t in) { return in <= 1; });
 }
 
-// Stages whose result nothing reads are cleared, so their textures take no unit.
+// Stages whose result nothing reads are cleared, so their textures take no unit: each register (PREV, C0-C2 as bits
+// 0-3) followed back from what the last stage leaves in PREV.
 void clearDead(ModelMaterial& m) {
-    bool color = true, alpha = true;
+    unsigned color = 1, alpha = 1;
     for (int i = int(m.tevStageCount) - 1; i >= 0; --i) {
         TevStage& s = m.stages[i];
-        if (!color) std::fill(s.colorIn, s.colorIn + 4, ColorZero), s.colorOp = s.colorBias = s.colorScale = 0;
-        if (!alpha) std::fill(s.alphaIn, s.alphaIn + 4, AlphaZero), s.alphaOp = s.alphaBias = s.alphaScale = 0;
-        color = std::count(s.colorIn, s.colorIn + 4, 0) > 0;
-        alpha = std::count(s.alphaIn, s.alphaIn + 4, 0) || std::count(s.colorIn, s.colorIn + 4, 1);
+        const unsigned colorOut = 1u << (s.colorReg & 3), alphaOut = 1u << (s.alphaReg & 3);
+        const bool colorLive = color & colorOut, alphaLive = alpha & alphaOut;
+        color &= ~colorOut, alpha &= ~alphaOut;
+        if (!colorLive) std::fill(s.colorIn, s.colorIn + 4, ColorZero), s.colorOp = s.colorBias = s.colorScale = 0;
+        if (!alphaLive) std::fill(s.alphaIn, s.alphaIn + 4, AlphaZero), s.alphaOp = s.alphaBias = s.alphaScale = 0;
+        for (const std::uint8_t in : s.colorIn)
+            if (in <= 7) (in & 1 ? alpha : color) |= 1u << (in / 2);
+        for (const std::uint8_t in : s.alphaIn)
+            if (in <= 3) alpha |= 1u << in;
     }
 }
 
