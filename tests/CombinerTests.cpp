@@ -659,12 +659,45 @@ void chainChompBody(std::mt19937& rng) {
     }
 }
 
+// Kingfin's bones: stage 1's unclamped sum is read two combiner stages after it's made, once the buffer already kept
+// stage 0's output for stage 1. The buffer is written a second time, as the first value's readers are done by then.
+void kingfinBone(std::mt19937& rng) {
+    smg::ModelMaterial m;
+    for (int i = 0; i < 2; ++i) m.textures[i] = i;
+    m.tevColors[0] = {133 / 255.0f, 133 / 255.0f, 155 / 255.0f, 0};
+    m.tevColors[1] = {43 / 255.0f, 45 / 255.0f, 32 / 255.0f, 0};
+    m.tevColors[2] = {30 / 255.0f, 30 / 255.0f, 30 / 255.0f, 1};
+    m.konstColors[0] = {77 / 255.0f, 64 / 255.0f, 51 / 255.0f, 51 / 255.0f};
+    m.tevStageCount = 3;
+    const std::uint8_t color[3][4]{{14, 2, 10, 15}, {6, 0, 8, 1}, {10, 4, 8, 0}};
+    const std::uint8_t alpha[3][4]{{6, 7, 5, 7}, {7, 7, 7, 7}, {5, 7, 7, 7}};
+    const std::uint8_t map[3]{0xFF, 0, 1}, konst[3][2]{{0x0c, 0x1c}, {0x0e, 0x05}, {0x0e, 0x1c}};
+    for (int i = 0; i < 3; ++i) {
+        auto& s = m.stages[i];
+        s = {};
+        std::copy(color[i], color[i] + 4, s.colorIn), std::copy(alpha[i], alpha[i] + 4, s.alphaIn);
+        s.texMap = map[i], s.texCoord = map[i] == 0xFF ? 0 : map[i], s.channel = 4, s.konstColor = konst[i][0], s.konstAlpha = konst[i][1];
+    }
+    m.stages[0].alphaScale = 2;
+    m.stages[1].colorClamp = 0;
+    m.stages[2].colorBias = 2, m.stages[2].colorScale = 1, m.stages[2].alphaClamp = 0;
+    const auto program = smg::compileTev(m);
+    for (int i = 0; i < 300; ++i) {
+        const auto in = byteInputs(rng);
+        if (same(gx(m, in), pica(program, in))) continue;
+        dump(m, program, in);
+        check(false, "Kingfin's bones match GX on byte inputs");
+        break;
+    }
+}
+
 int runCombinerTests() {
     std::mt19937 rng(1234);
     realMaterial(rng);
     diskGardenGrass(rng);
     marioEyeLid(rng);
     previousTwice(rng);
+    kingfinBone(rng);
     compareWithoutC(rng);
     compareAddsC(rng);
     sixTapBlur(rng);

@@ -115,6 +115,7 @@ struct Compiler {
     bool leading;           // stage 0 is a pass-through so stage 1 can already read the buffer color
     bool wantsLeading = false;
     int saved[2]{-1, -1};   // the stage whose output the buffer keeps, per color and alpha
+    int firstSaved[2]{-1, -1}, savedRead[2]{-1, -1};  // the first such stage; the last stage reading the kept output
     int constantLast[2]{-1, -1};
 
     // What each register can hold (color, alpha), signed as GX keeps it; unclamped stages can leave 0..1.
@@ -434,13 +435,17 @@ struct Compiler {
         case Arg::Prev: {
             source = CombineSource::Previous;
             if (index == first) return;
-            // Keep the incoming value by letting the stage that made it write the buffer.
+            // Keep the incoming value by letting the stage that made it write the buffer. A later stage may write it
+            // again once the earlier value's readers are done: a write shows two stages on.
             const int maker = first - 1;
-            if (maker < 0 || maker > 3 || (saved[part] >= 0 && saved[part] != maker) ||
-                constantLast[part] > maker + 1 || index < maker + 2) {
+            const bool replaces = saved[part] >= 0 && saved[part] != maker;
+            if (maker < 0 || maker > 3 || constantLast[part] > maker + 1 || index < maker + 2 ||
+                (replaces && (maker < saved[part] || savedRead[part] > maker + 1))) {
                 approximate("previous value needed twice");
                 return;
             }
+            if (firstSaved[part] < 0) firstSaved[part] = maker;
+            savedRead[part] = replaces ? index : std::max(savedRead[part], index);
             saved[part] = maker;
             program.bufferUpdate[part] |= 1 << maker;
             source = CombineSource::Buffer;
@@ -469,7 +474,7 @@ struct Compiler {
             source = CombineSource::Constant;
         } else {
             if (index == 0) wantsLeading = true;
-            if (index == 0 || (buffer.used && !matches(buffer)) || (saved[part] >= 0 && index > saved[part] + 1))
+            if (index == 0 || (buffer.used && !matches(buffer)) || (firstSaved[part] >= 0 && index > firstSaved[part] + 1))
                 approximate("more than two constants");
             constantLast[part] = std::max(constantLast[part], index);
             buffer.used = true;
