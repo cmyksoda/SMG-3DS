@@ -339,8 +339,9 @@ void randomMaterials(std::mt19937& rng) {
         if (!program.exact) continue;
         ++exact;
         exactSigned += signedRegisters;
+        std::mt19937 own(t);  // apart from the materials', so a change in which translate exactly leaves the rest as they were
         for (int i = 0; i < 20; ++i) {
-            const auto in = randomInputs(rng);
+            const auto in = randomInputs(own);
             if (same(tev(m, in), pica(program, in))) continue;
             std::fprintf(stderr, "material %u\n", t);
             dump(m, program, in);
@@ -550,6 +551,28 @@ void tombSpiderFinish(std::mt19937& rng) {
     for (int i = 1; i < 4; ++i) m.stages[i].alphaClamp = 0;
     m.alphaTest.op = 1;
     checkPasses(m, 0x02, {smg::TevPass::Sub, smg::TevPass::Gain}, rng, "a last stage affine in PREV splits into a subtraction and a gain");
+}
+
+// The air bubble's alpha (AirBubble's LifeBubble_Mat): 2 T unclamped, then (that + T R) / 2 unclamped, then plus
+// 1 - R, saturated: a chain whose stages scale, each term weighted by the scales after it.
+void bubbleChain(std::mt19937& rng) {
+    const std::uint8_t color[3][4]{{15, 8, 10, 15}, {15, 8, 0, 15}, {4, 2, 0, 15}};
+    const std::uint8_t alpha[3][4]{{4, 4, 5, 7}, {7, 4, 5, 0}, {1, 7, 5, 0}};
+    const std::uint8_t map[3]{0, 0, 0};
+    auto m = stagesOf(3, color, alpha, map);
+    m.stages[2].texMap = m.stages[2].texCoord = 0xff;
+    m.tevColors[0] = {1, 1, 1, 1}, m.tevColors[1] = {230 / 255.0f, 230 / 255.0f, 230 / 255.0f, 1};
+    m.tevColors[2] = {250 / 255.0f, 1, 1, 1}, m.tevColors[3] = {0, 0, 0, 0};
+    m.stages[0].alphaScale = 1, m.stages[0].alphaClamp = 0, m.stages[1].alphaScale = 3, m.stages[1].alphaClamp = 0;
+    const auto program = smg::compileTev(m);
+    check(program.exact, "a chain with scaled stages weights each term by the scales after it");
+    for (int i = 0; i < 300; ++i) {
+        const auto in = byteInputs(rng);
+        if (same(tev(m, in), pica(program, in))) continue;
+        dump(m, program, in);
+        check(false, "and matches GX on byte inputs");
+        break;
+    }
 }
 
 // SearchBeamer's beam: (the texture lit + C0) / 2, C0 past one in red and below zero in green and blue.
@@ -1044,6 +1067,7 @@ int runCombinerTests() {
     cometLumaFinish(rng);
     iceRockFinish(rng);
     tombSpiderFinish(rng);
+    bubbleChain(rng);
     electricRail(rng);
     gearmoBody(rng);
     chainChompBody(rng);
