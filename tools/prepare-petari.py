@@ -2140,6 +2140,11 @@ adapt("src/Game/Camera/CamTranslatorSpiral.cpp", "Game/Camera/CamTranslatorSpira
     ("    s32 startTime = reinterpret_cast< s16* >(&general->mNum1)[0];\n    s32 endTime = reinterpret_cast< s16* >(&general->mNum1)[1];",
      "    s32 startTime = s16(general->mNum1 >> 16);\n    s32 endTime = s16(general->mNum1);", 1),
 ])
+# On the Wii, bit 0 of J3DModelX's flag word (display list 0) is Metrowerks' last field: _1F.
+adapt("src/Game/Player/MarioAnimator.cpp", "Game/Player/MarioAnimator.cpp", [
+    ("        u32* modelFlags = (u32*)&model->mFlags;\n        *modelFlags |= 1;", "        model->mFlags._1F = true;", 1),
+    ("        u32* modelFlags = (u32*)&model->mFlags;\n        *modelFlags &= ~1;", "        model->mFlags._1F = false;", 1),
+])
 # The draw-state bits these constants set as Metrowerks packs bitfields (from the top): fields 0xB and 0x12.
 adapt("src/Game/Player/MarioJump.cpp", "Game/Player/MarioJump.cpp", [
     ("        _1C_WORD |= 0x00100000;", "        _1C._B = true;", 1),
