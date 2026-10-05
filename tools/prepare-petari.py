@@ -1290,6 +1290,11 @@ adapt("src/Game/Ride/Tamakoro.cpp", "Game/Ride/Tamakoro.cpp", [
 # MSL's headers declared the narrow string functions along with the rest; the standard <cstring> does.
 adapt("src/Game/Util/StringUtil.cpp", "Game/Util/StringUtil.cpp", [
     ("#include <cstdio>\n#include <wstring.h>", "#include <cstdio>\n#include <cstring>\n#include <wstring.h>", 1),
+    # A message's sound names are native UTF-16 here (smg::nativeBmg): a character's high byte is no longer its first.
+    ("            const char* p = reinterpret_cast< const char* >(pSrc);\n\n            if (p[0] != '\\0') {\n                break;\n            }\n\n"
+     "            if (p[1] == '\\0') {\n                break;\n            }\n\n            *pDst = p[1];\n",
+     "            if ((*pSrc & 0xFF00) != 0) {\n                break;\n            }\n\n            if ((*pSrc & 0xFF) == 0) {\n                break;\n            }\n\n"
+     "            *pDst = static_cast< char >(*pSrc);\n", 1),
 ])
 
 TALK_STATE_NULLS = [
