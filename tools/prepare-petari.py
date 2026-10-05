@@ -2124,6 +2124,12 @@ adapt("include/Game/Util/Color.hpp", "include/Game/Util/Color.hpp", [
     ("    inline operator u32() const {\n        return mColor;\n    }",
      "    inline operator u32() const {\n        return u32(r) << 24 | u32(g) << 16 | u32(b) << 8 | a;\n    }", 1),
 ])
+# Each sound's flags are a word whose top byte the Wii read as the union's first byte: how it plays (a one-shot, held
+# or system sound) and its underwater variant.
+adapt("src/Game/Player/MarioSound.cpp", "Game/Player/MarioSound.cpp", [
+    ("        switch (soundlist[index]._8._4[0] & 0x3) {", "        switch ((soundlist[index]._8._0 >> 24) & 0x3) {", 2),
+    ("        switch (soundlist[index]._8._4[0] & ~0x3) {", "        switch ((soundlist[index]._8._0 >> 24) & ~0x3) {", 1),
+])
 # The draw-state bits these constants set as Metrowerks packs bitfields (from the top): fields 0xB and 0x12.
 adapt("src/Game/Player/MarioJump.cpp", "Game/Player/MarioJump.cpp", [
     ("        _1C_WORD |= 0x00100000;", "        _1C._B = true;", 1),
