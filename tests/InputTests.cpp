@@ -222,6 +222,21 @@ void stylusPointer() {
     check(!input.frame().shootMode, "second fresh toggle turns shooting off");
 }
 
+// The game's screens draw no touch controls: their corners aim like the rest, and no page opens unseen.
+void touchWithoutControls() {
+    smg::Input input(withPointer(smg::PointerMode::Stylus), false);
+    auto frame = input.update(touch(280, 12));
+    check(!frame.optionsOpen && frame.pointer.visible, "the options tab's corner aims when the controls aren't drawn");
+    input.update({});
+    frame = input.update(touch(30, 212));
+    check(!frame.cameraButtonHeld && frame.pointer.visible, "and so does the camera button's");
+    input.update({});
+    check(!input.update(touch(284, 212)).shootMode && input.frame().pointer.visible, "and the star bits button's");
+    input.update({});
+    smg::Input motion(smg::Settings{}, false);
+    check(!motion.update(touch(284, 212)).recenterButtonHeld && !motion.frame().optionsOpen, "a touch does nothing in motion mode");
+}
+
 void touchPages() {
     smg::Input input;
     auto frame = input.update(touch(284, 212));
@@ -331,6 +346,7 @@ int main() {
     motionPointer();
     stickPointer();
     stylusPointer();
+    touchWithoutControls();
     touchPages();
     remapPage();
     settingsFiles();

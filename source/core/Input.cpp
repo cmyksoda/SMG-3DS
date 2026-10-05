@@ -51,7 +51,7 @@ bool optionActive(Option option, const Settings& settings) {
     }
 }
 
-Input::Input(const Settings& settings) : settings_(settings) {}
+Input::Input(const Settings& settings, bool touchControls) : settings_(settings), touchControls_(touchControls) {}
 
 Button Input::sample(TriggerChecker& checker, bool held) {
     checker.update(held);
@@ -89,6 +89,10 @@ void Input::beginGesture(const RawInput& raw) {
     const bool stylus = settings_.pointer == PointerMode::Stylus;
     gesture_ = Gesture::Ignored;
     gestureOption_ = -1;
+    if (!touchControls_) {
+        if (stylus) gesture_ = Gesture::Aim;
+        return;
+    }
     if (capturing_ >= 0) {
         // Any tap finishes choosing; buttons still held stay out of the game until released.
         capturing_ = -1;

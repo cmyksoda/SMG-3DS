@@ -76,7 +76,8 @@ inline float touchButtonOpacity(const InputFrame& frame) {
 
 class Input {
 public:
-    explicit Input(const Settings& settings = {});
+    // Without touchControls (a screen that doesn't draw them), a touch only aims the stylus pointer.
+    explicit Input(const Settings& settings = {}, bool touchControls = true);
     const InputFrame& update(const RawInput& raw, float seconds = 1.0f / 60.0f);
     void cancelGesture();
     const InputFrame& frame() const { return frame_; }
@@ -94,7 +95,7 @@ private:
     MotionTracker motion_;
     Gesture gesture_ = Gesture::None;
     int gestureOption_ = -1;
-    bool touching_ = false, suppressUntilLift_ = false, shootMode_ = false;
+    bool touchControls_ = true, touching_ = false, suppressUntilLift_ = false, shootMode_ = false;
     bool optionsOpen_ = false, settingsChanged_ = false, remapOpen_ = false, captureFresh_ = false;
     int capturing_ = -1;
     std::uint32_t previousHeld_ = 0, suppressed_ = 0;

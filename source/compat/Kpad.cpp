@@ -22,7 +22,8 @@ smg::Input& input() {
     static smg::Input port = [] {
         smg::Settings settings;
         smg::loadSettings(smg::SettingsPath, settings);
-        return smg::Input(settings);
+        // The game's screens don't draw the touch controls yet, so their corners would act unseen.
+        return smg::Input(settings, false);
     }();
     return port;
 }
