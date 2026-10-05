@@ -827,8 +827,8 @@ samples what the program does (the lines' pass) draws the same vertices again, a
 other coordinates (Beach Bowl's screen term) takes the CPU path, each primitive's vertices made again under its program
 beside the program's, its indices drawn once with the batch. Beach Bowl's water costs about 5 ms a frame more this
 way; at 400x240 its lines come out as scattered bright pixels (how closely they match the Wii's is unchecked).
-`OceanSphere` stays without its lines: its last stage blends between two colors by the product instead of adding to
-it, which no added pass reproduces.
+`OceanSphere` (Drip Drop, Good Egg, Bonefin) blends between two colors by the product instead of adding to it, which no
+added pass reproduces; `equalLine` draws it in one program instead (below).
 
 **Environment maps on skinned models.** J3D's shiny skinned models give a texgen a matrix per vertex: the vertex's own
 modelview, or the texture matrix paired with its slot (30 rows on, which J3D loads per draw matrix), then the dual
@@ -1106,17 +1106,35 @@ one, which the Wii would show dark too). Two real faults came out of it. The com
 program, so a material that needed an earlier value a second time read a stale one (Kingfin's bones); a later stage may
 now write it again once the earlier value's readers are done, as a write shows two stages on. And an unclamped GX sum
 read only as the next stage's d, which saturates (the Starshroom's hull: vertex color plus a lerp minus a half, up to
-1.5, then plus vertex color times a texture minus a half), is now kept at half scale: `halfFirst` makes (d + lerp) / 2,
-`halfSecond` adds lerp / 2, applies both biases and doubles. The half sum saturates only where the whole is at least two,
-which any total bias of -1 or more still saturates, so it's exact; one that no longer fits in six stages is compiled
-without it. A register read after another register took the combiner's previous output (the valve switch writes C2,
+1.5, then plus vertex color times a texture minus a half), is now kept at half scale. `planChain` finds a run of sums
+into one register, each unclamped and read only as the next stage's d, the last clamped and scaled by 1/2, 1 or 2;
+`chainStage` halves the first's terms, adds half of each later one, and the last applies the constant (the first d,
+when fixed, folded with the biases into k, of either sign) as k / 2 and doubles. The half sum saturates only where the
+whole is at least two, so it's exact where every term keeps f (2 + k) at least one; a program that overflows with
+chains is compiled without them (the six-tap blur). A register read after another register took the combiner's previous output (the valve switch writes C2,
 then reads C2 and the older PREV) comes from the buffer the stage that made it writes (`Arg::Saved`, `producer`):
 Rosalina's hair, Bouldergeist. A constant past one minus a term is (1 - t) + (k - 1), and halved plus a term it's
 t / 2 + k / 2 (Honeyhive's sky, which clipping had turned into orange clouds on black; Bowser's lava). A lerp of
-three constants is one constant, which frees the slots the flag disc planets' panels needed. 7,442 of 7,780
-materials translate exactly; on their own triangles 40 still differ visibly, mostly sums past one that a later stage
-reads as a, b or c (the TEV keeps their low eight bits, which the PICA can't wrap: the Ghost Ship's water), recipes
-longer than six stages (the Comet Luma's body needs about eight) and SunshineMario's compares (placed nowhere).
+three constants is one constant, which frees the slots the flag disc planets' panels needed. Chains of sums brought
+Battlerock's sky, the aurora sky of Freezeflame and Snow Capsule, and the Water Bazooka capsules.
+
+Two recipes the PICA can't follow step by step are matched by what they compute, on gray textures (I4, I8, IA4, IA8:
+the renderer passes `grayMaps`, a bit per map). The game's water contour bands (`wrapBand`: WaterBack_v, Blue01_v_x,
+Mizu01) wrap a product P = 2 K0 T0 T1 past a byte to light a band where 28 < P < 32 (/255); six stages build the window
+from P sharpened by steps of four. OceanSphere's lines (`equalLine`) add C2 - C1 where the product's red equals A0; a
+window half a byte wide around A0, sharpened by eight, lights them (off on 17 of 4,000 points against 56 without).
+
+Passes now draw opaque materials too (`splitTev`, `TevPass::Add` and `Over`). A sum's last term, added by a blend of
+one and one, saturates as GX's clamped sum does when its d is never negative (`nonNegative` follows each register to
+the stage that wrote it): CrestModel's five samples, and the Pie Fortress and Dorayaki grass masks, whose stage keeps
+its scale in both passes. A last stage lerping PREV to x by a scalar becomes a pass of x drawn over the rest with the
+scalar as its alpha (a gray map's red read into alpha by a swap table): Cosmos Garden's sky (GreenPlanetOrbitSky). The
+White Room's light streams split the same way. The audit measures a split material by drawing its passes over a random
+background against GX's blend (`drawn`, `drawnInPasses`). On the way: dropping stages nothing reads (`clearDead`)
+followed PREV only, so a stage writing C1 for the last stage was cleared and the grass masks compiled "exactly" as a
+different material (99% off on their own triangles); it now follows every register. 7,449 of 7,780 materials translate
+exactly and 6 more as passes; on their own triangles 29 still differ visibly: recipes longer than six stages (the Comet
+Luma's body needs about eight), PlanetDisk's wrap, and SunshineMario's compares (placed nowhere).
 
 **Development settings.** Keys in `settings.ini` for development only, written back only when on: `dev.skip_story=1`
 skips the prologue's storybook and movies; `dev.gx_dump=1` dumps a frame's draws to the log once a minute;
