@@ -620,6 +620,7 @@ bool GxVertexPipeline::prepare(const GxCommandProcessor& gpu, const GxDrawState&
             toClip_[0][c] = frame.quarterTurn ? d[1][c] : d[0][c];
             toClip_[1][c] = frame.quarterTurn ? -d[0][c] : d[1][c];
             toClip_[2][c] = d[2][c], toClip_[3][c] = d[3][c];
+            for (int r = 0; r < 4; ++r) toClipFloat_[r][c] = static_cast<float>(toClip_[r][c]);
         }
     }
     return true;
@@ -677,14 +678,14 @@ void GxVertexPipeline::refold(TexGen& t) const {
 // and the viewport.
 const float* GxVertexPipeline::makeClipMatrix(std::uint32_t index) {
     float* out = index < 64 ? clip_[index] : clipScratch_;
-    double m[3][4];
+    float m[3][4];
     for (int k = 0; k < 3; ++k)
         for (int c = 0; c < 4; ++c) m[k][c] = matrix(index + k, c);
     for (int r = 0; r < 4; ++r)
         for (int c = 0; c < 4; ++c) {
-            double sum = c == 3 ? toClip_[r][3] : 0;  // the position matrix's fourth row is (0, 0, 0, 1)
-            for (int k = 0; k < 3; ++k) sum += toClip_[r][k] * m[k][c];
-            out[r * 4 + c] = static_cast<float>(sum);
+            float sum = c == 3 ? toClipFloat_[r][3] : 0;  // the position matrix's fourth row is (0, 0, 0, 1)
+            for (int k = 0; k < 3; ++k) sum += toClipFloat_[r][k] * m[k][c];
+            out[r * 4 + c] = sum;
         }
     if (index < 64) clipReady_ |= std::uint64_t(1) << index;
     return out;

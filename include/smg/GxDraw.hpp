@@ -298,6 +298,7 @@ private:
     std::uint32_t xfSeen_ = ~0u, viewSeen_[13] = {};  // XF 0x101A-0x1026: the viewport and projection
     GxFrame frameSeen_{0, 0, false};
     double toClip_[4][4] = {};
+    float toClipFloat_[4][4] = {};  // for the CPU path's clip matrices, in the precision the shader's are
     float clip_[64][16] = {}, clipScratch_[16] = {};
     std::uint64_t clipReady_ = 0;
     GxLighting lighting_;
