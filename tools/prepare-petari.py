@@ -1925,6 +1925,37 @@ adapt("src/Game/Screen/CustomTagProcessor.cpp", "Game/Screen/CustomTagProcessor.
      "    if (!(reinterpret_cast< uintptr_t >(*reinterpret_cast< const wchar_t* const* >(tag.getParamPtr(0))) >> 24)) {", 1),
 ])
 # On ARM the header test only answers false for the disc's big-endian layouts, and the game walks the unbuilt one.
+# Every visible pane of every layout works out its matrix each logic step: a rotation and a product per axis. An axis
+# turned by nothing (most of the HUD's panes) leaves the matrix as it was, so it's copied instead.
+adapt("src/nw4r/lyt/lyt_pane.cpp", "nw4r/lyt/lyt_pane.cpp", [
+    ("""            PSMTXRotRad(rotateMtx, 'x', NW4R_MATH_DEG_TO_RAD(mRotate.x));
+            PSMTXConcat(rotateMtx, mtx2, mtx1);
+
+            PSMTXRotRad(rotateMtx, 'y', NW4R_MATH_DEG_TO_RAD(mRotate.y));
+            PSMTXConcat(rotateMtx, mtx1, mtx2);
+
+            PSMTXRotRad(rotateMtx, 'z', NW4R_MATH_DEG_TO_RAD(mRotate.z));
+            PSMTXConcat(rotateMtx, mtx2, mtx1);""", """            if (mRotate.x != 0.0f) {
+                PSMTXRotRad(rotateMtx, 'x', NW4R_MATH_DEG_TO_RAD(mRotate.x));
+                PSMTXConcat(rotateMtx, mtx2, mtx1);
+            } else {
+                PSMTXCopy(mtx2, mtx1);
+            }
+
+            if (mRotate.y != 0.0f) {
+                PSMTXRotRad(rotateMtx, 'y', NW4R_MATH_DEG_TO_RAD(mRotate.y));
+                PSMTXConcat(rotateMtx, mtx1, mtx2);
+            } else {
+                PSMTXCopy(mtx1, mtx2);
+            }
+
+            if (mRotate.z != 0.0f) {
+                PSMTXRotRad(rotateMtx, 'z', NW4R_MATH_DEG_TO_RAD(mRotate.z));
+                PSMTXConcat(rotateMtx, mtx2, mtx1);
+            } else {
+                PSMTXCopy(mtx2, mtx1);
+            }""", 1),
+])
 adapt("src/nw4r/lyt/lyt_layout.cpp", "nw4r/lyt/lyt_layout.cpp", [
     ('#include "nw4r/lyt/util.h"\n', '#include "nw4r/lyt/util.h"\n#include <revolution/os.h>\n#include <cstring>\n', 1),
     ("            if (!detail::TestFileHeader(*pFileHead, 'RLYT')) {\n",
