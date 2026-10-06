@@ -1495,10 +1495,14 @@ adapt("src/Game/System/GameSequenceProgress.cpp", "Game/System/GameSequenceProgr
 # For development (settings.ini dev.start=GALAXY N, off unless set): Mario starts that galaxy at its start point N.
 adapt("src/Game/Scene/StageDataHolder.cpp", "Game/Scene/StageDataHolder.cpp", [
     ('#include "Game/Scene/StageDataHolder.hpp"\n',
-     '#include "Game/Scene/StageDataHolder.hpp"\n#include "Game/Util/SceneUtil.hpp"\n\nextern "C" int smgDevMarioStart(const char* galaxy);  // source/compat/Kpad.cpp\n', 1),
+     '#include "Game/Scene/StageDataHolder.hpp"\n#include "Game/System/GalaxyStatusAccessor.hpp"\n#include "Game/Util/SceneUtil.hpp"\n\n'
+     'extern "C" int smgDevMarioStart(const char* galaxy);  // source/compat/Kpad.cpp\nextern "C" const char* smgDevMarioZone(const char* galaxy);\n', 1),
     ("    JMapIdInfo startID = MR::getCurrentMarioStartIdInfo();\n    JMapInfoIter iter = makeMarioJMapInfoIter(startID);",
      "    JMapIdInfo startID = MR::getCurrentMarioStartIdInfo();\n    if (const s32 start = smgDevMarioStart(MR::getCurrentStageName()); start >= 0) {\n"
-     "        startID._0 = start;\n    }\n    JMapInfoIter iter = makeMarioJMapInfoIter(startID);", 1),
+     "        startID._0 = start;\n"
+     "        if (const char* zone = smgDevMarioZone(MR::getCurrentStageName())) {\n"
+     "            startID.mZoneID = MR::makeCurrentGalaxyStatusAccessor().getZoneId(zone);\n        }\n    }\n"
+     "    JMapInfoIter iter = makeMarioJMapInfoIter(startID);", 1),
     # A placed object's zone is the holder one of whose tables it is in. The Wii told by address, the span from a
     # holder's lowest table to the end of its highest; here spans can overlap (Gateway's rails went to the wrong zone).
     ("    s32 data = (s32)rIter.mInfo->mData + rIter.mInfo->mData->mDataOffset + rIter.mInfo->mData->mEntrySize * rIter.mIndex;\n\n"

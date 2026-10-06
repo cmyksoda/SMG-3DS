@@ -55,9 +55,9 @@ struct Settings {
     // For development only (dev.av_sync=1): every 90th drawn frame gets a white square and the audio a click at the
     // same moment, to measure the port's sound against its picture in a recording.
     bool devAvSync = false;
-    // For development only (dev.start=GALAXY N): Mario starts that galaxy at its start point N (StartInfo's MarioNo),
-    // to reach a stage's later parts without walking there.
-    std::string devStartGalaxy;
+    // For development only (dev.start=GALAXY N [ZONE]): Mario starts that galaxy at its start point N (StartInfo's
+    // MarioNo), in the named zone's StartInfo if one follows, to reach a stage's later parts without walking there.
+    std::string devStartGalaxy, devStartZone;
     int devStartMario = -1;
     // For development only (dev.galaxy=GALAXY N): the game's first stage is that galaxy's scenario N instead, to reach
     // later scenes without playing up to them.

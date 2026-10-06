@@ -81,6 +81,11 @@ int smgDevMarioStart(const char* galaxy) {
     const smg::Settings& s = input().settings();
     return s.devStartMario >= 0 && galaxy && s.devStartGalaxy == galaxy ? s.devStartMario : -1;
 }
+// dev.start's zone, whose StartInfo holds that start point: null for the galaxy's own.
+const char* smgDevMarioZone(const char* galaxy) {
+    const smg::Settings& s = input().settings();
+    return smgDevMarioStart(galaxy) >= 0 && !s.devStartZone.empty() ? s.devStartZone.c_str() : nullptr;
+}
 // dev.galaxy: the stage and scenario the game's first stage gives way to, or null for the game's own.
 const char* smgDevGalaxy(int* scenario) {
     const smg::Settings& s = input().settings();

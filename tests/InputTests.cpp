@@ -325,6 +325,10 @@ void settingsFiles() {
           smg::parseSettings("preview=HeavenlyBeachGalaxy 3\n").previewScenario == 3, "only a plain galaxy name and scenario");
     check(smg::parseSettings("dev.start=PeachCastleGardenGalaxy 0\n").devStartMario == 0 && smg::parseSettings("dev.start=../x 1\n").devStartMario == -1,
           "a start point by galaxy and number");
+    const smg::Settings zoned = smg::parseSettings("dev.start=StarDustGalaxy 100 PhantomBossSpiderZone\n");
+    check(zoned.devStartMario == 100 && zoned.devStartZone == "PhantomBossSpiderZone" && smg::parseSettings(smg::formatSettings(zoned)) == zoned &&
+              smg::parseSettings("dev.start=StarDustGalaxy 1 ../zone\n").devStartMario == -1 && smg::parseSettings("dev.start=StarDustGalaxy 1000\n").devStartMario == -1,
+          "a start point in one of the galaxy's zones");
     check(smg::parseSettings("dev.galaxy=EggStarGalaxy 1\n").devGalaxyScenario == 1 && smg::parseSettings("dev.galaxy=EggStarGalaxy 0\n").devGalaxyScenario == 0 &&
               smg::parseSettings("dev.galaxy=../x 1\n").devGalaxy.empty(),
           "a first stage by galaxy and scenario");

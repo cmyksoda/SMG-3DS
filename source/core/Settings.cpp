@@ -55,7 +55,7 @@ void parseSpeed(const std::string& value, int& speed) {
         speed = static_cast<int>(parsed);
 }
 // "EggStarGalaxy 1": a galaxy name of letters and digits (it becomes part of a path) and a number from `lowest` to 16.
-bool parseGalaxyNumber(const std::string& value, long lowest, std::string& galaxy, int& number) {
+bool parseGalaxyNumber(const std::string& value, long lowest, std::string& galaxy, int& number, long highest = 16) {
     const auto space = value.find(' ');
     if (space == std::string::npos || space == 0 || space > 64) return false;
     const std::string name = value.substr(0, space);
@@ -63,7 +63,7 @@ bool parseGalaxyNumber(const std::string& value, long lowest, std::string& galax
     char* end = nullptr;
     const std::string digits = trim(value.substr(space + 1));
     const long parsed = std::strtol(digits.c_str(), &end, 10);
-    if (digits.empty() || *end || parsed < lowest || parsed > 16) return false;
+    if (digits.empty() || *end || parsed < lowest || parsed > highest) return false;
     galaxy = name, number = static_cast<int>(parsed);
     return true;
 }
@@ -94,6 +94,7 @@ bool operator==(const Settings& a, const Settings& b) {
            a.devGxDump == b.devGxDump && a.devGxNull == b.devGxNull && a.devGxTiming == b.devGxTiming &&
            a.devGxCheck == b.devGxCheck && a.devGxInline == b.devGxInline && a.devDrawEvery == b.devDrawEvery && a.devGxNoRaw == b.devGxNoRaw &&
            a.devGxZones == b.devGxZones && a.devAvSync == b.devAvSync && a.devStartGalaxy == b.devStartGalaxy && a.devStartMario == b.devStartMario &&
+           a.devStartZone == b.devStartZone &&
            a.devGalaxy == b.devGalaxy && a.devGalaxyScenario == b.devGalaxyScenario && a.devWarp == b.devWarp &&
            (!a.devWarp || (std::equal(a.devWarpTo, a.devWarpTo + 3, b.devWarpTo) && a.devWarpSeconds == b.devWarpSeconds));
 }
@@ -119,7 +120,11 @@ Settings parseSettings(const std::string& text, Settings base) {
         } else if (key == "preview") {
             parseGalaxyNumber(value, 1, settings.previewGalaxy, settings.previewScenario);
         } else if (key == "dev.start") {
-            parseGalaxyNumber(value, 0, settings.devStartGalaxy, settings.devStartMario);
+            std::string start = trim(value), zone;
+            if (std::count(start.begin(), start.end(), ' ') == 2) zone = start.substr(start.rfind(' ') + 1), start.erase(start.rfind(' '));
+            if (std::all_of(zone.begin(), zone.end(), [](char c) { return std::isalnum(static_cast<unsigned char>(c)); }) &&
+                parseGalaxyNumber(start, 0, settings.devStartGalaxy, settings.devStartMario, 999))
+                settings.devStartZone = zone;
         } else if (key == "dev.galaxy") {
             parseGalaxyNumber(value, 1, settings.devGalaxy, settings.devGalaxyScenario);
         } else if (key == "dev.warp") {
@@ -171,7 +176,9 @@ std::string formatSettings(const Settings& settings) {
     if (settings.devAvSync) text += "dev.av_sync=1\n";
     if (settings.devGxNoRaw) text += "dev.gx_noraw=1\n";
     if (settings.devGxZones) text += "dev.gx_zones=1\n";
-    if (settings.devStartMario >= 0) text += "dev.start=" + settings.devStartGalaxy + " " + std::to_string(settings.devStartMario) + "\n";
+    if (settings.devStartMario >= 0)
+        text += "dev.start=" + settings.devStartGalaxy + " " + std::to_string(settings.devStartMario) +
+                (settings.devStartZone.empty() ? "" : " " + settings.devStartZone) + "\n";
     if (settings.devGalaxyScenario > 0) text += "dev.galaxy=" + settings.devGalaxy + " " + std::to_string(settings.devGalaxyScenario) + "\n";
     if (settings.devWarp) {
         char line[96];
