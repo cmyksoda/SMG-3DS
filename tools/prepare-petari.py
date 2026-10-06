@@ -1716,6 +1716,11 @@ adapt("libs/JSystem/include/JSystem/JAudio2/JASResArcLoader.hpp", "include/JSyst
     ("/* 0x14 */ u32 mCallbackArg;", "/* 0x14 */ uintptr_t mCallbackArg;", 1),
     ("int loadResourceAsync(JKRArchive*, u16, u8*, u32, void (*)(u32, u32), u32);", "int loadResourceAsync(JKRArchive*, u16, u8*, u32, LoadCallback, uintptr_t);", 1),
 ])
+# Without an effect's auto info, isFollowSRT keeps the flags it is handed, so they start false: the stack held garbage
+# (the file is NonMatching in Petari, so whether the Wii zeroed them is unknown; false is what its fallbacks read).
+adapt("src/Game/Effect/MultiEmitterCallBack.cpp", "Game/Effect/MultiEmitterCallBack.cpp", [
+    ("    FlagSRT flag;\n    isFollowSRT(&flag, b2);", "    FlagSRT flag = {};\n    isFollowSRT(&flag, b2);", 1),
+])
 # A DSP channel's six bus connections (setBusConnect, setMixerVolume: one row of four per bus) fill 0x10 to 0x40.
 adapt("libs/JSystem/include/JSystem/JAudio2/JASDspInterface.hpp", "include/JSystem/JAudio2/JASDspInterface.hpp", [
     ("        /* 0x010 */ u16 _10[1][4];  // array size unknown\n        /* 0x018 */ u8 _18[0x050 - 0x018];",
