@@ -1716,6 +1716,10 @@ adapt("libs/JSystem/include/JSystem/JAudio2/JASResArcLoader.hpp", "include/JSyst
     ("/* 0x14 */ u32 mCallbackArg;", "/* 0x14 */ uintptr_t mCallbackArg;", 1),
     ("int loadResourceAsync(JKRArchive*, u16, u8*, u32, void (*)(u32, u32), u32);", "int loadResourceAsync(JKRArchive*, u16, u8*, u32, LoadCallback, uintptr_t);", 1),
 ])
+# Nintendo's own (the file matches): the constructor leaves mNoCalcAnim, which the first calcAnim reads, to the heap.
+adapt("src/Game/MapObj/ItemBlock.cpp", "Game/MapObj/ItemBlock.cpp", [
+    ("    _98 = 0;\n    mCalcShadow = false;\n", "    _98 = 0;\n    mCalcShadow = false;\n    mNoCalcAnim = false;\n", 1),
+])
 # A footprint trail clears only once clear() says so: initMember never set the flag movement() reads first (NonMatching).
 adapt("src/Game/Util/FootPrint.cpp", "Game/Util/FootPrint.cpp", [
     ("    mMinPrintDistance = 80.0f;\n", "    mMinPrintDistance = 80.0f;\n    _3C = false;\n", 1),
