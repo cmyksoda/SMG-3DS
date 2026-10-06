@@ -750,10 +750,16 @@ when the copy mode changes and when full; the processor reads a whole flushed bu
 inline stores (`smg/GxFifoWrite.h`: which thread from the thread-local storage register, then bytes stored big-endian);
 another thread, or a full buffer, takes `GxFifo.cpp`'s way. A matrix loaded whole (`GXLoadPosMtxImm`, `GXLoadTexMtxImm`:
 Dusty Dune's sand sends one per particle) goes in with one look for room (`smgGXFifoXfLoad`), its write point held in a
-local, as a store through the byte pointer could alias the global one. One EFB copy a frame still went through the CPU, reading
-the whole target back and encoding it, then decoding it again for the next draw: Mario's shadow, which `MarioShadow`
-captures with `JUTTexture::captureDolTexture` into a texture it only draws with. That copy cost 25 ms a frame; it now
-stays on the GPU as `JUTTexture::capture`'s do, and the plaza takes about 80 to 85 ms a frame.
+local, as a store through the byte pointer could alias the global one. Every other command does the same: a BP, CP or XF
+load, a display-list call, a vertex's values of one type, a TEV color's two halves, a texture's six registers, a light
+and J3D's array bases and matrix indices each look for room once (`smgGXFifoPut2`..`Put4`, `smgGXFifoRun`), where every
+byte or word used to read the thread register and three globals; a command that doesn't fit goes a piece at a time as
+before, so the ring turns over and hands over at the same bytes (`tests/GxFifoWriteTests.cpp`, and an ARM harness that
+hashed 2.3 MB of the SDK's own commands both ways). About 40% fewer instructions per write; Cube Bubble's draw step went
+from 3.3 to 2.4 ms. One EFB copy a frame still went through the CPU, reading the whole target back and encoding it, then
+decoding it again for the next draw: Mario's shadow, which `MarioShadow` captures with `JUTTexture::captureDolTexture`
+into a texture it only draws with. That copy cost 25 ms a frame; it now stays on the GPU as `JUTTexture::capture`'s do,
+and the plaza takes about 80 to 85 ms a frame.
 
 **Per-draw work.** What's left is mostly paid per draw, not per vertex (`dev.gx_timing=1` splits it). A mesh draw
 sends a uniform row only when it differs from citro3d's copy (every row is sent once at setup, so a skipped row is known
