@@ -397,7 +397,7 @@ so only programs without the game (the preview, tests, tools) ever take one.
 | Allocation | `GameHeap.cpp` | plain `new` from the game's current JKRHeap once the root heap exists (as the original), the free store before; `delete` by address. The port's own long-lived containers use `compat/smg/FreeStore.hpp`'s allocator, and port code the game calls into opens an `smg::PortMemory` scope, so its scratch never spends a game heap (a solid heap would never get it back) |
 | Disc | `Dvd.cpp`, `DiscImage.cpp` | entry numbers from the disc's file table, the RVZ image's or `sys/fst.bin` (not reproducible by sorting: MovieData precedes ModuleData); reads from the image or the extracted files; async reads finish on a worker that calls back like the drive's interrupt |
 | Video | `Video.cpp` | a retrace thread on the 3DS VBlank runs the game's retrace callbacks, latches flushed buffers |
-| System settings | `SystemConfig.cpp` | language and sound mode from the 3DS's settings; 16:9 for the 5:3 screen |
+| System settings | `SystemConfig.cpp` | language and sound mode from the 3DS's settings; the game's wide mode, adapted to the 5:3 screen (`compat/smg/Screen.hpp`) |
 | WiiConnect24 | `Nwc24.cpp` | answers as a Wii with it switched off; the game sends no letters |
 | ARAM | `RVL_SDK/aralt/aralt.c` | the SDK's own "Dummy ARAM" in MEM2, compiled as it is |
 | Pure software | `Os.cpp`, `Math.cpp` (host too) | OSReport, OSPanic, PPCHalt, cache ops, MSR, error handlers kept; the SDK's matrix helpers |
@@ -445,7 +445,10 @@ the CPU they were written for. `DynamicCollisionObj` builds a one-leaf KCL octre
 0x00028000 here, so every ray through Beach Bowl's water surface walked 0x28000 bytes past the octree into the heap
 (an unmapped read in `checkArrow`, seconds after landing). It is written as the one word it is now. Finding it: the
 KCL a crash walked matched no file on the disc (`resource_audit --collision` and a walk of all 1,016 disc octrees found
-nothing wrong), so the data was built at run time.
+nothing wrong), so the data was built at run time. Bitfields over a word are the same trap: Metrowerks fills them from
+the top bit, GCC on ARM from the bottom. `RushEndInfo` sets a rush's damage kind through `mFlags.mDamageType` and
+`MarioActorRush` reads it as `(_20 >> 24) & 15`, so on ARM every bind that ends in damage (a pole, a launcher, a
+cocoon) read kind 0; such declarations swap places under `__BYTE_ORDER__`, as `JKRArchive`'s file flags do.
 
 **Messages (BMG).** The game reads its text more than one way, so no single byte order serves it. Characters
 and a tag's type are 16-bit units; `MessageEditorMessageTag` reads a tag's length and group as bytes, and so
@@ -461,7 +464,9 @@ kind with parameters the port has no layout for is refused whole, by name: the s
 sits at an odd byte), group 8's message index and group 11 aren't on the US disc. `resource_audit FILES --bmg`
 turns every BMG on the disc and reads each field the game's way against the original: 3 files, 7,392
 messages, 306,992 characters and tags, 3,948 flow nodes, 50 tag kinds, none refused, none different.
-`MessageData` calls it (`smgNativeBmg`) right after taking the file from its archive.
+`MessageData` calls it (`smgNativeBmg`) right after taking the file from its archive. A sound tag's name is text too, and `MR::convertUTF16ToASCII`
+took each character's high byte as its first; it reads the unit whole now, or every in-text sound (a Luma's voice) had
+an empty name.
 
 **Pads.** The whole-game boot builds the game's own `WPad` and `WPadHolder` with all their parts (button,
 pointer, acceleration, swings, rumble, info checker, leave watcher) over the port's KPAD
@@ -533,13 +538,10 @@ It can't see every returned local: `SimpleEffectObj::getClippingCenterOffset` re
 effect (Gateway) crashed in `SimpleEffectObj::init`. A local static holds it now, as for the temporaries in
 `MorphItemObjNeo.hpp` and `EffectObjGravityDust`; a search of the decomp for `return &name;` after a local
 declaration finds no other.
-A read past the end that no compiler can see: `SpinDriverPathStorage` keeps each galaxy's launch-star path ranges
-in one slot per scenario, sized by `getScenarioNum`, which skips hidden scenarios. A hidden scenario is the last one, so
-playing it (Freezeflame's "Top of the Ice Mountain", the sixth) indexes one slot past the array, into the next heap
-block's header (the `'HM'` magic as a pointer, `0xFF00484D` here). The Wii walked away from it and the port crashed
-loading the galaxy; such a scenario now gets the game's own -1, no stored range, so its paths draw from the start.
-No other array is sized by that count. Only scenario 1 of each galaxy has been swept so far: Space Junk's hidden sixth
-(StarDustGalaxy) still stops in `MR::getPlacedZoneId` as it loads, and Freezeflame's falls to about 1.4 fps a little way in.
+`SpinDriverPathStorage` keeps each galaxy's launch-star path ranges in one slot per scenario, sized by
+`getScenarioNum`, which skips hidden scenarios. That is safe: the game never plays a hidden scenario's own row (below,
+`dev.galaxy`). When `dev.galaxy` did, Freezeflame's sixth indexed one slot past the array and Space Junk's, whose row
+turns on no layer and so has no start point for Mario, hung looking up the zone of an empty placement row.
 
 **Which zone a placed object is in.** `StageDataHolder::findPlacedStageDataHolder` told an object's zone (whose rails,
 start points and matrix it uses) by address: whether the object's row lies between the lowest of a holder's tables and
@@ -728,7 +730,9 @@ the main GX thread's writes gather in a 16 KB buffer as the Wii's write-gather p
 processor at `GXFlush` (which the SDK calls before every wait for draw-done or a token), before a peek or a movie frame,
 when the copy mode changes and when full; the processor reads a whole flushed buffer in place. The writes themselves are
 inline stores (`smg/GxFifoWrite.h`: which thread from the thread-local storage register, then bytes stored big-endian);
-another thread, or a full buffer, takes `GxFifo.cpp`'s way. One EFB copy a frame still went through the CPU, reading
+another thread, or a full buffer, takes `GxFifo.cpp`'s way. A matrix loaded whole (`GXLoadPosMtxImm`, `GXLoadTexMtxImm`:
+Dusty Dune's sand sends one per particle) goes in with one look for room (`smgGXFifoXfLoad`), its write point held in a
+local, as a store through the byte pointer could alias the global one. One EFB copy a frame still went through the CPU, reading
 the whole target back and encoding it, then decoding it again for the next draw: Mario's shadow, which `MarioShadow`
 captures with `JUTTexture::captureDolTexture` into a texture it only draws with. That copy cost 25 ms a frame; it now
 stays on the GPU as `JUTTexture::capture`'s do, and the plaza takes about 80 to 85 ms a frame.
@@ -870,8 +874,14 @@ stays free for textures and movies. At Toy Time they reached 14.5 MB, free memor
 most of it); held to 12 MB, 128,000 vertices a frame had gone to the CPU path there, in frames of 550 ms. A new mesh
 with no room evicts the meshes drawn least recently (never one drawn this frame or the last, which the GPU may still
 read), and a list refused for room keeps its mesh's size, so it is built again as soon as there is room and no
-sooner: Toy Time's restart after a fall (the test route drops Mario into a black hole) costs one slow stretch
-(four seconds at 6 fps) instead of three. A texture, movie
+sooner. A mesh keeps only what its draws read (`GxMeshLayout`, chosen from the state its list is drawn under): the
+position, the color when it comes from the vertex, each texgen input that is data of its own (two floats unless it
+takes three; one that is the position or the normal reads those bytes again through a second buffer), the normal when
+lit or read by a texgen, the slot for per-vertex matrices; what the shader reads and a mesh lacks is a fixed attribute.
+A vertex went from 68 bytes to 34 on average over the disc's models (36 at Toy Time). Toy Time's ~13 MB had sat at the
+budget, and a restart after a fall, whose new textures took the last of the room, evicted 200 meshes during the black
+fade, the start area's first (drawn least recently), to build 151 of them again, byte for byte the same, as the scene
+came back: two seconds near 20 fps. Its meshes now take 10.3 MB with 11.5 MB free, and the restart rebuilds none. A texture, movie
 frame or copy target that finds no linear memory lets go the meshes the GPU no longer reads, then (unless it comes
 inside a draw, whose mesh or batch that would pull out from under it) every mesh, trying again after each, before it
 stops by name; no run so far has needed that. Some lists keep their bytes while their arrays move: J3D's deformed
@@ -879,12 +889,15 @@ models (Honeyhive's swaying flowers and grass) draw from vertices written into o
 instances of one model share a list, each with its own deformed arrays. Such a mesh keeps its triangles and is decoded
 again (`GxVertexPipeline::refreshMesh`: each vertex taken from the list by the mesh's origin map, keeping its slot)
 whenever its arrays move and once a frame, into an arena owned by the frame's parity (1 MB each, outside the mesh
-budget, reused from the start two frames later). An unlit mesh's vertices keep the list's order and are decoded
-straight into place; a lit one's groups gather them from a scratch kept between frames; and a command list's refreshes
-flush the cache once, with its vertices, not once each. At Honeyhive's start that is 69 refreshes a frame (6,378
-vertices, about 7 ms on Azahar's clock, mostly decoding attributes), and the vertices its moving lists sent to the
-CPU path stay on the GPU. `dev.gx_check=1` checks every
-refresh bit for bit against the mesh built anew.
+budget, reused from the start two frames later). A refresh reads the list's vertices 32 at a time, one attribute at a
+time (a `GxVertexLayout::Plan` of fetchers made for each attribute's kind, format and components) and packs them as the
+build does, writing every byte the build writes: an earlier refresh left untouched the bytes a build leaves zero (an
+unused color, a unit past the material's), so over a reused arena 3,264 of 3,312 refreshes differed from their
+rebuilds. An unlit mesh's vertices keep the list's order and are packed straight into place; a lit one's groups gather
+them; and a command list's refreshes flush the cache once, with its vertices, not once each. At Honeyhive's start
+that is 69 refreshes a frame (6,378 vertices), about 280 to 154 ARM instructions a vertex, and the vertices its moving
+lists sent to the CPU path stay on the GPU. `dev.gx_check=1` checks every refresh bit for bit against the mesh built
+anew (59,383 at Honeyhive, none differing) and every new mesh against the CPU path.
 
 **The DSP on its own core.** The Wii's DSP ran JAudio2's microcode beside the CPU, answering its mail by interrupt;
 the port ran it inside `DSPSendMailToDSP`, on the game's core, about 5 to 7 ms of a plaza frame. Now a thread on the
@@ -1012,7 +1025,10 @@ their pages as meshes do and a change over one drops it. A dropped texture is ke
 Snow Capsule's `SnowFloor` redraws a 128x128 I8 footprint texture every frame, and those pauses were 1.8 ms a frame.
 A power-of-two I8 texture also goes straight into LA8 (`tileIntensity8`, both bytes the intensity, rows from the
 bottom in 8x8 Morton tiles) instead of being decoded to RGBA and tiled: Snow Capsule's texture work went from 8.5 to
-3.5 ms a frame (its game logic, 10.6 ms a step, still holds it at 28 fps). The perf
+3.5 ms a frame (its game logic, 10.6 ms a step, still holds it at 28 fps). A texture the game samples between mip
+levels (the min filter's low bits; 624 of the disc's 7,311 model textures carry levels) gets them down to 8x8, the
+smallest the PICA samples, as one chain in level 0's PICA format with its LOD bias (`picaMipLevels`, `gxLevelOffset`):
+the 3DS's screen shrinks textures more than the Wii's did. The perf
 line counts textures kept and dropped, and how much of the free store is taken. Converting a model's textures ahead
 on core 1 was tried and taken out: 837 textures are loaded by the title (resident particles, layouts and objects) and
 the free store has about 12 MB beside the Wii arenas, so results held for later were evicted before their first draw
@@ -1042,7 +1058,9 @@ go out as immediate XF loads of what the index names when they are sent (`smgGXL
 as J3D wrote nothing over them until the frame was done. The two places that swap CPU-deformed vertices every step
 (`J3DDeformData::deform`, the fur shader) swap only when a frame has been drawn since the owner last wrote
 (`smgSwapSinceDrawn`). The frame loop then waits only before drawing, until the frame before is out (every display
-copy issued has been read: `smgWaitFramesOut`), so the render thread has a whole frame. The draw-sync callbacks (the
+copy issued has been read: `smgWaitFramesOut`), so the render thread has a whole frame. The perf line keeps the waits
+on the render thread apart: for ring room, for the frame before, and for everything sent to be drawn (a peek or a
+movie frame from any thread but the render thread's). The draw-sync callbacks (the
 star pointer's and the talk balloons' depth peeks, the lens flare's) run beside the next logic step, as the Wii's
 interrupts ran beside its logic; a scene is destroyed only after the GPU is done and every callback has run
 (`GameSystemSceneController::exeDestroyScene`), the case that crashed when one ran late. The stream grew from about 93
@@ -1139,6 +1157,34 @@ the alpha ops, which would overwrite it). Good Egg's rolling Chain Chomps, the I
 then. The disc's models went from 7,266 of 7,780 materials exact to 7,306; 14 still need more than six stages (the
 Comet Luma's body takes about eight ops of color alone). `SMG_LIST_APPROXIMATED=1` makes the audit name each one.
 
+**Alpha tests of two compares, and the water sparkle's wrap.** GX's alpha test is two compares of the alpha byte joined by
+and, or, xor or xnor; the PICA has one, and `preparePixel` kept the first (`keptAlphaCompare`). The game's water sparkle
+(the castle lake's `lambert118_v_x`; 19 materials of 18 planets: `(a <= 160) xor (a >= 40)`, source alpha blend) passes
+a < 40 or a > 160, so the port drew exactly the other bytes: a veil of white by 4 RASA T0 T1 over the 99% of the lake
+below 161, and none of the bright cores the game shows (50 to 80% of those materials' own points differed visibly; the
+audit's measure ignored the alpha test, so it said 0.0%). `splitAlphaTest` finds the bytes the test passes as at most
+two single compares that reach the ends of 0..255 (less than `below`, at least `from`), keeps one in the first pass
+(`readPasses` copies its test into the state's material) and draws the same program again for the other
+(`TevPass::Retest`: blended as the material is, under a compare of its own; the spans never overlap, so nothing blends
+twice). 17 more materials need it besides the nine below: ten clamped copies of the water, six or-tests (`lambert30_v`,
+`lambert15_v(2)`, PlanetDisk) and an and of two bounds; a test whose passing bytes have a gap inside them is left as it was.
+
+Nine of the water's copies leave the last alpha unclamped: 4 P with P = RASA T0 T1 wraps modulo 256 (GX's output is
+`(u8)` of the stage's 11-bit value, Dolphin's `Tev.cpp`; the alpha test and the blend see the wrapped byte). With P a byte
+n the alpha is 4 n mod 256, four bands of 64 levels (two for a doubled stage). `wrapPasses` (called first by `splitTev`) draws
+each band by the program of P and a ramp `4 (P - 64 band / 255)`, which is the band's alpha where n is in it, zero below and
+saturated above: the compare under the byte's limit never passes there (a saturated 255 is not under 40) and a zero
+blends nothing. Over the other limit the saturated ramp would pass, so that pass takes a step away at the band's end,
+sharpened to one level by three stages (clamp of 4 x 8 x 8 times P - (end - 1 level)): the ramp's alpha less the step in
+color, which the last stage's alpha reads from red. Six stages when P takes two (the lake's); band 0's low bytes are the
+first pass (the material with its alpha saturating and a < 40 as its test), so the lake is 8 draws instead of 1. The
+passes' programs are built, not translated (`TevPass::hasProgram`, `compilePass`), since GX can't read color into alpha.
+The recipe is a last alpha stage `s (b c)` (s of 2 or 4; b, c from APREV, TEXA, RASA, KONST; d and a zero), a constant
+color, an alpha blend of source alpha over the frame or added, and an alpha test of a prefix and a suffix. `CombinerTests`
+draws each of the 256 levels of P against the TEV (all within 2/255) and 4,000 random inputs (2 to 5 off, within a level
+of a band's end); with every stage held to bytes the lake's own triangles come out 0.2% off visibly with rounding, 1.1%
+truncating (Citra's integer ops), against 51 to 82% before.
+
 **What the approximated materials really are.** A material's audit reason is only its first, which can hide the real
 fault. Measured against the TEV model on random byte inputs and on each model's own triangles (the interpolated vertex
 color as the rasterized color, texels at the interpolated UVs; `SMG_MEASURE_APPROXIMATED=1` makes the audit do it, with
@@ -1199,12 +1245,16 @@ use; each clock read costs Azahar 150 cycles, so it slows what it measures, by u
 vertices of refused lists by reason (the perf line names new draw states whose TEV program is approximated, by reason,
 without it); `dev.gx_check=1` checks each new mesh against the CPU path; `dev.gx_zones=1` shares the render thread's time out by
 what it was doing (above); `dev.gx_inline=1` draws on the game's thread
-instead of the render thread; `dev.start=GALAXY N` starts that galaxy at its start point N (StartInfo's `MarioNo`), to
-reach a stage's later parts without walking there; it also stops the story's queued demos there, as `dev.galaxy` does
+instead of the render thread; `dev.start=GALAXY N [ZONE]` starts that galaxy at its start point N (StartInfo's `MarioNo`; the
+named zone's, if one follows, such as Tarantox's arena, `StarDustGalaxy 100 PhantomBossSpiderZone`), to reach a stage's
+later parts without walking there; it also stops the story's queued demos there, as `dev.galaxy` does
 (a new file's opening would otherwise meet the garden's start point 1, the after-the-attack spawn, and the attack movie
 queued on landing would freeze the opening's arrival cutscene and be frozen by it); `dev.galaxy=GALAXY N` makes the first galaxy after the file select that
 galaxy's scenario N (`GameSequenceProgress::requestGalaxyMove`, once the story has named the stage: a new file's first
-move names it only in `moveGalaxy`, which also queues the castle's prologue, so the story is stopped there). `dev.warp=X Y Z [SECONDS]` moves Mario there (`MR::setPlayerPos`) once a run, after that much play (2 s unless given), counted only outside the file select (whose Mario is a
+move names it only in `moveGalaxy`, which also queues the castle's prologue, so the story is stopped there). A hidden
+star's N plays the scenario the star is placed in, with N as the one selected, as the scenario select chooses it
+(`ScenarioSelectScene::trySetCurrentScenarioNo`: the first normal scenario whose `PowerStarId` bits hold the star's,
+or `PlacedHiddenStarScenarioTable`'s Beach Bowl entry). `dev.warp=X Y Z [SECONDS]` moves Mario there (`MR::setPlayerPos`) once a run, after that much play (2 s unless given), counted only outside the file select (whose Mario is a
 stand-in), movies and the scenario's opening; demos count, as some are played (Bowser's attack). The heartbeat
 (every 300th frame) logs where Mario is, for planning a run's route. Azahar runs the 3DS CPU at its base 268 MHz although the port switches a New 3DS to 804
 MHz (`osSetSpeedupEnable`), so every millisecond figure here is a slow-clock one; how much faster hardware is can only
@@ -1280,6 +1330,18 @@ header, turn native as they arrive. The player preloads 20 frames, each preload'
 step read before checking how many were left, so the last callback set off a 21st read into the first frame's buffer,
 which no callback then turned native. The Wii's disc drive was usually slower than the first decode; the SD card never
 is, and the first frame's sizes were read big-endian. The step now reads only while frames are left to preload.
+
+**The top screen's 5:3.** The 3DS shows the EFB's whole 640x456 at 400x240, so a screen-space unit is square at 456 lines by
+760 columns (`smg::screen::Width`, `compat/smg/Screen.hpp`). The game's wide mode (`SCGetAspectRatio` answers 16:9) composes for
+16:9 with 832 columns, which on the Wii's analog output (the EFB spread over 686 of the line's 720 pixels) is within a few
+percent of square (832 is within 0.3% of 608 times 4/3 times 686/670, rounded to a multiple of 32); on the 3DS it left
+everything 6.25% too narrow. `tools/prepare-petari.py` swaps the constants that name the shape: `MR::getScreenWidth` (832 to 760),
+`CameraContext::getAspect` and `CameraViewInterpolator`'s near plane (16/9 to `Width / 456`), the layouts' location adjust
+(0.75 to 608/760 = 0.8, in `LayoutManager::calcAnim`, `copyLayoutDrawInfoWithAspect` and the ISBN screen), `blurTexture`'s
+vertical radius (1.333 to an EFB pixel's 760/640) and the HOME menu's adjust. Layout space is 608 columns in every mode and
+the conversions between layout, screen and EFB space already divide by `getScreenWidth`, so the pointer (normalized to the
+whole screen), the circle wipes, the safety frame (about 91% of the width, as in 16:9) and the star pointer's hit tests follow
+without edits. A movie's 640x368 picture is a 16:9 frame's, so it keeps its width and is 345 lines tall between bars of 55.
 
 **Camera animations.** An "ANDO" file of kind CANM or CKAN (`CameraAnim::loadBin`) is a 0x20-byte header, eight
 components' count, offset and (keyed) type words, then a byte count and the values, all big-endian. They turn native at
