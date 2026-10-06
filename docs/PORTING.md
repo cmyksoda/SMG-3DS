@@ -559,7 +559,13 @@ named the next heap's tree through a null pointer (`mTree` sits at 0, so the val
 the build stopped at boot in `LayoutCoreUtil::initTextBoxPane`, whose placeholder ended at index 9 of `L"XXXXXXXX"`, one
 past its end, in `main.dol` too; ending it at 8 shows the same text. `ub-scan.sh` missed the returned temporaries
 because the decomp's include dirs are SYSTEM ones, whose warnings gcc hides: it passes `-Wsystem-headers` now and flags
-both on the old headers.
+both on the old headers. Playing on, it stopped three more times. A stream's first channel asks for bus 255
+(`JASAramStream::init` sets its mix config to `0xffff`) of `setBusConnect`'s 12-entry table: Nintendo's own, since
+`main.dol` holds 0x4861 ("Ha" of a string) past the table there, an address outside the DSP's data memory that mixes
+nowhere, so it connects to 0 now. The same function's bus rows were declared `_10[1][4]` ("array size unknown") where
+six fill 0x10 to 0x40. And `MultiEmitterCallBack::followSRT` handed `isFollowSRT` an uninitialized `FlagSRT`, whose
+bools it keeps when the effect has no auto info (the file is NonMatching, so the Wii's start is unknown; false is what
+its fallbacks read).
 
 **Which zone a placed object is in.** `StageDataHolder::findPlacedStageDataHolder` told an object's zone (whose rails,
 start points and matrix it uses) by address: whether the object's row lies between the lowest of a holder's tables and
