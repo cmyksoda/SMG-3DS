@@ -239,6 +239,86 @@ void GxLighting::apply(const float view[3], const float normal[3], const std::ui
     }
 }
 
+GxMeshLayout GxMeshLayout::make(bool colorFromVertex, bool lit, bool slot, unsigned units, const Texgen* texgens) {
+    GxMeshLayout layout;
+    layout.lit = lit;
+    unsigned at = 12;
+    if (colorFromVertex) layout.color = static_cast<std::uint8_t>(at), at += 4;
+    bool normal = lit;
+    for (unsigned u = 0; u < units; ++u) {
+        Unit& unit = layout.unit[u];
+        const Texgen& t = texgens[u];
+        const bool geometry = t.source <= 1;
+        unit.source = t.source;
+        // Only a position or normal read with three inputs has a third of its own, else it is one; a slot texgen's rows read all three.
+        if (geometry && t.threeInputs) unit.input = t.source == 0 ? OfPosition : OfNormal, unit.floats = 3;
+        else if (!t.perVertexMatrix) unit.input = !geometry ? Stored : t.source == 0 ? OfPosition : OfNormal, unit.floats = 2;
+        else unit.input = Stored, unit.floats = 3;
+        normal |= unit.input == OfNormal;
+        if (unit.input == Stored) unit.at = static_cast<std::uint8_t>(at), at += 4u * unit.floats;
+    }
+    if (normal) layout.normal = static_cast<std::uint8_t>(at), at += 12;
+    if (slot) layout.slot = static_cast<std::uint8_t>(at), at += 4;
+    layout.stride = static_cast<std::uint8_t>(at);
+    return layout;
+}
+
+const char* GxMeshLayout::fieldAt(unsigned byte) const {
+    if (byte < 12) return "position";
+    if (color != Absent && byte - color < 4) return "color";
+    if (normal != Absent && byte - normal < 12) return "normal";
+    if (slot != Absent && byte - slot < 4) return "slot";
+    return "texgen inputs";
+}
+
+GxMeshPacker::GxMeshPacker(const GxMeshLayout& layout) : stride_(layout.stride) {
+    const auto add = [&](std::size_t from, unsigned to, unsigned size, bool one) {
+        copies_[count_++] = {static_cast<std::uint16_t>(from), static_cast<std::uint8_t>(to), static_cast<std::uint8_t>(size), one};
+    };
+    add(offsetof(GxVertex, position), 0, 12, false);
+    if (layout.color != GxMeshLayout::Absent) add(offsetof(GxVertex, color), layout.color, 4, false);
+    for (const GxMeshLayout::Unit& unit : layout.unit) {
+        if (unit.input != GxMeshLayout::Stored) continue;
+        const std::size_t from = unit.source == 0   ? offsetof(GxVertex, position)
+                                 : unit.source == 1 ? offsetof(GxVertex, normal)
+                                                    : offsetof(GxVertex, texcoord) + 8 * (unit.source - 5);
+        add(from, unit.at, 8, unit.floats == 3);  // two components of the source, then a one for the third
+    }
+    if (layout.normal != GxMeshLayout::Absent) add(offsetof(GxVertex, normal), layout.normal, 12, false);
+}
+
+void GxMeshPacker::pack(const GxVertex* v, std::size_t count, std::uint8_t* out) const {
+    static constexpr float One = 1;
+    for (std::size_t i = 0; i < count; ++i, ++v, out += stride_) {
+        const std::uint8_t* const from = reinterpret_cast<const std::uint8_t*>(v);
+        for (unsigned c = 0; c < count_; ++c) {
+            const Copy& copy = copies_[c];
+            if (copy.size == 12) std::memcpy(out + copy.to, from + copy.from, 12);
+            else if (copy.size == 8) std::memcpy(out + copy.to, from + copy.from, 8);
+            else std::memcpy(out + copy.to, from + copy.from, 4);
+            if (copy.one) std::memcpy(out + copy.to + 8, &One, 4);
+        }
+    }
+}
+
+GxMeshVertex gxUnpackMeshVertex(const GxMeshLayout& layout, const std::uint8_t* packed) {
+    GxMeshVertex v{};
+    std::memcpy(v.position, packed, sizeof v.position);
+    if (layout.color != GxMeshLayout::Absent) std::memcpy(v.color, packed + layout.color, 4);
+    if (layout.normal != GxMeshLayout::Absent) std::memcpy(v.normal, packed + layout.normal, sizeof v.normal);
+    for (unsigned u = 0; u < CombinerProgram::MaxUnits; ++u) {
+        const GxMeshLayout::Unit& unit = layout.unit[u];
+        if (unit.input == GxMeshLayout::Unused) continue;
+        const std::uint8_t* from = packed;
+        if (unit.input == GxMeshLayout::Stored) from += unit.at;
+        else if (unit.input == GxMeshLayout::OfNormal) from += layout.normal;
+        std::memcpy(v.source[u], from, unit.floats * 4u);
+    }
+    if (layout.slot != GxMeshLayout::Absent) std::memcpy(&v.slot, packed + layout.slot, sizeof v.slot);
+    else v.slot = layout.lit ? 4.0f : 0.0f;
+    return v;
+}
+
 void gxMeshModel(const GxMeshUniforms& u, const GxMeshVertex& v, float clip[4], float color[4], float tex[CombinerProgram::MaxUnits][2]) {
     const auto dot3 = [](const float* a, const float* b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; };
     const auto dot4 = [](const float* row, const float* xyz) { return row[0] * xyz[0] + row[1] * xyz[1] + row[2] * xyz[2] + row[3]; };
@@ -1076,7 +1156,9 @@ bool GxVertexPipeline::meshSpan(const std::uint8_t* list, std::uint32_t size, co
 unsigned GxVertexPipeline::buildMesh(const std::uint8_t* list, std::uint32_t size, GxMesh& mesh) const {
     mesh = GxMesh{};
     mesh.arraysLo = reinterpret_cast<const std::uint8_t*>(UINTPTR_MAX), mesh.arraysHi = nullptr;
-    const MeshCopy attributes = meshCopy(meshColorFromVertex());
+    mesh.layout = meshLayout();
+    const GxMeshPacker packer(mesh.layout);
+    const std::size_t stride = mesh.layout.stride;
     std::uint8_t slotTexgen[CombinerProgram::MaxUnits] = {};
     std::uint32_t at = 0;
     while (at < size) {
@@ -1091,18 +1173,20 @@ unsigned GxVertexPipeline::buildMesh(const std::uint8_t* list, std::uint32_t siz
         const GxVertexLayout& layout = gpu_->layout(op & 7);
         mesh.formats = static_cast<std::uint8_t>(mesh.formats | 1u << (op & 7));
         if (at + 3 + std::uint32_t(count) * layout.size > size) return MeshCommand;
-        const std::size_t first = mesh.vertices.size();
+        const std::size_t first = mesh.vertexCount();
         if (first + count > 0x10000) return MeshTooLarge;
+        mesh.vertices.resize((first + count) * stride);
         GxVertex v;  // attributes the format lacks stay zero for every vertex
         for (std::uint16_t i = 0; i < count; ++i) {
             layout.read(list + at + 3 + std::uint32_t(i) * layout.size, v);
             layout.indexedSpan(list + at + 3 + std::uint32_t(i) * layout.size, mesh.arraysLo, mesh.arraysHi);
-            GxMeshVertex m{};
-            meshAttributes(attributes, &v, 1, &m, nullptr);
+            std::uint8_t* packed = mesh.vertices.data() + (first + i) * stride;
+            packer.pack(&v, 1, packed);
             if (perVertexMatrix_) {
                 if (v.matrixIndex % 3 || v.matrixIndex >= 30) return MeshMatrixIndex;
                 const unsigned slot = v.matrixIndex / 3;
-                m.slot = static_cast<float>(lit_ ? slot : slot * 4);  // lit: renumbered by group below
+                const float row = static_cast<float>(lit_ ? slot : slot * 4);  // lit: renumbered by group below
+                std::memcpy(packed + mesh.layout.slot, &row, sizeof row);
                 mesh.slots = static_cast<std::uint16_t>(mesh.slots | 1u << slot);
                 for (unsigned u = 0; u < units_; ++u) {
                     if (!texgens_[u].perVertexMatrix) continue;
@@ -1111,10 +1195,7 @@ unsigned GxVertexPipeline::buildMesh(const std::uint8_t* list, std::uint32_t siz
                     if (!mode || (slotTexgen[u] && slotTexgen[u] != mode)) return MeshTexgen;
                     slotTexgen[u] = mode;
                 }
-            } else if (lit_) {
-                m.slot = 4;  // the one compact slot (the draw's fixed attribute)
             }
-            mesh.vertices.push_back(m);
         }
         const auto triangle = [&](int a, int b, int c) {
             for (int k : {a, b, c}) mesh.indices.push_back(static_cast<std::uint16_t>(first + k));
@@ -1138,15 +1219,15 @@ unsigned GxVertexPipeline::buildMesh(const std::uint8_t* list, std::uint32_t siz
     if (mesh.indices.empty()) return MeshEmpty;
     if (!lit_ || !perVertexMatrix_) {
         mesh.groups.push_back({0, static_cast<std::uint32_t>(mesh.indices.size()), {}, 0});
-        mesh.origin.resize(mesh.vertices.size());
+        mesh.origin.resize(mesh.vertexCount());
         for (std::uint32_t i = 0; i < mesh.origin.size(); ++i) mesh.origin[i] = i;
         return MeshOk;
     }
     // Lit: triangles in order, a new group whenever one would name a slot past the shader's; each group's vertices its
     // own copies, numbered by its compact slots.
-    std::vector<GxMeshVertex> vertices;
+    std::vector<std::uint8_t> vertices;
     std::vector<std::uint16_t> indices;
-    std::vector<std::int32_t> copy(mesh.vertices.size(), -1);
+    std::vector<std::int32_t> copy(mesh.vertexCount(), -1);
     std::vector<std::uint32_t> copied;
     GxMesh::Group group;
     std::memcpy(group.slotTexgen, slotTexgen, sizeof slotTexgen);
@@ -1155,7 +1236,9 @@ unsigned GxVertexPipeline::buildMesh(const std::uint8_t* list, std::uint32_t siz
     for (std::size_t t = 0; t < mesh.indices.size(); t += 3) {
         std::uint8_t slots[3], fresh = 0;
         for (int k = 0; k < 3; ++k) {
-            slots[k] = static_cast<std::uint8_t>(mesh.vertices[mesh.indices[t + k]].slot);
+            float row;
+            std::memcpy(&row, mesh.vertices.data() + mesh.indices[t + k] * stride + mesh.layout.slot, sizeof row);
+            slots[k] = static_cast<std::uint8_t>(row);
             bool known = std::find(group.slotMap, group.slotMap + group.slotCount, slots[k]) != group.slotMap + group.slotCount;
             for (int j = 0; j < k; ++j) known |= slots[j] == slots[k];
             fresh = static_cast<std::uint8_t>(fresh + !known);
@@ -1171,14 +1254,16 @@ unsigned GxVertexPipeline::buildMesh(const std::uint8_t* list, std::uint32_t siz
         for (int k = 0; k < 3; ++k) {
             const std::uint16_t source = mesh.indices[t + k];
             if (copy[source] < 0) {
-                if (vertices.size() == 0x10000) return MeshTooLarge;
+                if (vertices.size() / stride == 0x10000) return MeshTooLarge;
                 unsigned slot = 0;
                 while (slot < group.slotCount && group.slotMap[slot] != slots[k]) ++slot;
                 if (slot == group.slotCount) group.slotMap[group.slotCount++] = slots[k];
-                copy[source] = static_cast<std::int32_t>(vertices.size()), copied.push_back(source);
-                vertices.push_back(mesh.vertices[source]);
+                copy[source] = static_cast<std::int32_t>(vertices.size() / stride), copied.push_back(source);
+                const std::uint8_t* from = mesh.vertices.data() + source * stride;
+                vertices.insert(vertices.end(), from, from + stride);
                 mesh.origin.push_back(source);
-                vertices.back().slot = static_cast<float>(4 + slot * group.slotRows);
+                const float row = static_cast<float>(4 + slot * group.slotRows);
+                std::memcpy(vertices.data() + vertices.size() - stride + mesh.layout.slot, &row, sizeof row);
             }
             indices.push_back(static_cast<std::uint16_t>(copy[source]));
         }
@@ -1189,60 +1274,32 @@ unsigned GxVertexPipeline::buildMesh(const std::uint8_t* list, std::uint32_t siz
     return MeshOk;
 }
 
-GxVertexPipeline::MeshCopy GxVertexPipeline::meshCopy(bool fromVertex) const {
-    MeshCopy copy;
-    copy.fromVertex = fromVertex, copy.units = units_;
-    for (unsigned u = 0; u < units_; ++u) copy.input[u] = texgens_[u].input, copy.wide[u] = texgens_[u].threeInputs && texgens_[u].source <= 1;
-    return copy;
-}
-
-// `count` vertices into as many GxMeshVertex, each field written (a refresh may land on memory that holds anything);
-// the slot only when `slots` is given, from the one in the same place there.
-void GxVertexPipeline::meshAttributes(const MeshCopy& copy, const GxVertex* v, std::size_t count, GxMeshVertex* m, const GxMeshVertex* slots) {
-    using Copy = void (*)(MeshCopy, const GxVertex*, std::size_t, GxMeshVertex*, const GxMeshVertex*);
-    static constexpr Copy copies[CombinerProgram::MaxUnits + 1][2] = {{copyAttributes<0, false>, copyAttributes<0, true>}, {copyAttributes<1, false>, copyAttributes<1, true>},
-                                                                      {copyAttributes<2, false>, copyAttributes<2, true>}, {copyAttributes<3, false>, copyAttributes<3, true>}};
-    copies[copy.units][copy.fromVertex](copy, v, count, m, slots);
-}
-
-// By value, so its fields stay in registers: the compiler can't tell that the stores below miss it.
-template <unsigned Units, bool FromVertex>
-void GxVertexPipeline::copyAttributes(MeshCopy copy, const GxVertex* v, std::size_t count, GxMeshVertex* m, const GxMeshVertex* slots) {
-    for (std::size_t i = 0; i < count; ++i, ++v, ++m) {
-        std::memcpy(m->position, v->position, sizeof m->position);
-        if constexpr (FromVertex) std::memcpy(m->color, v->color[0], 4);
-        else std::memset(m->color, 0, 4);
-        const std::uint8_t* const vertex = reinterpret_cast<const std::uint8_t*>(v);
-        for (unsigned u = 0; u < Units; ++u) {
-            std::memcpy(m->source[u], vertex + copy.input[u], 8);
-            if (copy.wide[u]) std::memcpy(m->source[u] + 2, vertex + copy.input[u] + 8, 4);
-            else m->source[u][2] = 1;
-        }
-        for (unsigned u = Units; u < CombinerProgram::MaxUnits; ++u) std::memset(m->source[u], 0, sizeof m->source[u]);
-        std::memcpy(m->normal, v->normal, sizeof m->normal);
-        if (slots) m->slot = slots++->slot;
-    }
-}
-
-// The attributes meshAttributes reads.
-std::uint16_t GxVertexPipeline::meshReads(bool fromVertex) const {
-    std::uint16_t mask = GxVertexLayout::ReadPosition | GxVertexLayout::ReadNormal | (fromVertex ? GxVertexLayout::ReadColor0 : 0);
-    for (unsigned u = 0; u < units_; ++u)
-        if (texgens_[u].source >= 5) mask = static_cast<std::uint16_t>(mask | 1u << (texgens_[u].source - 1));
+namespace {
+// The attributes a packed vertex is made from.
+std::uint16_t meshReads(const GxMeshLayout& layout) {
+    std::uint16_t mask = GxVertexLayout::ReadPosition | (layout.color != GxMeshLayout::Absent ? GxVertexLayout::ReadColor0 : 0) |
+                         (layout.normal != GxMeshLayout::Absent ? GxVertexLayout::ReadNormal : 0);
+    for (const GxMeshLayout::Unit& unit : layout.unit)
+        if (unit.input == GxMeshLayout::Stored && unit.source >= 5) mask = static_cast<std::uint16_t>(mask | 1u << (unit.source - 1));
+        else if (unit.input == GxMeshLayout::Stored && unit.source == 1) mask |= GxVertexLayout::ReadNormal;
     return mask;
 }
+} // namespace
 
-bool GxVertexPipeline::refreshMesh(const std::uint8_t* list, std::uint32_t size, const std::uint32_t* origin, const GxMeshVertex* built,
-                                   GxMeshVertex* out, std::size_t count) const {
-    const bool fromVertex = meshColorFromVertex();
-    const std::uint16_t mask = meshReads(fromVertex);
-    const MeshCopy attributes = meshCopy(fromVertex);
+bool GxVertexPipeline::refreshMesh(const std::uint8_t* list, std::uint32_t size, const GxMeshLayout& packing, const std::uint32_t* origin,
+                                   const std::uint8_t* built, std::uint8_t* out, std::size_t count) const {
+    const std::uint16_t mask = meshReads(packing);
+    const GxMeshPacker packer(packing);
+    const std::size_t stride = packing.stride;
     // An unlit mesh keeps its list's vertices in order, decoded straight into place; a lit one's groups copy them in
     // triangle order, gathered from a scratch kept between refreshes (moving meshes refresh every frame).
     std::size_t ordered = 0;
     while (ordered < count && origin[ordered] == ordered) ++ordered;
     const bool inOrder = ordered == count;
-    thread_local std::vector<GxMeshVertex> fresh;
+    thread_local std::vector<std::uint8_t> fresh;
+    const auto keepSlot = [&](std::size_t i) {
+        if (packing.slot != GxMeshLayout::Absent) std::memcpy(out + i * stride + packing.slot, built + i * stride + packing.slot, sizeof(float));
+    };
     // Primitives run a few vertices, so vertices are decoded RefreshChunk at a time, from wherever each starts, in the
     // format of the primitive that began the chunk.
     constexpr unsigned RefreshChunk = 32;
@@ -1266,10 +1323,12 @@ bool GxVertexPipeline::refreshMesh(const std::uint8_t* list, std::uint32_t size,
     std::size_t decoded = 0;
     const auto flush = [&] {
         if (!filled) return;
-        if (!inOrder && fresh.size() < decoded + filled) fresh.resize(decoded + filled);
-        GxMeshVertex* const into = inOrder ? out + decoded : fresh.data() + decoded;
+        if (!inOrder && fresh.size() < (decoded + filled) * stride) fresh.resize((decoded + filled) * stride);
+        std::uint8_t* const into = (inOrder ? out : fresh.data()) + decoded * stride;
         layouts[format]->read(vertices, chunk, filled, plan);
-        meshAttributes(attributes, chunk, filled, into, inOrder ? built + decoded : nullptr);
+        packer.pack(chunk, filled, into);
+        if (inOrder)
+            for (unsigned k = 0; k < filled; ++k) keepSlot(decoded + k);
         decoded += filled, filled = 0;
     };
     for (std::uint32_t at = 0; at < size;) {
@@ -1305,15 +1364,20 @@ bool GxVertexPipeline::refreshMesh(const std::uint8_t* list, std::uint32_t size,
     }
     flush();
     if (inOrder) return decoded >= count;
-    static_assert(offsetof(GxMeshVertex, slot) % 16 == 0 && sizeof(GxMeshVertex) == offsetof(GxMeshVertex, slot) + sizeof(float), "the gather copies all but the slot in 16 bytes at a time");
     for (std::size_t i = 0; i < count; ++i) {
         if (origin[i] >= decoded) return false;
-        const std::uint8_t* from = reinterpret_cast<const std::uint8_t*>(&fresh[origin[i]]);
-        std::uint8_t* to = reinterpret_cast<std::uint8_t*>(&out[i]);
-        for (unsigned k = 0; k < offsetof(GxMeshVertex, slot); k += 16) std::memcpy(to + k, from + k, 16);
-        out[i].slot = built[i].slot;
+        const std::uint8_t* from = fresh.data() + origin[i] * stride;
+        std::uint8_t* to = out + i * stride;
+        for (std::size_t k = 0; k < stride; k += 4) std::memcpy(to + k, from + k, 4);  // a vertex is whole words: newlib's memcpy can go a byte at a time
+        keepSlot(i);
     }
     return true;
+}
+
+GxMeshLayout GxVertexPipeline::meshLayout() const {
+    GxMeshLayout::Texgen texgens[CombinerProgram::MaxUnits] = {};
+    for (unsigned u = 0; u < units_; ++u) texgens[u] = {texgens_[u].source, texgens_[u].threeInputs, texgens_[u].perVertexMatrix};
+    return GxMeshLayout::make(meshColorFromVertex(), lit_, perVertexMatrix_, units_, texgens);
 }
 
 std::uint32_t GxVertexPipeline::meshSources() const {
@@ -1350,7 +1414,7 @@ void GxVertexPipeline::meshSlotUniforms(const GxMesh::Group& group, GxMeshUnifor
     }
 }
 
-void GxVertexPipeline::meshUniforms(std::uint16_t slots, const GxMesh::Group& group, GxMeshUniforms& out) {
+void GxVertexPipeline::meshUniforms(const GxMeshLayout& layout, std::uint16_t slots, const GxMesh::Group& group, GxMeshUniforms& out) {
     out.slots = 0;
     out.lit = lit_;
     if (lit_) {
@@ -1396,6 +1460,9 @@ void GxVertexPipeline::meshUniforms(std::uint16_t slots, const GxMesh::Group& gr
                 for (auto& row : out.texgen[u]) row[3] += row[2], row[2] = 0;
         } else {
             std::memcpy(out.texgen[u], t.fold, sizeof out.texgen[u]);
+            // The input's third is one, and the shader fills in zero for the two floats the mesh holds.
+            if (layout.unit[u].floats == 2)
+                for (auto& row : out.texgen[u]) row[3] += row[2], row[2] = 0;
         }
         const float* q = out.texgen[u][2];
         out.projective[u] = !(q[0] == 0 && q[1] == 0 && q[2] == 0 && q[3] == 1);

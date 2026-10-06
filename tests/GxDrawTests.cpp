@@ -525,14 +525,15 @@ void meshFromDisplayList() {
     check(pipeline.prepare(gpu, state, {}, 0x90, 0) && pipeline.meshEligible() == smg::GxVertexPipeline::MeshOk, "an unlit, textured state can take the GPU path");
     smg::GxMesh mesh;
     check(pipeline.buildMesh(list.bytes.data(), static_cast<std::uint32_t>(list.bytes.size()), mesh) == smg::GxVertexPipeline::MeshOk, "a list of primitives decodes");
-    check(mesh.vertices.size() == 4 && mesh.indices.size() == 6, "a quad is four vertices and two triangles");
-    check(near(mesh.vertices[2].position[0], 640) && near(mesh.vertices[2].position[1], 480), "positions stay in model space");
-    check(near(mesh.vertices[2].source[0][0], 1) && near(mesh.vertices[2].source[0][1], 1) && near(mesh.vertices[2].source[0][2], 1),
-          "each texgen's input comes along, its third component one for a texture coordinate");
+    check(mesh.vertexCount() == 4 && mesh.indices.size() == 6, "a quad is four vertices and two triangles");
+    check(near(mesh.vertex(2).position[0], 640) && near(mesh.vertex(2).position[1], 480), "positions stay in model space");
+    check(mesh.layout.stride == 20 && mesh.layout.unit[0].input == smg::GxMeshLayout::Stored && mesh.layout.unit[0].floats == 2 &&
+              near(mesh.vertex(2).source[0][0], 1) && near(mesh.vertex(2).source[0][1], 1),
+          "a texture coordinate comes along as two floats after the position, with nothing else stored");
     smg::GxMeshUniforms uniforms;
-    pipeline.meshUniforms(mesh.slots, mesh.groups[0], uniforms);
+    pipeline.meshUniforms(mesh.layout, mesh.slots, mesh.groups[0], uniforms);
     const float* m = uniforms.clip[0];
-    const float* p = mesh.vertices[0].position;
+    const float p[3] = {mesh.vertex(0).position[0], mesh.vertex(0).position[1], mesh.vertex(0).position[2]};
     float clip[4];
     for (int r = 0; r < 4; ++r) clip[r] = m[r * 4] * p[0] + m[r * 4 + 1] * p[1] + m[r * 4 + 2] * p[2] + m[r * 4 + 3];
     check(uniforms.slots == 1 && near(clip[0] / clip[3], -1) && near(clip[1] / clip[3], 1), "the draw's matrix puts the top left at (-1, 1)");
@@ -573,25 +574,31 @@ void meshRefresh() {
     smg::GxMesh mesh;
     check(pipeline.prepare(gpu, state, {}, 0x90, 0) &&
               pipeline.buildMesh(list.bytes.data(), static_cast<std::uint32_t>(list.bytes.size()), mesh) == smg::GxVertexPipeline::MeshOk &&
-              near(mesh.vertices[2].position[0], 10) && near(mesh.vertices[2].position[1], 10),
+              near(mesh.vertex(2).position[0], 10) && near(mesh.vertex(2).position[1], 10),
           "a list indexing its positions decodes from the array where it is");
     Stream moved;
     moved.cp(0xA0, 0x200);  // as J3D sets an array before each shape
     gpu.put(moved.bytes.data(), static_cast<std::uint32_t>(moved.bytes.size()));
-    std::vector<smg::GxMeshVertex> out(mesh.vertices.size());
-    const bool refreshed = pipeline.refreshMesh(list.bytes.data(), static_cast<std::uint32_t>(list.bytes.size()), mesh.origin.data(),
-                                                mesh.vertices.data(), out.data(), out.size());
-    bool same = refreshed;
-    for (std::size_t i = 0; same && i < out.size(); ++i)
-        same = near(out[i].position[0], 2 * mesh.vertices[i].position[0]) && near(out[i].position[2], 20) && out[i].slot == mesh.vertices[i].slot &&
-               near(out[i].source[0][0], mesh.vertices[i].source[0][0]);
+    const auto refreshed = [&](const std::uint32_t* origin, std::vector<std::uint8_t>& out) {
+        out.resize(mesh.vertices.size());
+        return pipeline.refreshMesh(list.bytes.data(), static_cast<std::uint32_t>(list.bytes.size()), mesh.layout, origin, mesh.vertices.data(), out.data(),
+                                    mesh.vertexCount());
+    };
+    const auto vertexOf = [&](const std::vector<std::uint8_t>& packed, std::size_t i) {
+        return smg::gxUnpackMeshVertex(mesh.layout, packed.data() + i * mesh.layout.stride);
+    };
+    std::vector<std::uint8_t> out;
+    bool same = refreshed(mesh.origin.data(), out);
+    for (std::size_t i = 0; same && i < mesh.vertexCount(); ++i)
+        same = near(vertexOf(out, i).position[0], 2 * mesh.vertex(i).position[0]) && near(vertexOf(out, i).position[2], 20) &&
+               vertexOf(out, i).slot == mesh.vertex(i).slot && near(vertexOf(out, i).source[0][0], mesh.vertex(i).source[0][0]);
     check(same, "decoded again from the moved array, each vertex takes its new position and keeps the rest");
     // A lit mesh's groups copy vertices out of order: each takes the list vertex its origin names.
     const std::vector<std::uint32_t> reversed{3, 2, 1, 0};
-    std::vector<smg::GxMeshVertex> gathered(4);
-    same = pipeline.refreshMesh(list.bytes.data(), static_cast<std::uint32_t>(list.bytes.size()), reversed.data(), mesh.vertices.data(),
-                                gathered.data(), gathered.size());
-    for (std::size_t i = 0; same && i < 4; ++i) same = near(gathered[i].position[0], out[3 - i].position[0]) && near(gathered[i].position[1], out[3 - i].position[1]);
+    std::vector<std::uint8_t> gathered;
+    same = refreshed(reversed.data(), gathered);
+    for (std::size_t i = 0; same && i < 4; ++i)
+        same = near(vertexOf(gathered, i).position[0], vertexOf(out, 3 - i).position[0]) && near(vertexOf(gathered, i).position[1], vertexOf(out, 3 - i).position[1]);
     check(same, "and out of order, each takes the list vertex its origin names");
 }
 
@@ -744,12 +751,11 @@ RefreshResult refreshAgainstRebuild(const RefreshCase& c, std::uint32_t seed) {
     if (!f.build(c, seed)) return RefreshNoMesh;
     f.moveArrays();
     smg::GxMesh rebuilt;
-    std::vector<smg::GxMeshVertex> out(f.mesh.vertices.size());
-    std::memset(out.data(), 0xA5, out.size() * sizeof(smg::GxMeshVertex));
+    std::vector<std::uint8_t> out(f.mesh.vertices.size(), 0xA5);
     bool same = f.pipeline.buildMesh(f.list.data(), f.size(), rebuilt) == smg::GxVertexPipeline::MeshOk && rebuilt.origin == f.mesh.origin;
     dirtyStack();
-    same = same && f.pipeline.refreshMesh(f.list.data(), f.size(), f.mesh.origin.data(), f.mesh.vertices.data(), out.data(), out.size()) &&
-           !std::memcmp(out.data(), rebuilt.vertices.data(), out.size() * sizeof(smg::GxMeshVertex));
+    same = same && f.pipeline.refreshMesh(f.list.data(), f.size(), f.mesh.layout, f.mesh.origin.data(), f.mesh.vertices.data(), out.data(), f.mesh.vertexCount()) &&
+           out == rebuilt.vertices;
     return same ? RefreshSame : RefreshDiffers;
 }
 
@@ -823,13 +829,13 @@ void meshRefreshMatchesRebuild() {
     RefreshFixture f;
     check(f.build(unlit, 5), "a mesh for the refusals");
     f.moveArrays();
-    const std::size_t n = f.mesh.vertices.size();
+    const std::size_t n = f.mesh.vertexCount(), stride = f.mesh.layout.stride;
     std::vector<std::uint32_t> origin(n + 1);
     for (std::size_t i = 0; i < origin.size(); ++i) origin[i] = static_cast<std::uint32_t>(i);
-    std::vector<smg::GxMeshVertex> out(n + 1);
+    std::vector<std::uint8_t> out((n + 1) * stride);
     const auto refresh = [&](std::uint32_t size, const std::uint32_t* from, std::size_t count) {
-        std::memset(out.data(), 0xA5, out.size() * sizeof out[0]);
-        return f.pipeline.refreshMesh(f.list.data(), size, from, f.mesh.vertices.data(), out.data(), count);
+        std::memset(out.data(), 0xA5, out.size());
+        return f.pipeline.refreshMesh(f.list.data(), size, f.mesh.layout, from, f.mesh.vertices.data(), out.data(), count);
     };
     check(!refresh(f.size(), origin.data(), n + 1), "a list with fewer vertices than the mesh is refused");
     check(!refresh(20, origin.data(), n), "and one cut inside a primitive");
@@ -838,7 +844,7 @@ void meshRefreshMatchesRebuild() {
     origin[1] = 1;
     smg::GxMesh rebuilt;
     check(refresh(f.size(), origin.data(), 5) && f.pipeline.buildMesh(f.list.data(), f.size(), rebuilt) == smg::GxVertexPipeline::MeshOk &&
-              !std::memcmp(out.data(), rebuilt.vertices.data(), 5 * sizeof out[0]) && out[5].color[0] == 0xA5,
+              !std::memcmp(out.data(), rebuilt.vertices.data(), 5 * stride) && out[5 * stride] == 0xA5,
           "a mesh of fewer vertices takes the list's first ones and leaves the rest of the output");
 }
 
@@ -933,10 +939,10 @@ void litMesh() {
         smg::GxMeshUniforms u;
         const bool built = pipeline.prepare(gpu, state, {}, 0x90, 0) && pipeline.meshEligible() == smg::GxVertexPipeline::MeshOk &&
                            pipeline.buildMesh(list.bytes.data(), static_cast<std::uint32_t>(list.bytes.size()), mesh) == smg::GxVertexPipeline::MeshOk;
-        bool same = built && cpu.triangles.size() == 3 && mesh.vertices.size() == 3;
-        if (same) pipeline.meshUniforms(mesh.slots, mesh.groups[0], u);
+        bool same = built && cpu.triangles.size() == 3 && mesh.vertexCount() == 3;
+        if (same) pipeline.meshUniforms(mesh.layout, mesh.slots, mesh.groups[0], u);
         for (unsigned i = 0; same && i < 3; ++i) {
-            const smg::GxMeshVertex& v = mesh.vertices[i];
+            const smg::GxMeshVertex v = mesh.vertex(i);
             float clip[4], color[4], tex[smg::CombinerProgram::MaxUnits][2];
             smg::gxMeshModel(u, v, clip, color, tex);
             const float x = clip[0];
@@ -986,11 +992,11 @@ void litMeshAmbientFromVertex() {
     smg::GxMeshUniforms u;
     const bool built = pipeline.prepare(gpu, state, {}, 0x90, 0) && pipeline.meshEligible() == smg::GxVertexPipeline::MeshOk &&
                        pipeline.buildMesh(list.bytes.data(), static_cast<std::uint32_t>(list.bytes.size()), mesh) == smg::GxVertexPipeline::MeshOk;
-    bool same = built && cpu.triangles.size() == 3 && mesh.vertices.size() == 3;
-    if (same) pipeline.meshUniforms(mesh.slots, mesh.groups[0], u);
+    bool same = built && cpu.triangles.size() == 3 && mesh.vertexCount() == 3;
+    if (same) pipeline.meshUniforms(mesh.layout, mesh.slots, mesh.groups[0], u);
     for (unsigned i = 0; same && i < 3; ++i) {
         float shaded[4];
-        shaderLighting(u, mesh.vertices[i], shaded);
+        shaderLighting(u, mesh.vertex(i), shaded);
         for (int c = 0; same && c < 4; ++c) same = std::abs(int(std::lround(shaded[c] * 255)) - int(cpu.triangles[i].color[c])) <= 2;
     }
     check(same, "a lit mesh whose ambient is its vertex color shades as the CPU path does");
@@ -1040,9 +1046,9 @@ void litMeshGroups() {
     smg::GxMeshUniforms u;
     for (std::size_t g = 0; same && g < mesh.groups.size(); ++g) {
         if (g) pipeline.meshSlotUniforms(mesh.groups[g], u);
-        else pipeline.meshUniforms(mesh.slots, mesh.groups[0], u);
+        else pipeline.meshUniforms(mesh.layout, mesh.slots, mesh.groups[0], u);
         for (std::uint32_t i = mesh.groups[g].firstIndex; same && i < mesh.groups[g].firstIndex + mesh.groups[g].indexCount; ++i) {
-            const smg::GxMeshVertex& v = mesh.vertices[mesh.indices[i]];
+            const smg::GxMeshVertex v = mesh.vertex(mesh.indices[i]);
             const unsigned k = (static_cast<unsigned>(v.slot) - 4) / 6;
             same = mesh.groups[g].slotMap[k] == slots[i];
             float clip[4], color[4], tex[smg::CombinerProgram::MaxUnits][2];
@@ -1167,9 +1173,9 @@ void litMeshSlotTexgens() {
     smg::GxMeshUniforms u;
     for (std::size_t g = 0; same && g < mesh.groups.size(); ++g) {
         if (g) pipeline.meshSlotUniforms(mesh.groups[g], u);
-        else pipeline.meshUniforms(mesh.slots, mesh.groups[0], u);
+        else pipeline.meshUniforms(mesh.layout, mesh.slots, mesh.groups[0], u);
         for (std::uint32_t i = mesh.groups[g].firstIndex; same && i < mesh.groups[g].firstIndex + mesh.groups[g].indexCount; ++i) {
-            const smg::GxMeshVertex& v = mesh.vertices[mesh.indices[i]];
+            const smg::GxMeshVertex v = mesh.vertex(mesh.indices[i]);
             same = mesh.groups[g].slotMap[(static_cast<unsigned>(v.slot) - 4) / 9] == slots[i];
             float clip[4], color[4], tex[smg::CombinerProgram::MaxUnits][2];
             smg::gxMeshModel(u, v, clip, color, tex);
@@ -1179,6 +1185,276 @@ void litMeshSlotTexgens() {
         }
     }
     check(same, "each vertex's coordinates through its slot's matrices are the CPU path's");
+}
+
+// What the shader read of a vertex before meshes were packed: every field, each texgen's input three floats (the third one
+// unless it is a position or normal taken with three inputs).
+smg::GxMeshVertex fullMeshVertex(const smg::GxVertex& v, bool color, const smg::GxMeshLayout::Texgen* texgens, unsigned units) {
+    smg::GxMeshVertex m{};
+    std::memcpy(m.position, v.position, sizeof m.position);
+    if (color) std::memcpy(m.color, v.color[0], 4);
+    for (unsigned u = 0; u < units; ++u) {
+        float* in = m.source[u];
+        if (texgens[u].source == 0) std::memcpy(in, v.position, 12);
+        else if (texgens[u].source == 1) std::memcpy(in, v.normal, 12);
+        else in[0] = v.texcoord[texgens[u].source - 5][0], in[1] = v.texcoord[texgens[u].source - 5][1], in[2] = 1;
+        if (!texgens[u].threeInputs) in[2] = 1;
+    }
+    std::memcpy(m.normal, v.normal, sizeof m.normal);
+    return m;
+}
+
+bool sameBits(const float* a, const float* b, int n) { return !std::memcmp(a, b, n * sizeof(float)); }
+
+// Every layout a mesh can have (color from the vertex or not, lit or not, per-vertex matrices or not, up to three texgens from
+// a position, normal or texcoord with two or three inputs): the packed vertex holds exactly the fields the layout names, none
+// overlapping and none past its stride, and what the shader reads of it is the full vertex's, bit for bit, the third input of a
+// texgen held as two floats made up for in the rows (the sums here are exact, so the rows' outputs match to the bit).
+void packedMeshLayouts() {
+    smg::GxVertex v;
+    const float position[3] = {1.5f, -2.25f, 3.125f}, normal[3] = {0.25f, 0.5f, -0.75f};
+    std::memcpy(v.position, position, sizeof position), std::memcpy(v.normal, normal, sizeof normal);
+    v.texcoord[0][0] = 0.375f, v.texcoord[0][1] = 0.625f, v.texcoord[3][0] = -5.5f, v.texcoord[3][1] = 7.25f;
+    const std::uint8_t color[4] = {1, 2, 3, 4};
+    std::memcpy(v.color[0], color, 4);
+    const float rows[3][4] = {{0.5f, 0.25f, 0.125f, 0.0625f}, {-0.25f, 0.5f, 0.375f, 0.1875f}, {0.125f, 0, 0.25f, 1}};
+    const auto dot4 = [](const float* row, const float* in) { return row[0] * in[0] + row[1] * in[1] + row[2] * in[2] + row[3]; };
+    std::vector<smg::GxMeshLayout::Texgen> kinds;
+    for (std::uint8_t source : {0, 1, 5, 8})
+        for (bool threeInputs : {false, true})
+            for (bool slot : {false, true}) kinds.push_back({source, threeInputs, slot});
+    unsigned layouts = 0, shortest = 255, longest = 0;
+    const std::uint8_t noColor[4] = {};
+    for (int colorFromVertex = 0; colorFromVertex < 2; ++colorFromVertex)
+        for (int lit = 0; lit < 2; ++lit)
+            for (int slot = 0; slot < 2; ++slot)
+                for (unsigned units = 0; units <= 3; ++units) {
+                    unsigned combinations = 1;
+                    for (unsigned u = 0; u < units; ++u) combinations *= static_cast<unsigned>(kinds.size());
+                    for (unsigned n = 0; n < combinations; ++n) {
+                        smg::GxMeshLayout::Texgen texgens[3] = {};
+                        bool eligible = true;
+                        for (unsigned u = 0, rest = n; u < units; ++u, rest /= kinds.size()) {
+                            texgens[u] = kinds[rest % kinds.size()];
+                            eligible &= !texgens[u].perVertexMatrix || (lit && slot);  // a mesh's matrices from the vertex need a lit, skinned one
+                        }
+                        if (!eligible) continue;
+                        ++layouts;
+                        const smg::GxMeshLayout layout = smg::GxMeshLayout::make(colorFromVertex, lit, slot, units, texgens);
+                        // The stride from the rules, worked out apart from make().
+                        unsigned bytes = 12 + 4 * colorFromVertex + 4 * slot;
+                        bool normalStored = lit;
+                        for (unsigned u = 0; u < units; ++u) {
+                            const bool geometry = texgens[u].source <= 1;
+                            if (geometry && texgens[u].threeInputs) normalStored |= texgens[u].source == 1;
+                            else if (!texgens[u].perVertexMatrix) geometry ? normalStored |= texgens[u].source == 1 : bytes += 8;
+                            else bytes += 12;
+                        }
+                        bytes += normalStored ? 12 : 0;
+                        shortest = std::min<unsigned>(shortest, layout.stride), longest = std::max<unsigned>(longest, layout.stride);
+                        std::vector<std::uint8_t> packed(layout.stride + 8, 0xA5);
+                        smg::GxMeshPacker(layout).pack(&v, 1, packed.data());
+                        const float slotRow = 12;
+                        if (layout.slot != smg::GxMeshLayout::Absent) std::memcpy(packed.data() + layout.slot, &slotRow, 4);
+                        bool guarded = true;
+                        for (unsigned g = layout.stride; g < packed.size(); ++g) guarded &= packed[g] == 0xA5;
+                        // The fields tile the stride: each byte belongs to one.
+                        std::vector<int> owners(layout.stride, 0);
+                        const auto claim = [&](unsigned at, unsigned size) {
+                            for (unsigned b = at; b < at + size; ++b)
+                                if (b < owners.size()) ++owners[b];
+                            return at + size <= layout.stride;
+                        };
+                        bool tiles = claim(0, 12);
+                        if (layout.color != smg::GxMeshLayout::Absent) tiles &= claim(layout.color, 4);
+                        for (const auto& unit : layout.unit)
+                            if (unit.input == smg::GxMeshLayout::Stored) tiles &= claim(unit.at, 4u * unit.floats);
+                        if (layout.normal != smg::GxMeshLayout::Absent) tiles &= claim(layout.normal, 12);
+                        if (layout.slot != smg::GxMeshLayout::Absent) tiles &= claim(layout.slot, 4);
+                        for (int owner : owners) tiles &= owner == 1;
+                        const smg::GxMeshVertex got = smg::gxUnpackMeshVertex(layout, packed.data());
+                        const smg::GxMeshVertex want = fullMeshVertex(v, colorFromVertex, texgens, units);
+                        bool same = sameBits(got.position, want.position, 3) && !std::memcmp(got.color, colorFromVertex ? color : noColor, 4);
+                        same &= normalStored ? sameBits(got.normal, want.normal, 3) : layout.normal == smg::GxMeshLayout::Absent;
+                        same &= got.slot == (slot ? slotRow : lit ? 4.0f : 0.0f);
+                        for (unsigned u = 0; u < 3; ++u) {
+                            const auto& unit = layout.unit[u];
+                            if (u >= units) {
+                                same &= unit.input == smg::GxMeshLayout::Unused;
+                                continue;
+                            }
+                            same &= unit.input != smg::GxMeshLayout::Unused && unit.floats >= 2 && sameBits(got.source[u], want.source[u], unit.floats);
+                            same &= unit.floats == 3 || (got.source[u][2] == 0 && want.source[u][2] == 1);
+                            // The shader's rows over what it reads match the full vertex's rows over its inputs.
+                            float folded[3][4];
+                            std::memcpy(folded, rows, sizeof folded);
+                            if (unit.floats == 2)
+                                for (auto& row : folded) row[3] += row[2], row[2] = 0;
+                            for (int r = 0; r < 3; ++r) same &= dot4(folded[r], got.source[u]) == dot4(rows[r], want.source[u]);
+                            // A two-input texgen of a slot reads all three, so it keeps them.
+                            same &= !texgens[u].perVertexMatrix || unit.floats == 3;
+                        }
+                        if (!(guarded && tiles && same && layout.stride == bytes && layout.stride % 4 == 0)) {
+                            std::printf("layout: color %d lit %d slot %d units %u combination %u stride %u want %u guarded %d tiles %d same %d\n", colorFromVertex,
+                                        lit, slot, units, n, layout.stride, bytes, guarded, tiles, same);
+                            check(false, "a layout packs what it names and the shader reads the full vertex's values");
+                        }
+                    }
+                }
+    check(layouts > 12000 && shortest == 12 && longest <= 68, "every combination of layout packs its vertex whole, bit for bit, from the bare position up");
+    smg::GxMeshLayout::Texgen texcoord = {5, false, false};
+    const smg::GxMeshLayout::Texgen both[2] = {texcoord, {1, true, false}};
+    const smg::GxMeshLayout lit = smg::GxMeshLayout::make(true, true, false, 2, both);
+    check(lit.stride == 36 && lit.unit[0].input == smg::GxMeshLayout::Stored && lit.unit[0].floats == 2 && lit.unit[1].input == smg::GxMeshLayout::OfNormal,
+          "a lit, vertex-colored model with a texture and an environment map takes 36 bytes of 68");
+    check(smg::GxMeshLayout::make(false, false, false, 1, &texcoord).stride == 20 && smg::GxMeshLayout::make(false, false, false, 0, nullptr).stride == 12,
+          "an unlit texture is 20 bytes, a bare position 12");
+    smg::GxMeshLayout::Texgen other = texcoord;
+    other.source = 6;
+    check(smg::GxMeshLayout::make(false, true, false, 1, &texcoord).sameBuffers(smg::GxMeshLayout::make(false, true, false, 1, &other)) &&
+              smg::GxMeshLayout::make(false, true, false, 1, &texcoord) != smg::GxMeshLayout::make(false, true, false, 1, &other) &&
+              !lit.sameBuffers(smg::GxMeshLayout::make(true, true, false, 1, &texcoord)),
+          "layouts alike but for the texcoord a stored input comes from share their loaders");
+    check(!std::strcmp(lit.fieldAt(0), "position") && !std::strcmp(lit.fieldAt(lit.color), "color") && !std::strcmp(lit.fieldAt(lit.unit[0].at + 4), "texgen inputs") &&
+              !std::strcmp(lit.fieldAt(lit.normal + 11), "normal"),
+          "a byte of a vertex names its field for the logs");
+}
+
+// One texgen unit of a generated mesh state: its XF source row (0 position, 1 normal, 5 texcoord 0), the input form, whether
+// its matrix comes from the vertex (a lit, skinned mesh's), and how many rows its matrix has.
+struct GeneratedUnit {
+    unsigned row;
+    bool threeInputs, slot;
+    unsigned rows;
+};
+struct GeneratedMesh {
+    bool lit, skinned;
+    unsigned colorFrom;  // 0 the register, 1 the vertex's material, 2 (lit) the vertex's ambient
+    std::vector<GeneratedUnit> units;
+};
+
+// The first way a mesh made under `c` differs from the CPU path's vertices (or null): its layout against the rules, each vertex's
+// position, color and coordinates through its group's uniforms, and a refresh of the same list giving the same bytes.
+const char* generatedMeshDiffers(const GeneratedMesh& c, smg::GxMeshLayout& layoutOut) {
+    auto owned = std::make_unique<smg::GxCommandProcessor>(host());
+    smg::GxCommandProcessor& gpu = *owned;
+    Stream s;
+    clearState(s);
+    const unsigned units = static_cast<unsigned>(c.units.size()), stages = std::max(units, 1u), channels = c.lit || c.colorFrom ? 1 : 0;
+    unsigned vcd = 1 << 9 | 1 << 11 | 1 << 13 | (c.skinned ? 1 : 0);
+    for (unsigned u = 0; u < units; ++u) vcd |= (c.units[u].slot ? 1u : 0u) << (1 + u);
+    s.cp(0x50, vcd), s.cp(0x60, 1), s.cp(0x70, 1 | 4 << 1 | 4 << 10 | 1 << 13 | 5 << 14 | 1 << 21 | 4 << 22);
+    for (unsigned slot = 0; slot < 10; ++slot) {
+        const float x = 40.0f * slot, cs = std::cos(0.3f * slot), sn = std::sin(0.3f * slot);
+        s.xff(slot * 12, {cs, -sn, 0, x, sn, cs, 0, 10, 0, 0, 1, 0});
+        s.xff(0x400 + slot * 9, {cs, -sn, 0, sn, cs, 0, 0, 0, 1});
+    }
+    std::uint32_t matrices = 0;
+    for (unsigned u = 0; u < units; ++u) {
+        matrices |= (60 + 3 * u) << (6 + 6 * u);
+        s.xff((60 + 3 * u) * 4, {0.5f, 0.25f, 0.125f + 0.0625f * u, 0.0625f, -0.25f, 0.5f, 0.375f, 0.1875f, 0.125f, 0, 0.25f, 1});
+        s.xf(0x1040 + u, {(c.units[u].rows == 3 ? 1u << 1 : 0u) | (c.units[u].threeInputs ? 1u << 2 : 0u) | c.units[u].row << 7});
+    }
+    s.xf(0x1018, {matrices}), s.xf(0x1009, {channels}), s.xf(0x103F, {units}), s.xf(0x1012, {0});
+    s.bp(units | channels << 4 | (stages - 1) << 10);
+    // Two stages share each order register: map and coord k with its texture on, else no texture; no channel without lighting or color.
+    const auto place = [&](unsigned k) -> std::uint32_t {
+        if (k >= stages) return 0;
+        return (k < units ? (k | k << 3 | 1u << 6) : 0u) | (channels ? 0u : 7u) << 7;
+    };
+    for (unsigned pair = 0; pair < (stages + 1) / 2; ++pair) s.bp((0x28u + pair) << 24 | place(2 * pair + 1) << 12 | place(2 * pair));
+    for (unsigned k = 0; k < stages; ++k) {
+        s.bp(0xC0000000u + 2 * k * 0x01000000u + (k < units ? 0x08FFF8u : 0x08FFFAu)), s.bp(0xC1000000u + 2 * k * 0x01000000u + 0x08FFD0u);
+        if (k < 3) s.bp(0x88600C03 + k * 0x01000000u), s.bp(0x94000080 + k * 0x01000000u), s.bp(0x80000030 + k * 0x01000000u);
+    }
+    s.xf(0x100C, {0xFFFFFFFF}), s.xf(0x100A, {0x10203040});
+    const std::uint32_t light = c.lit ? 1 << 1 | 1 << 2 | 2 << 7 : 0;
+    s.xf(0x100E, {light | (c.colorFrom == 1 ? 1u : 0u) | (c.colorFrom == 2 ? 1u << 6 : 0u)}), s.xf(0x1010, {light});
+    s.xf(0x600 + 3, {0x80604020});
+    s.xff(0x600 + 4, {1, 0, 0, 1, 0, 0, 300, 100, 200, 0, 0, 0});
+    gpu.put(s.bytes.data(), static_cast<std::uint32_t>(s.bytes.size()));
+    Stream list;
+    list.u8(0x90), list.u16(6);
+    for (unsigned i = 0; i < 6; ++i) {
+        const unsigned slot = i % 4;
+        if (c.skinned) list.u8(slot * 3);
+        for (const GeneratedUnit& u : c.units)
+            if (u.slot) list.u8(slot * 3);
+        for (float f : {100.0f + 37 * i, 80.0f + 23 * (i % 5), -0.5f, 0.0f, 0.6f, 0.8f}) list.f32(f);
+        for (int k = 0; k < 4; ++k) list.u8(0x20 + 0x13 * i + 7 * k);
+        list.f32(0.125f * i), list.f32(0.5f - 0.0625f * i);
+    }
+    while (list.bytes.size() % 32) list.u8(0);
+    smg::GxDraw cpu;
+    smg::buildGxDraw(gpu, 0x90, 0, 6, list.bytes.data() + 3, {}, cpu);
+    smg::GxDrawState state;
+    smg::readGxDrawState(gpu, state);
+    smg::GxVertexPipeline pipeline;
+    smg::GxMesh mesh;
+    if (!pipeline.prepare(gpu, state, {}, 0x90, 0) || pipeline.meshEligible() != smg::GxVertexPipeline::MeshOk) return "the state is not a mesh's";
+    if (pipeline.buildMesh(list.bytes.data(), static_cast<std::uint32_t>(list.bytes.size()), mesh) != smg::GxVertexPipeline::MeshOk) return "the list does not build";
+    layoutOut = mesh.layout;
+    if (cpu.triangles.size() != 6 || mesh.vertexCount() < 6 || state.program.unitCount != units) return "the CPU path or the program is not as set";
+    if (mesh.layout != pipeline.meshLayout()) return "the mesh's layout is not the state's";
+    std::vector<smg::GxMeshLayout::Texgen> texgens;
+    for (const GeneratedUnit& u : c.units) texgens.push_back({static_cast<std::uint8_t>(u.row), u.threeInputs, u.slot});
+    if (mesh.layout != smg::GxMeshLayout::make(c.colorFrom != 0, c.lit, c.skinned, units, texgens.data())) return "the layout is not the rules'";
+    smg::GxMeshUniforms u;
+    const auto off = [](float got, float want) { return std::fabs(got - want) > 1e-3f * std::max(1.0f, std::fabs(want)); };
+    for (std::size_t g = 0; g < mesh.groups.size(); ++g) {
+        if (g) pipeline.meshSlotUniforms(mesh.groups[g], u);
+        else pipeline.meshUniforms(mesh.layout, mesh.slots, mesh.groups[0], u);
+        for (std::uint32_t i = mesh.groups[g].firstIndex; i < mesh.groups[g].firstIndex + mesh.groups[g].indexCount; ++i) {
+            float clip[4], color[4], tex[smg::CombinerProgram::MaxUnits][2];
+            smg::gxMeshModel(u, mesh.vertex(mesh.indices[i]), clip, color, tex);
+            const smg::GxDrawVertex& want = cpu.triangles[i];
+            for (int r = 0; r < 4; ++r)
+                if (std::fabs(clip[r] - want.position[r]) > 1e-3f * std::max({1.0f, std::fabs(want.position[3]), std::fabs(want.position[r])})) return "a position";
+            for (int k = 0; k < 4; ++k)
+                if (std::abs(int(std::lround(color[k] * 255)) - int(want.color[k])) > 2) return "a color";
+            for (unsigned t = 0; t < units; ++t)
+                if (off(tex[t][0], want.texcoord[t][0]) || off(tex[t][1], want.texcoord[t][1])) return "a texture coordinate";
+        }
+    }
+    std::vector<std::uint8_t> again(mesh.vertices.size());
+    if (!pipeline.refreshMesh(list.bytes.data(), static_cast<std::uint32_t>(list.bytes.size()), mesh.layout, mesh.origin.data(), mesh.vertices.data(), again.data(),
+                              mesh.vertexCount()) ||
+        again != mesh.vertices)
+        return "a refresh of the same list";
+    return nullptr;
+}
+
+// Meshes under generated states, every lighting and color source, skinned or not, and up to three texgens of each kind: laid out
+// by the rules, they put every vertex where the CPU path does, with its color and coordinates, and refresh to the same bytes.
+void packedMeshesMatchTheCpuPath() {
+    const GeneratedUnit kinds[] = {{0, true, false, 3}, {0, false, false, 2}, {1, true, false, 2}, {1, false, false, 2}, {5, false, false, 2},
+                                   {5, true, false, 3}, {0, true, true, 3}, {1, true, true, 2}, {1, false, true, 2}, {5, false, true, 2}};
+    unsigned cases = 0, fits = 0;
+    const char* why = nullptr;
+    for (int lit = 0; lit < 2 && !why; ++lit)
+        for (int skinned = 0; skinned < 2 && !why; ++skinned)
+            for (unsigned colorFrom = 0; colorFrom < 3 && !why; ++colorFrom) {
+                if (colorFrom == 2 && !lit) continue;
+                for (unsigned count = 0; count <= 3 && !why; ++count) {
+                    unsigned combinations = 1;
+                    for (unsigned k = 0; k < count; ++k) combinations *= 10;
+                    for (unsigned n = 0; n < combinations && !why; ++n) {
+                        GeneratedMesh c{bool(lit), bool(skinned), colorFrom, {}};
+                        bool eligible = true;
+                        for (unsigned k = 0, rest = n; k < count; ++k, rest /= 10) {
+                            c.units.push_back(kinds[rest % 10]);
+                            eligible &= !c.units.back().slot || (lit && skinned);
+                        }
+                        if (!eligible || (count == 3 && n % 7)) continue;  // all of one and two units, a seventh of three
+                        smg::GxMeshLayout layout;
+                        why = generatedMeshDiffers(c, layout);
+                        ++cases, fits += layout.stride <= 68;
+                        if (why) std::printf("generated mesh: lit %d skinned %d color %u units %u combination %u: %s\n", lit, skinned, colorFrom, count, n, why);
+                    }
+                }
+            }
+    check(!why, "a mesh under every generated state matches the CPU path, packed, and refreshes to the same bytes");
+    check(cases > 300 && fits == cases, "and none of them takes more than GxMeshVertex's 68 bytes");
 }
 } // namespace
 
@@ -1299,6 +1575,8 @@ int runGxDrawTests() {
     litMeshGroups();
     litMeshAmbientFromVertex();
     litMeshSlotTexgens();
+    packedMeshLayouts();
+    packedMeshesMatchTheCpuPath();
     linesAndPoints();
     meshRefresh();
     meshRefreshMatchesRebuild();

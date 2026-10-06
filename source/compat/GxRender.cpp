@@ -209,6 +209,8 @@ struct Renderer {
         bool moving = false;
         u32 refreshedFrame = ~0u;
         std::vector<std::uint32_t> origin;
+        GxMeshLayout layout;
+        int loaders = 0;  // its place in meshLoaders
         u32 vertexCount = 0, indexCount = 0;
         u32 vertexPhysical = 0, indexPhysical = 0;
         std::uint16_t slots = 0;
@@ -362,9 +364,8 @@ struct Renderer {
         C3D_Tex* bound[CombinerProgram::MaxUnits] = {};
         C3D_Tex boundWas[CombinerProgram::MaxUnits] = {};
         C3D_FVec fixedWas[7] = {};
-        int meshLayout = -1;  // the mesh attribute loaders citro3d holds (meshLayoutOf), -1 none
-        u64 meshPermutation = 0;
-        int meshComponents = 0;
+        int meshLayout = -1;  // the mesh loaders citro3d holds (meshLoaders' place), -1 none
+        bool aliasBuffers = true;  // the GPU may hold buffers past the first (a mesh's texgen reading the vertex's bytes again)
     } sent;
     void forgetSent() { sent = Sent{}, pend(PendingList); }
     // Whether citro3d holds state of ours not yet sent (one of its setters since its last draw): then a draw goes through
@@ -385,6 +386,53 @@ struct Renderer {
     u32 unitsChanged = 0, fixedChanged = 0;
     u32 unitsBound = 0;     // texture units citro3d has a texture for: it never unbinds one
     C3D_AttrInfo meshAttributes;
+    // A mesh layout's loaders: the shader's seven inputs in a fixed order (position, color, three texgen inputs, normal, slot),
+    // each read from a buffer or fixed (sendFixed numbers them so). Buffer 0 is the vertices; each texgen input that is the
+    // position's or the normal's bytes read again is a buffer of its own at that field.
+    static constexpr int MaxMeshBuffers = 1 + CombinerProgram::MaxUnits;
+    struct MeshLoaders {
+        GxMeshLayout layout;
+        C3D_AttrInfo attributes;
+        struct Buffer {
+            u64 permutation;
+            u32 offset;
+            int components;
+        } buffers[MaxMeshBuffers];
+        int bufferCount;
+    };
+    std::vector<MeshLoaders> meshLoaders;
+    int loadersFor(const GxMeshLayout& layout) {
+        for (std::size_t i = 0; i < meshLoaders.size(); ++i)
+            if (meshLoaders[i].layout.sameBuffers(layout)) return static_cast<int>(i);
+        MeshLoaders m = {};
+        m.layout = layout;
+        C3D_AttrInfo* attributes = &m.attributes;
+        AttrInfo_Init(attributes);
+        MeshLoaders::Buffer& vertices = m.buffers[m.bufferCount++];
+        const auto load = [&](int reg, GPU_FORMATS format, int count) {
+            vertices.permutation |= u64(AttrInfo_AddLoader(attributes, reg, format, count)) << (4 * vertices.components++);
+        };
+        load(0, GPU_FLOAT, 3);
+        if (layout.color != GxMeshLayout::Absent) load(1, GPU_UNSIGNED_BYTE, 4);
+        else AttrInfo_AddFixed(attributes, 1);
+        for (int unit = 0; unit < 3; ++unit) {
+            const GxMeshLayout::Unit& input = layout.unit[unit];
+            if (input.input == GxMeshLayout::Unused) AttrInfo_AddFixed(attributes, 2 + unit);
+            else if (input.input == GxMeshLayout::Stored) load(2 + unit, GPU_FLOAT, input.floats);
+            else m.buffers[m.bufferCount++] = {u64(AttrInfo_AddLoader(attributes, 2 + unit, GPU_FLOAT, input.floats)),
+                                               input.input == GxMeshLayout::OfPosition ? 0u : layout.normal, 1};
+        }
+        if (layout.lit) {
+            load(6, GPU_FLOAT, 3);
+        } else {
+            AttrInfo_AddFixed(attributes, 6);
+            if (layout.normal != GxMeshLayout::Absent) vertices.permutation |= u64(0xE) << (4 * vertices.components++);  // skips the 12 bytes
+        }
+        if (layout.slot != GxMeshLayout::Absent) load(5, GPU_FLOAT, 1);
+        else AttrInfo_AddFixed(attributes, 5);
+        meshLoaders.push_back(m);
+        return static_cast<int>(meshLoaders.size() - 1);
+    }
     // citro3d has sent everything: after one of its draws.
     void sentAll() { pending = false, pendingWhy = 0, stagesChanged = testsChanged = unitsChanged = fixedChanged = 0; }
 
@@ -491,15 +539,24 @@ struct Renderer {
         sentAll();
     }
 
-    // A group's draw as C3D_DrawElements writes it for triangles of 16-bit indices, after buffer 0 aimed at the mesh.
+    // A group's draw as C3D_DrawElements writes it for triangles of 16-bit indices, after the buffers aimed at the mesh.
     void writeMeshDraw(const CachedMesh& mesh, const GxMesh::Group& group, bool aimBuffer) {
         u32* at = gpuCmdBuf + gpuCmdBufOffset;
         if (aimBuffer) {
             constexpr u32 Base = 0x18000000;  // BufInfo_Init's, which citro3d's own binds use
-            const u32 buffer[3] = {mesh.vertexPhysical - Base, u32(sent.meshPermutation),
-                                   u32(sent.meshPermutation >> 32) | u32(sizeof(GxMeshVertex)) << 16 | u32(sent.meshComponents) << 28};
+            const MeshLoaders& loaders = meshLoaders[mesh.loaders];
+            // Buffers past the mesh's are cleared while the GPU may hold some of an earlier mesh's (citro3d's binds clear them all).
+            const int count = loaders.bufferCount > 1 || sent.aliasBuffers ? MaxMeshBuffers : 1;
+            u32 buffers[3 * MaxMeshBuffers] = {};
+            for (int b = 0; b < loaders.bufferCount; ++b) {
+                const MeshLoaders::Buffer& buffer = loaders.buffers[b];
+                buffers[3 * b] = mesh.vertexPhysical + buffer.offset - Base;
+                buffers[3 * b + 1] = u32(buffer.permutation);
+                buffers[3 * b + 2] = u32(buffer.permutation >> 32) | u32(mesh.layout.stride) << 16 | u32(buffer.components) << 28;
+            }
+            sent.aliasBuffers = loaders.bufferCount > 1;
             at = putCommand(at, 0x000F0000 | GPUREG_ATTRIBBUFFERS_LOC, Base >> 3);
-            at = putCommand(at, 0x800F0000 | GPUREG_ATTRIBBUFFER0_OFFSET, buffer, 3);
+            at = putCommand(at, 0x800F0000 | GPUREG_ATTRIBBUFFER0_OFFSET, buffers, 3 * count);
         }
         const u32 indices = mesh.indexPhysical + group.firstIndex * 2 - 0x18000000;
         at = putCommand(at, 0x00020000 | GPUREG_PRIMITIVE_CONFIG, 0x300);
@@ -1292,9 +1349,8 @@ struct Renderer {
                          e, l[0][0], l[0][1], l[0][2], l[0][3], l[1][0] * l[4][1], l[1][1] * l[4][1], l[1][2] * l[4][1], l[2][0],
                          l[2][1], l[2][2], l[5][0], l[5][1]);
         }
-        const auto* vertices = static_cast<const GxMeshVertex*>(mesh.vertices);
         for (u32 i = 0; i < std::min<u32>(mesh.vertexCount, 3); ++i) {
-            const GxMeshVertex& v = vertices[i];
+            const GxMeshVertex v = gxUnpackMeshVertex(mesh.layout, static_cast<const std::uint8_t*>(mesh.vertices) + i * mesh.layout.stride);
             float clip[4], color[4], tex[CombinerProgram::MaxUnits][2];
             gxMeshModel(u, v, clip, color, tex);
             const unsigned slot = (unsigned(v.slot) - 4) / u.slotRows;
@@ -1310,7 +1366,7 @@ struct Renderer {
     static constexpr std::size_t MeshBudget = 12u << 20, MeshReserve = 8u << 20;
 
     void dropMesh(std::unordered_map<std::uint64_t, CachedMesh>::iterator it) {
-        meshBytes -= it->second.vertexCount * sizeof(GxMeshVertex) + it->second.indexCount * sizeof(std::uint16_t);
+        meshBytes -= it->second.vertexCount * it->second.layout.stride + it->second.indexCount * sizeof(std::uint16_t);
         linearFree(it->second.block);
         meshes.erase(it);
     }
@@ -1586,7 +1642,7 @@ struct Renderer {
             if (const unsigned why = pipeline.buildMesh(list, size, mesh)) return ++perf.refused[why], why;
             static const bool checking = smgDevGxCheck();
             if (checking) checkMesh(gpu, list, size, mesh, address);
-            const std::size_t vertexBytes = mesh.vertices.size() * sizeof(GxMeshVertex), bytes = vertexBytes + mesh.indices.size() * sizeof(std::uint16_t);
+            const std::size_t vertexBytes = mesh.vertices.size(), bytes = vertexBytes + mesh.indices.size() * sizeof(std::uint16_t);
             if (!makeRoom(bytes)) {
                 if (budgetRefused.size() > 1024) budgetRefused.clear();
                 budgetRefused[hash] = bytes;
@@ -1611,7 +1667,8 @@ struct Renderer {
             for (unsigned a = 0; a < 12; ++a)
                 if (arrays >> a & 1)
                     for (unsigned base : {0xA0u, 0xB0u}) cached.depends.emplace_back(std::uint8_t(base + a), gpu.cp[base + a]);
-            cached.block = cached.vertices = block, cached.vertexCount = u32(mesh.vertices.size()), cached.indexCount = u32(mesh.indices.size());
+            cached.block = cached.vertices = block, cached.vertexCount = u32(mesh.vertexCount()), cached.indexCount = u32(mesh.indices.size());
+            cached.layout = mesh.layout, cached.loaders = loadersFor(mesh.layout);
             cached.origin = std::move(mesh.origin);
             cached.vertexPhysical = osConvertVirtToPhys(block), cached.indexPhysical = osConvertVirtToPhys(static_cast<std::uint8_t*>(block) + vertexBytes);
             cached.slots = mesh.slots;
@@ -1621,7 +1678,7 @@ struct Renderer {
             cached.range[1][0] = reinterpret_cast<std::uintptr_t>(mesh.arraysLo), cached.range[1][1] = reinterpret_cast<std::uintptr_t>(mesh.arraysHi);
             if (cached.range[1][1] <= cached.range[1][0]) cached.range[1][0] = cached.range[1][1] = 0;  // all attributes direct
             for (const auto& r : cached.range) markPages(r[0], r[1]);
-            meshBytes += bytes, ++perf.meshesMade, perf.meshVerticesMade += u32(mesh.vertices.size());
+            meshBytes += bytes, ++perf.meshesMade, perf.meshVerticesMade += u32(mesh.vertexCount());
             found = meshes.find(hash);
         }
         found->second.lastFrame = framesShown;
@@ -1643,14 +1700,14 @@ struct Renderer {
     u32 refreshFrame[2] = {~0u, ~0u};
     std::uintptr_t refreshLo = UINTPTR_MAX, refreshHi = 0;  // refreshed since the last command list, flushed with it
     bool refreshMesh(CachedMesh& m, const std::uint8_t* list, std::uint32_t size) {
-        const std::size_t bytes = (m.vertexCount * sizeof(GxMeshVertex) + 15) & ~std::size_t(15);
+        const std::size_t bytes = (m.vertexCount * m.layout.stride + 15) & ~std::size_t(15);
         const unsigned k = framesShown & 1;
         if (!refreshArena[k] && !(refreshArena[k] = static_cast<std::uint8_t*>(linearAlloc(RefreshArena)))) return false;
         if (refreshFrame[k] != framesShown) refreshFrame[k] = framesShown, refreshUsed[k] = 0;
         if (refreshUsed[k] + bytes > RefreshArena) return false;
-        auto* into = reinterpret_cast<GxMeshVertex*>(refreshArena[k] + refreshUsed[k]);
+        std::uint8_t* into = refreshArena[k] + refreshUsed[k];
         refreshUsed[k] += bytes;
-        if (!pipeline.refreshMesh(list, size, m.origin.data(), static_cast<const GxMeshVertex*>(m.block), into, m.vertexCount)) return false;
+        if (!pipeline.refreshMesh(list, size, m.layout, m.origin.data(), static_cast<const std::uint8_t*>(m.block), into, m.vertexCount)) return false;
         static const bool checking = smgDevGxCheck();
         if (checking) checkRefresh(list, size, m, into);
         refreshLo = std::min(refreshLo, reinterpret_cast<std::uintptr_t>(into));
@@ -1670,21 +1727,17 @@ struct Renderer {
     }
 
     // dev.gx_check: a refresh against the mesh built anew from the list, which it must match bit for bit.
-    void checkRefresh(const std::uint8_t* list, std::uint32_t size, const CachedMesh& m, const GxMeshVertex* got) {
+    void checkRefresh(const std::uint8_t* list, std::uint32_t size, const CachedMesh& m, const std::uint8_t* got) {
         ++perf.refreshesChecked;
         GxMesh rebuilt;
         const char* why = pipeline.buildMesh(list, size, rebuilt) ? "the list no longer builds"
-                          : rebuilt.vertices.size() != m.vertexCount || rebuilt.origin != m.origin ? "the list builds other vertices"
-                                                                                                      : nullptr;
+                          : rebuilt.vertexCount() != m.vertexCount || rebuilt.layout != m.layout || rebuilt.origin != m.origin ? "the list builds other vertices"
+                                                                                                                               : nullptr;
         std::size_t j = 0;
-        for (; !why && j < m.vertexCount; ++j) {
-            const GxMeshVertex &a = got[j], &b = rebuilt.vertices[j];
-            if (std::memcmp(a.position, b.position, sizeof a.position)) why = "position";
-            else if (std::memcmp(a.color, b.color, sizeof a.color)) why = "color";
-            else if (std::memcmp(a.source, b.source, sizeof a.source)) why = "texgen inputs";
-            else if (std::memcmp(a.normal, b.normal, sizeof a.normal)) why = "normal";
-            else if (std::memcmp(&a.slot, &b.slot, sizeof a.slot)) why = "slot";
-        }
+        const std::size_t stride = m.layout.stride;
+        for (; !why && j < m.vertexCount; ++j)
+            for (std::size_t byte = 0; !why && byte < stride; ++byte)
+                if (got[j * stride + byte] != rebuilt.vertices[j * stride + byte]) why = m.layout.fieldAt(static_cast<unsigned>(byte));
         if (!why) return;
         if (++perf.refreshesDiffering <= 4)
             std::fprintf(stderr, "gx check: a refreshed mesh (%lu vertices) differs from its rebuild: %s (vertex %zu)\n",
@@ -1696,9 +1749,9 @@ struct Renderer {
     void checkMesh(const GxCommandProcessor& gpu, const std::uint8_t* list, std::uint32_t size, const GxMesh& mesh, std::uint32_t address) {
         ++perf.meshesChecked;
         std::vector<GxMeshUniforms> uniforms(mesh.groups.size());
-        pipeline.meshUniforms(mesh.slots, mesh.groups[0], uniforms[0]);
+        pipeline.meshUniforms(mesh.layout, mesh.slots, mesh.groups[0], uniforms[0]);
         for (std::size_t g = 1; g < mesh.groups.size(); ++g) uniforms[g] = uniforms[0], pipeline.meshSlotUniforms(mesh.groups[g], uniforms[g]);
-        std::vector<u32> group(mesh.vertices.size(), 0);
+        std::vector<u32> group(mesh.vertexCount(), 0);
         for (u32 g = 0; g < mesh.groups.size(); ++g)
             for (u32 i = mesh.groups[g].firstIndex; i < mesh.groups[g].firstIndex + mesh.groups[g].indexCount; ++i) group[mesh.indices[i]] = g;
         std::vector<GxDrawVertex> cpu, drawn;
@@ -1744,12 +1797,13 @@ struct Renderer {
         }
         pipeline.prepare(gpu, *state_, frame, 0x90, 0);
         const auto off = [](float got, float want) { return std::fabs(got - want) > 1e-3f * std::max(1.0f, std::fabs(want)); };
-        for (std::size_t j = 0; j < mesh.vertices.size(); ++j) {
+        for (std::size_t j = 0; j < mesh.vertexCount(); ++j) {
             if (mesh.origin[j] >= cpu.size()) return void(std::fprintf(stderr, "gx check: a mesh vertex from past its list's\n"));
+            const GxMeshVertex vertex = mesh.vertex(j);
             const GxDrawVertex& want = cpu[mesh.origin[j]];
             const GxMeshUniforms& u = uniforms[group[j]];
             float clip[4], color[4], tex[CombinerProgram::MaxUnits][2];
-            gxMeshModel(u, mesh.vertices[j], clip, color, tex);
+            gxMeshModel(u, vertex, clip, color, tex);
             const char* what = nullptr;
             // Against w, as the screen sees it: a far mesh's rounding is large in clip units and far below a pixel.
             for (int r = 0; r < 4 && !what; ++r)
@@ -1765,12 +1819,12 @@ struct Renderer {
             std::fprintf(stderr, "gx check: mesh at 0x%08lx (%zu vertices, %zu groups, lit %d, %u light entries, %u units, slots 0x%x) vertex %zu "
                          "(list vertex %lu, group %lu of slots %u %u %u %u, slot row %.0f) differs in %s: position %.3f %.3f %.3f %.3f vs %.3f %.3f "
                          "%.3f %.3f; color %.0f %.0f %.0f %.0f vs %u %u %u %u; first texcoords %.3f %.3f vs %.3f %.3f; normal %.3f %.3f %.3f\n",
-                         static_cast<unsigned long>(address), mesh.vertices.size(), mesh.groups.size(), u.lit, u.lights, u.units, mesh.slots, j,
+                         static_cast<unsigned long>(address), mesh.vertexCount(), mesh.groups.size(), u.lit, u.lights, u.units, mesh.slots, j,
                          static_cast<unsigned long>(mesh.origin[j]), static_cast<unsigned long>(group[j]), in.slotMap[0], in.slotMap[1], in.slotMap[2],
-                         in.slotMap[3], mesh.vertices[j].slot, what, clip[0], clip[1], clip[2], clip[3], want.position[0], want.position[1],
+                         in.slotMap[3], vertex.slot, what, clip[0], clip[1], clip[2], clip[3], want.position[0], want.position[1],
                          want.position[2], want.position[3], color[0] * 255, color[1] * 255, color[2] * 255, color[3] * 255, want.color[0], want.color[1],
-                         want.color[2], want.color[3], tex[0][0], tex[0][1], want.texcoord[0][0], want.texcoord[0][1], mesh.vertices[j].normal[0],
-                         mesh.vertices[j].normal[1], mesh.vertices[j].normal[2]);
+                         want.color[2], want.color[3], tex[0][0], tex[0][1], want.texcoord[0][0], want.texcoord[0][1], vertex.normal[0],
+                         vertex.normal[1], vertex.normal[2]);
             return;
         }
     }
@@ -1785,7 +1839,7 @@ struct Renderer {
         const GxZoneScope zone(ZoneUniforms);
         const u64 uniforms = stepStart();
         GxMeshUniforms u;
-        pipeline.meshUniforms(mesh.slots, mesh.groups[0], u);
+        pipeline.meshUniforms(mesh.layout, mesh.slots, mesh.groups[0], u);
         if (dumping) dumpMesh(mesh, u);
         if (u.reject == 3) return;  // GX culls every triangle
         slotUniforms(u);
@@ -1820,42 +1874,25 @@ struct Renderer {
         stepEnd(9, uniforms);
         gxZone = ZoneMeshDraw;
         const u64 drawing = stepStart();
-        // GxMeshVertex: position (v0), color (v1), three texgen inputs (v2-v4), normal (v6), slot (v5). What a draw doesn't
-        // take from the vertices is a fixed attribute, and the bytes it skips are padding (0xC is four bytes, 0xE twelve).
-        // The loaders depend only on which of those the mesh has, so consecutive meshes alike keep citro3d's.
-        const int layout = int(u.fixedColor) | int(u.units) << 1 | int(u.lit) << 3 | int(mesh.slots != 0) << 4;
-        if (sent.meshLayout != layout) {
-            C3D_AttrInfo* attributes = C3D_GetAttrInfo();
-            AttrInfo_Init(attributes);
-            u64 permutation = 0;
-            int components = 0;
-            const auto loader = [&](int reg, GPU_FORMATS format, int count) {
-                permutation |= u64(AttrInfo_AddLoader(attributes, reg, format, count)) << (4 * components++);
-            };
-            const auto pad = [&](unsigned code) { permutation |= u64(code) << (4 * components++); };
-            loader(0, GPU_FLOAT, 3);
-            if (u.fixedColor) pad(0xC), AttrInfo_AddFixed(attributes, 1);
-            else loader(1, GPU_UNSIGNED_BYTE, 4);
-            for (unsigned unit = 0; unit < 3; ++unit) {
-                if (unit < u.units) loader(2 + int(unit), GPU_FLOAT, 3);
-                else pad(0xE), AttrInfo_AddFixed(attributes, 2 + int(unit));
-            }
-            if (u.lit) loader(6, GPU_FLOAT, 3);
-            else pad(0xE), AttrInfo_AddFixed(attributes, 6);
-            if (mesh.slots) loader(5, GPU_FLOAT, 1);
-            else AttrInfo_AddFixed(attributes, 5);
-            sent.meshLayout = layout, sent.meshPermutation = permutation, sent.meshComponents = components, pend(PendingMeshLayout);
-            meshAttributes = *attributes;
+        // The vertex shader's inputs are position (v0), color (v1), three texgen inputs (v2-v4), normal (v6) and slot (v5); what
+        // the mesh doesn't store is a fixed attribute. The loaders depend only on the layout, so consecutive meshes alike keep citro3d's.
+        MeshLoaders& loaders = meshLoaders[mesh.loaders];
+        if (sent.meshLayout != mesh.loaders) {
+            C3D_SetAttrInfo(&loaders.attributes);
+            sent.meshLayout = mesh.loaders, pend(PendingMeshLayout);
+            meshAttributes = loaders.attributes;
         }
         // A fixed value goes to its attribute's place among the seven (color 1, texgen inputs 2-4, normal 5, slot 6), which
         // citro3d numbers in the order they were added, not to the shader register it feeds.
-        if (u.fixedColor) sendFixed(1, u.color[0], u.color[1], u.color[2], u.color[3]);
-        for (unsigned unit = u.units; unit < 3; ++unit) sendFixed(2 + int(unit), 0, 0, 0, 1);
-        if (!u.lit) sendFixed(5, 0, 0, 0, 0);
-        if (!mesh.slots) sendFixed(6, u.lit ? 4 : 0, 0, 0, 0);  // the one slot's first row
+        const GxMeshLayout& layout = mesh.layout;
+        if (layout.color == GxMeshLayout::Absent) sendFixed(1, u.color[0], u.color[1], u.color[2], u.color[3]);
+        for (unsigned unit = 0; unit < 3; ++unit)
+            if (layout.unit[unit].input == GxMeshLayout::Unused) sendFixed(2 + int(unit), 0, 0, 0, 1);
+        if (!layout.lit) sendFixed(5, 0, 0, 0, 0);
+        if (layout.slot == GxMeshLayout::Absent) sendFixed(6, layout.lit ? 4 : 0, 0, 0, 0);  // the one slot's first row
         // GX culls in the EFB, its y down; the PICA sees the same triangles turned for the screen.
         sendCull(u.reject == 1 ? GPU_CULL_FRONT_CCW : u.reject == 2 ? GPU_CULL_BACK_CCW : GPU_CULL_NONE);
-        const auto* indices = reinterpret_cast<const std::uint16_t*>(static_cast<std::uint8_t*>(mesh.block) + mesh.vertexCount * sizeof(GxMeshVertex));
+        const auto* indices = reinterpret_cast<const std::uint16_t*>(static_cast<std::uint8_t*>(mesh.block) + mesh.vertexCount * layout.stride);
         const auto drawGroups = [&](bool again) {
             for (std::size_t g = 0; g < mesh.groups.size(); ++g) {
                 if (g || (again && mesh.groups.size() > 1)) pipeline.meshSlotUniforms(mesh.groups[g], u), slotUniforms(u);
@@ -1867,7 +1904,10 @@ struct Renderer {
                 if (viaCitro3d) {
                     C3D_BufInfo* buffers = C3D_GetBufInfo();
                     BufInfo_Init(buffers);
-                    BufInfo_Add(buffers, mesh.vertices, sizeof(GxMeshVertex), sent.meshComponents, sent.meshPermutation);
+                    for (int b = 0; b < loaders.bufferCount; ++b)
+                        BufInfo_Add(buffers, static_cast<const std::uint8_t*>(mesh.vertices) + loaders.buffers[b].offset, layout.stride, loaders.buffers[b].components,
+                                    loaders.buffers[b].permutation);
+                    sent.aliasBuffers |= loaders.bufferCount > 1;
                     C3D_DrawElements(GPU_TRIANGLES, int(mesh.groups[g].indexCount), C3D_UNSIGNED_SHORT, indices + mesh.groups[g].firstIndex);
                     for (unsigned why = 0; why <= PendingList; ++why) perf.pendingWhy[why] += pendingWhy >> why & 1;
                     sentAll(), ++perf.citroDraws;

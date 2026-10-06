@@ -117,10 +117,10 @@ struct GxLighting {
 };
 
 // The GPU path: a display list of primitives decoded once, in model space, for the PICA's vertex shader to transform
-// every time it is called. Each vertex carries what the shader reads: its position, color, each texgen's input vector
+// every time it is called. What the shader reads of each vertex is its position, color, each texgen's input vector
 // (the CPU path's `in`, its fourth component one), its normal (for lighting) and its matrix slot's first uniform row:
 // slot x 4 unlit (each slot's four clip rows); lit, 4 + its group's compact slot x 6 (modelview and normal rows, after
-// the four rows from view to clip the slots share).
+// the four rows from view to clip the slots share). GxMeshVertex holds all of that; a mesh packs only what its draws use.
 struct GxMeshVertex {
     float position[3];
     std::uint8_t color[4];
@@ -128,8 +128,61 @@ struct GxMeshVertex {
     float normal[3];
     float slot;
 };
+// How a mesh packs its vertices: the position (three floats), the color (four bytes) when it comes from the vertex, each
+// texgen input that is data of its own, the normal when lit or a texgen reads it, the slot's float for per-vertex matrices.
+// An input that is the position or the normal is those bytes read again; a two-input texgen holds two floats, its third folded.
+struct GxMeshLayout {
+    static constexpr std::uint8_t Absent = 0xFF;
+    enum Input : std::uint8_t { Unused, Stored, OfPosition, OfNormal };
+    struct Unit {
+        Input input = Unused;
+        std::uint8_t floats = 3, at = Absent, source = 0;  // at: where Stored; source: the texgen's XF source row
+    };
+    // One texgen unit as the layout needs it: its XF source row (0 position, 1 normal, 5 + n texcoord n), whether its
+    // input form has three inputs, and whether its matrix comes from the vertex.
+    struct Texgen {
+        std::uint8_t source;
+        bool threeInputs, perVertexMatrix;
+    };
+    std::uint8_t stride = 12, color = Absent, normal = Absent, slot = Absent;
+    bool lit = false;
+    Unit unit[CombinerProgram::MaxUnits];
+    static GxMeshLayout make(bool colorFromVertex, bool lit, bool slot, unsigned units, const Texgen* texgens);
+    bool operator==(const GxMeshLayout& o) const { return !std::memcmp(this, &o, sizeof *this); }
+    bool operator!=(const GxMeshLayout& o) const { return !(*this == o); }
+    // The same loaders: layouts that differ only in which texcoord a stored input comes from share their buffers.
+    bool sameBuffers(const GxMeshLayout& o) const {
+        GxMeshLayout a = *this, b = o;
+        for (Unit& u : a.unit) u.source = 0;
+        for (Unit& u : b.unit) u.source = 0;
+        return a == b;
+    }
+    // The vertex field a byte of the packed vertex belongs to, for logs.
+    const char* fieldAt(unsigned byte) const;
+};
+static_assert(sizeof(GxMeshLayout) == 5 + 3 * sizeof(GxMeshLayout::Unit), "operator== compares bytes");
+// What the shader reads of a packed vertex: an input it takes two floats of has a zero third, a field the mesh doesn't store
+// is zero, and the slot's fixed value stands where none is stored.
+GxMeshVertex gxUnpackMeshVertex(const GxMeshLayout& layout, const std::uint8_t* packed);
+// A layout's vertices made from decoded ones, each field's copy worked out once for a run of them. Every byte is written
+// but the slot's (a refresh may land on memory that holds anything), which the caller sets.
+class GxMeshPacker {
+public:
+    explicit GxMeshPacker(const GxMeshLayout& layout);
+    void pack(const GxVertex* v, std::size_t count, std::uint8_t* out) const;
+
+private:
+    struct Copy {
+        std::uint16_t from;  // where in a GxVertex
+        std::uint8_t to, size;
+        bool one;  // a float one follows the size's bytes
+    };
+    Copy copies_[2 + CombinerProgram::MaxUnits + 1];
+    unsigned count_ = 0, stride_;
+};
 struct GxMesh {
-    std::vector<GxMeshVertex> vertices;
+    GxMeshLayout layout;
+    std::vector<std::uint8_t> vertices;  // layout.stride bytes each
     std::vector<std::uint16_t> indices;  // triangles; GX's culling is left to the PICA
     std::uint16_t slots = 0;             // per-vertex matrix slots named (bit per slot)
     // Draws of its indices: lit, each names at most nine slots (the shader's rows), its compact slots' real ones.
@@ -147,6 +200,8 @@ struct GxMesh {
     const std::uint8_t* arraysLo = nullptr;  // the array elements its vertices read, [lo, hi)
     const std::uint8_t* arraysHi = nullptr;
     std::uint8_t formats = 0;  // the vertex formats its primitives use, a bit each
+    std::size_t vertexCount() const { return vertices.size() / layout.stride; }
+    GxMeshVertex vertex(std::size_t i) const { return gxUnpackMeshVertex(layout, vertices.data() + i * layout.stride); }
 };
 // What one draw of a mesh needs besides its vertices: each named slot's whole transform (model space to what the
 // PICA takes), each texgen's three rows and whether it divides by q, and the color when it isn't per vertex.
@@ -226,19 +281,22 @@ public:
                                   MeshMatrixIndex, MeshTooLarge, MeshEmpty, MeshSmall, MeshNormalize, MeshBudget, MeshMoving, MeshPasses, MeshRefusals };
     unsigned meshEligible() const;
     unsigned buildMesh(const std::uint8_t* list, std::uint32_t size, GxMesh& mesh) const;
-    // A built mesh's vertices decoded again from the list's arrays as they are now (where they moved), into `out` by its
-    // origin, each keeping its built slot: false if the list no longer gives that many vertices.
-    bool refreshMesh(const std::uint8_t* list, std::uint32_t size, const std::uint32_t* origin, const GxMeshVertex* built, GxMeshVertex* out,
-                     std::size_t count) const;
+    // A built mesh's vertices decoded again from the list's arrays as they are now (where they moved), packed as `layout`
+    // into `out` by its origin, each keeping its built slot: false if the list no longer gives that many vertices.
+    bool refreshMesh(const std::uint8_t* list, std::uint32_t size, const GxMeshLayout& layout, const std::uint32_t* origin, const std::uint8_t* built,
+                     std::uint8_t* out, std::size_t count) const;
     // The array memory a list's primitives index, [lo, hi), without decoding them: false for a list buildMesh refuses
     // as holding something other than primitives.
     bool meshSpan(const std::uint8_t* list, std::uint32_t size, const std::uint8_t*& lo, const std::uint8_t*& hi) const;
-    void meshUniforms(std::uint16_t slots, const GxMesh::Group& group, GxMeshUniforms& out);
+    // `layout` is the mesh's: a texgen input held as two floats has its third one folded into the rows.
+    void meshUniforms(const GxMeshLayout& layout, std::uint16_t slots, const GxMesh::Group& group, GxMeshUniforms& out);
     // Another group of the same mesh: only its slots' rows.
     void meshSlotUniforms(const GxMesh::Group& group, GxMeshUniforms& out);
     bool meshLit() const { return lit_; }
     // The texgens' sources as a mesh's vertices hold them (row and input form per unit), for a mesh's key.
     std::uint32_t meshSources() const;
+    // How this state's meshes pack their vertices (determined by the mesh's key and whether it has per-vertex matrices).
+    GxMeshLayout meshLayout() const;
     // Whether this state's color comes from each vertex (otherwise GxMeshUniforms' fixed color): part of a mesh's key.
     bool meshColorFromVertex() const;
     const char* unsupported = nullptr;
@@ -288,18 +346,6 @@ private:
     void vertex(const GxVertex& v, GxDrawVertex& d, const float* fixedClip);
     std::size_t triangles(GxDrawVertex* vertices, std::uint16_t count, std::uint16_t first, std::uint16_t* indices) const;
     // Lines and points from their vertices, transformed into the last `count` of maxVertices, as quads from the first.
-    // What meshAttributes copies from a vertex, made once for a run of them: the color, and each texgen's input.
-    struct MeshCopy {
-        bool fromVertex = false;
-        unsigned units = 0;
-        std::uint16_t input[CombinerProgram::MaxUnits] = {};  // where in a GxVertex, and whether all three components are read
-        bool wide[CombinerProgram::MaxUnits] = {};
-    };
-    MeshCopy meshCopy(bool fromVertex) const;
-    static void meshAttributes(const MeshCopy& copy, const GxVertex* v, std::size_t count, GxMeshVertex* m, const GxMeshVertex* slots);
-    template <unsigned Units, bool FromVertex>
-    static void copyAttributes(MeshCopy copy, const GxVertex* v, std::size_t count, GxMeshVertex* m, const GxMeshVertex* slots);
-    std::uint16_t meshReads(bool fromVertex) const;
     std::size_t widen(GxDrawVertex* vertices, std::uint16_t count, std::uint16_t first, std::uint16_t* indices);
     void texgen(const TexGen& t, const GxVertex& v, float st[2]) const;
     void texgenNormalized(const TexGen& t, const GxVertex& v, float st[2]) const;
