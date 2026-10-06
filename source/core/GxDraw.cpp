@@ -579,22 +579,28 @@ void readProgram(const GxCommandProcessor& gpu, GxDrawState& out, bool palette) 
 }
 
 // A material one pass can't draw exactly is drawn in passes when it splits, each exact, with C0 and C1 read as constants.
+// An alpha test of two compares, of which a draw keeps one, is drawn again under the other (the same program, as is).
 void readPasses(GxDrawState& out) {
     const std::uint8_t gray = grayMaps(out);
     TevPasses split;
-    if (out.program.exact || !splitTev(out.material, split, gray)) return;
+    if (out.program.exact || !splitTev(out.material, split, gray)) {
+        if (!splitAlphaTest(out.material, split)) return;
+        out.material.alphaTest = split.first.alphaTest;
+        for (const TevPass& pass : split.extra) out.passes.push_back({out.program, pass.blend, pass.reference, false, true, pass.compare});
+        return;
+    }
     const CombinerProgram first = cachedTev(split.first, false, gray);
     if (!first.exact) return;
     std::vector<GxDrawState::Pass> passes;
     for (const TevPass& pass : split.extra) {
-        const CombinerProgram& program = cachedTev(pass.material, false, gray);
+        const CombinerProgram& program = pass.hasProgram ? pass.program : cachedTev(pass.material, false, gray);
         if (!program.exact) return;
         bool same = program.unitCount <= first.unitCount;
         for (unsigned u = 0; same && u < program.unitCount; ++u)
             same = program.units[u].texture == first.units[u].texture && program.units[u].texCoord == first.units[u].texCoord;
-        passes.push_back({program, pass.blend, pass.reference, pass.writesAlpha, same});
+        passes.push_back({program, pass.blend, pass.reference, pass.writesAlpha, same, pass.compare});
     }
-    out.program = first, out.passes = std::move(passes);
+    out.program = first, out.passes = std::move(passes), out.material.alphaTest = split.first.alphaTest;
     out.color0InVertex = out.color1InTexture = false, out.paletteUnit = 0;
 }
 } // namespace

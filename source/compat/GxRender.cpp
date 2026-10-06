@@ -1986,6 +1986,11 @@ struct Renderer {
             stateEntry->passPixels.clear();
             for (const auto& pass : state_->passes) {
                 PicaPixel p = preparePixel(state_->material, pass.program);
+                if (pass.blend == TevPass::Retest) {  // blended as the material is, under a compare of its own
+                    p.alphaTest = pass.compare != 7, p.alphaFunc = testFunction(pass.compare), p.alphaReference = pass.reference;
+                    stateEntry->passPixels.push_back(p);
+                    continue;
+                }
                 p.equation = p.alphaEquation = GPU_BLEND_ADD;
                 const bool byAlpha = pass.blend == TevPass::AddTimesAlpha || pass.blend == TevPass::Over;
                 p.source = byAlpha ? GPU_SRC_ALPHA : GPU_ONE, p.destination = pass.blend == TevPass::Over ? GPU_ONE_MINUS_SRC_ALPHA : GPU_ONE;

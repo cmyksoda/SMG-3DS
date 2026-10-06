@@ -63,14 +63,15 @@ struct GxDrawState {
     // particle's other color no longer starts a draw either.
     bool color1InTexture = false;
     std::uint8_t paletteUnit = 0;
-    // Passes drawn after the program's over the same primitives (splitTev): a material one PICA pass can't hold, such
-    // as the game's water with its bright lines and more samples than units.
+    // Passes drawn after the program's over the same primitives (splitTev, splitAlphaTest): a material one PICA pass can't
+    // hold, such as the game's water with its bright lines and more samples than units, or an alpha test of two compares.
     struct Pass {
         CombinerProgram program;
         TevPass::Blend blend = TevPass::AddTimesAlpha;
         std::uint8_t reference = 0;
         bool writesAlpha = false;
         bool sameUnits = false;  // its units sample what the program's do, unit by unit: the same vertices serve it
+        std::uint8_t compare = 7;  // Retest: the GX compare of its alpha byte against reference
     };
     std::vector<Pass> passes;
     const char* unsupported = nullptr;

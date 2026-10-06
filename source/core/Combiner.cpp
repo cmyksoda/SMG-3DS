@@ -1411,9 +1411,150 @@ bool finishPasses(const ModelMaterial& m, std::uint8_t grayMaps, ModelMaterial& 
     else passColor(first.stages[last]);
     return true;
 }
+
+bool comparePasses(std::uint8_t compare, int reference, int a) {
+    switch (compare) {
+    case 0: return false;
+    case 1: return a < reference;
+    case 2: return a == reference;
+    case 3: return a <= reference;
+    case 4: return a > reference;
+    case 5: return a != reference;
+    case 6: return a >= reference;
+    default: return true;
+    }
+}
+
+// GX's alpha test of an alpha byte: two compares, joined by and, or, xor or xnor.
+bool testPasses(const ModelMaterial& m, int a) {
+    const auto& t = m.alphaTest;
+    const bool x = comparePasses(t.compare0, t.reference0, a), y = comparePasses(t.compare1, t.reference1, a);
+    return t.op == 0 ? x && y : t.op == 1 ? x || y : t.op == 2 ? x != y : x == y;
+}
+
+void keepCompare(ModelMaterial& m, AlphaCompare c) {
+    auto& t = m.alphaTest;
+    t.compare0 = c.compare, t.reference0 = c.reference, t.op = 0, t.compare1 = 7, t.reference1 = 0;
+}
+
+// The bytes the alpha test passes, when they are the first `below` and the last from `from` on: single compares reach them.
+bool alphaSpans(const ModelMaterial& m, int& below, int& from) {
+    bool passes[256];
+    for (int a = 0; a < 256; ++a) passes[a] = testPasses(m, a);
+    below = 0;
+    while (below < 256 && passes[below]) ++below;
+    from = 256;
+    while (from > below && passes[from - 1]) --from;
+    for (int a = below; a < from; ++a)
+        if (passes[a]) return false;
+    return true;
+}
+
+std::vector<AlphaCompare> spanCompares(int below, int from) {
+    if (below == 256) return {{7, 0}};
+    std::vector<AlphaCompare> out;
+    if (below > 0) out.push_back({1, static_cast<std::uint8_t>(below)});
+    if (from < 256) out.push_back({6, static_cast<std::uint8_t>(from)});
+    if (out.empty()) out.push_back({0, 0});
+    return out;
+}
+
+// The last stage's color when no input varies: constants through its op, bias, scale and clamp (unclamped it wraps).
+bool constantColor(const ModelMaterial& m, const TevStage& s, float out[3]) {
+    if (s.colorOp > 1 || s.colorBias == 3) return false;
+    const float factor = s.colorScale == 1 ? 2.0f : s.colorScale == 2 ? 4.0f : s.colorScale == 3 ? 0.5f : 1.0f;
+    for (int c = 0; c < 3; ++c) {
+        float v[4];
+        for (int k = 0; k < 4; ++k) {
+            const std::uint8_t in = s.colorIn[k];
+            if (in == ColorZero) v[k] = 0;
+            else if (in == 12) v[k] = 1;
+            else if (in == 13) v[k] = 0.5f;
+            else if (in == 14) v[k] = konst(m, s.konstColor, c);
+            else return false;
+        }
+        const float lerp = wrapByte(v[0]) * (1 - wrapByte(v[2])) + wrapByte(v[1]) * wrapByte(v[2]);
+        const float x = ((s.colorOp ? v[3] - lerp : v[3] + lerp) + (s.colorBias == 1 ? 0.5f : s.colorBias == 2 ? -0.5f : 0)) * factor;
+        out[c] = s.colorClamp ? std::clamp(x, 0.0f, 1.0f) : wrapByte(std::clamp(x, -1024 / 255.0f, 1023 / 255.0f));
+    }
+    return true;
+}
+
+// A last alpha stage that scales a product P of unit values past one, unclamped, wraps modulo 256 (the water sparkle is
+// 4 RASA T0 T1). Each band of the wrap is a pass whose ramp saturates outside it; bytes over a limit also pass there, so
+// their pass takes away a step to one level at the band's end. The first pass is the material with its alpha saturating.
+bool wrapPasses(const ModelMaterial& m, std::uint8_t grayMaps, TevPasses& out) {
+    const unsigned last = m.tevStageCount - 1u;
+    const TevStage& s = m.stages[last];
+    const bool overAlpha = m.blend.type == 1 && m.blend.source == 4 && (m.blend.destination == 1 || m.blend.destination == 5);
+    const auto unit = [&](std::uint8_t in) { return in == 4 || in == 5 || in == 6 || (in == 0 && inUnit(m, last, 1)); };
+    if (!overAlpha || s.alphaClamp || s.alphaOp || s.alphaBias || (s.alphaReg & 3) || (s.alphaScale != 1 && s.alphaScale != 2) ||
+        s.alphaIn[0] != AlphaZero || s.alphaIn[3] != AlphaZero || !unit(s.alphaIn[1]) || !unit(s.alphaIn[2]))
+        return false;
+    float rgb[3];
+    int below, from;
+    if (!constantColor(m, s, rgb) || !alphaSpans(m, below, from) || below == 0 || below == 256) return false;
+
+    // P alone, translated: its colors are constant, so every stage's are dead.
+    ModelMaterial product = m;
+    TevStage& end = product.stages[last];
+    std::fill(end.colorIn, end.colorIn + 4, ColorZero);
+    end.colorOp = end.colorBias = end.colorScale = 0, end.alphaScale = 0, end.alphaClamp = 1;
+    clearDead(product);
+    const CombinerProgram prefix = compileTev(product, false, grayMaps);
+    const unsigned at = prefix.stageCount, bands = s.alphaScale == 1 ? 2 : 4, levels = 256 / bands;
+    if (!prefix.exact || at + (from < 256 ? 4 : 1) > CombinerProgram::MaxStages) return false;
+
+    out.first = m, out.extra.clear();
+    out.first.stages[last].alphaClamp = 1;
+    keepCompare(out.first, {1, static_cast<std::uint8_t>(below)});
+    if (!compileTev(out.first, false, grayMaps).exact) return false;
+
+    using F = CombineFunc;
+    using S = CombineSource;
+    const auto ramp = [&](unsigned band) {
+        CombinerProgram p = prefix;
+        CombineStage& t = p.stages[at] = CombineStage{};
+        t.colorFunc = F::Replace, t.colorSource[0] = S::Constant;
+        t.alphaFunc = F::Subtract, t.alphaSource[1] = S::Constant, t.alphaScale = static_cast<std::uint8_t>(bands);
+        t.constant = {rgb[0], rgb[1], rgb[2], band * levels / 255.0f};
+        p.stageCount = at + 1;
+        return p;
+    };
+    const auto bounded = [&](unsigned band) {
+        CombinerProgram p = ramp(band);
+        CombineStage* t = p.stages + at;
+        const float end = ((band + 1) * levels - 1) / 255.0f;
+        t[3] = {};
+        t[0].colorFunc = F::Subtract, t[0].colorSource[0] = S::Previous, t[0].colorOperand[0] = CombineOperand::Alpha;
+        t[0].colorSource[1] = S::Constant, t[0].colorScale = 4;
+        t[0].constant = {end, end, end, band * levels / 255.0f};
+        for (int i = 1; i <= 2; ++i) {
+            t[i] = {};
+            t[i].colorFunc = F::Add, t[i].colorSource[1] = S::Previous, t[i].colorScale = 4;
+        }
+        t[3].colorFunc = F::Replace, t[3].colorSource[0] = S::Constant;
+        t[3].alphaFunc = F::Subtract, t[3].alphaOperand[1] = CombineOperand::Red;
+        t[3].constant = {rgb[0], rgb[1], rgb[2], 0};
+        p.stageCount = at + 4;
+        return p;
+    };
+    const auto add = [&](const CombinerProgram& program, std::uint8_t compare, int reference) {
+        TevPass pass;
+        pass.blend = TevPass::Retest, pass.compare = compare, pass.reference = static_cast<std::uint8_t>(reference);
+        pass.hasProgram = true, pass.program = program;
+        out.extra.push_back(std::move(pass));
+    };
+    for (unsigned band = 0; band < bands; ++band) {
+        if (band) add(ramp(band), 1, below);
+        if (from < 256) add(band + 1 < bands ? bounded(band) : ramp(band), 6, from);
+    }
+    return true;
+}
 } // namespace
 
 bool splitTev(const ModelMaterial& m, TevPasses& out, std::uint8_t grayMaps) {
+    if (m.tevStageCount && wrapPasses(m, grayMaps, out)) return true;
     const bool overAlpha = m.blend.type == 1 && m.blend.source == 4;  // GX_BM_BLEND from GX_BL_SRCALPHA
     const bool opaque = m.blend.type == 0 || (m.blend.type == 1 && m.blend.source == 1 && m.blend.destination == 0);
     if ((!overAlpha && !opaque) || !m.tevStageCount) return false;
@@ -1464,6 +1605,38 @@ bool splitTev(const ModelMaterial& m, TevPasses& out, std::uint8_t grayMaps) {
     if (out.extra.empty() || unitsRead(out.first) > CombinerProgram::MaxUnits) return false;
     for (const TevPass& pass : out.extra)
         if (unitsRead(pass.material) > CombinerProgram::MaxUnits) return false;
+    return true;
+}
+
+CombinerProgram compilePass(const TevPass& pass, std::uint8_t grayMaps) {
+    return pass.hasProgram ? pass.program : compileTev(pass.material, false, grayMaps);
+}
+
+AlphaCompare keptAlphaCompare(const ModelMaterial& m) {
+    const auto& t = m.alphaTest;
+    AlphaCompare kept{t.compare0, t.reference0};
+    if ((t.op == 0 && t.compare0 == 7) || (t.op == 1 && t.compare0 == 0)) kept = {t.compare1, t.reference1};
+    if (t.op == 1 && (t.compare0 == 7 || t.compare1 == 7)) kept.compare = 7;
+    return kept;
+}
+
+bool splitAlphaTest(const ModelMaterial& m, TevPasses& out) {
+    const auto& t = m.alphaTest;
+    if (t.op < 2 && (t.compare0 == 7 || t.compare1 == 7)) return false;  // an and or or with a side always true: one compare
+    const AlphaCompare kept = keptAlphaCompare(m);
+    bool same = true;
+    for (int a = 0; a < 256 && same; ++a) same = comparePasses(kept.compare, kept.reference, a) == testPasses(m, a);
+    int below, from;
+    if (same || !alphaSpans(m, below, from)) return false;
+    const auto pieces = spanCompares(below, from);
+    out.first = m, out.extra.clear();
+    keepCompare(out.first, pieces[0]);
+    for (std::size_t i = 1; i < pieces.size(); ++i) {
+        TevPass pass;
+        pass.material = out.first;
+        pass.blend = TevPass::Retest, pass.compare = pieces[i].compare, pass.reference = pieces[i].reference;
+        out.extra.push_back(std::move(pass));
+    }
     return true;
 }
 } // namespace smg

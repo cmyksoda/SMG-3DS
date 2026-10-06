@@ -36,4 +36,6 @@ struct PicaPixel {
     void apply() const;
 };
 PicaPixel preparePixel(const ModelMaterial& material, const CombinerProgram& program);
+// A GX compare code as the PICA's test function.
+GPU_TESTFUNC testFunction(unsigned gx);
 } // namespace smg

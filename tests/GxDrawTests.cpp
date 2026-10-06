@@ -214,6 +214,46 @@ void texturedQuad() {
     check(near(corner.texcoord[0][0], 1) && near(corner.texcoord[0][1], 1), "its coordinates come through the identity texgen");
 }
 
+// The game's water sparkle: 4 RASA T0 T1 in alpha over the frame, shown where (a <= 160) xor (a >= 40). One draw keeps one of
+// the two compares, so an alpha test of two compares is drawn as a pass for each span of bytes it passes, and an alpha that
+// wraps (the unclamped stage) as a pass for each band of the wrap besides.
+void sparkleWater() {
+    for (const bool wraps : {false, true}) {
+        auto owned = std::make_unique<smg::GxCommandProcessor>(host());
+        smg::GxCommandProcessor& gpu = *owned;
+        Stream s;
+        clearState(s);
+        s.xf(0x103F, {2}), s.xf(0x1041, {5 << 7}), s.xf(0x1018, {60 << 6 | 60 << 12}), s.xf(0x1009, {1}), s.xf(0x1010, {1});
+        s.bp(0x00000412), s.bp(0x28248240);                         // two texgens, one channel, two stages reading map 0
+        s.bp(0xC008FE8F), s.bp(0xC108F670);                         // stage 0: (0, K, TEXC, 0); (0, RASA, TEXA, 0)
+        s.bp(0xC208EFFF), s.bp(wraps ? 0xC320E270 : 0xC328E270);    // stage 1: (K, 0, 0, 0); (0, APREV, TEXA, 0) times four
+        s.bp(0xF3B328A0), s.bp(0x410004B9), s.bp(0x40000007);       // a <= 160 xor a >= 40; source alpha blend; z less or equal, kept
+        gpu.put(s.bytes.data(), static_cast<std::uint32_t>(s.bytes.size()));
+        smg::GxDrawState state;
+        smg::readGxDrawState(gpu, state);
+        bool retests = !state.passes.empty(), units = true;
+        for (const auto& pass : state.passes) {
+            retests &= pass.blend == smg::TevPass::Retest && pass.program.exact;
+            units &= pass.sameUnits;
+        }
+        const smg::GxDrawState::Pass& span = state.passes.back();
+        check(state.program.exact && state.material.alphaTest.compare0 == 1 && state.material.alphaTest.reference0 == 40 &&
+                  state.material.alphaTest.op == 0 && state.material.alphaTest.compare1 == 7 && retests && units &&
+                  state.passes.size() == (wraps ? 7u : 1u) && span.compare == 6 && span.reference == 161,
+              wraps ? "a wrapping alpha under two compares is a pass for each band's spans, the first keeping one compare"
+                    : "an alpha under two compares is two passes, the first keeping one compare and the other the second span");
+        if (wraps) check(state.passes[0].program.stageCount > state.program.stageCount, "a band's pass runs the product's stages and then its own");
+    }
+    auto owned = std::make_unique<smg::GxCommandProcessor>(host());
+    smg::GxCommandProcessor& gpu = *owned;
+    Stream s;
+    clearState(s);
+    gpu.put(s.bytes.data(), static_cast<std::uint32_t>(s.bytes.size()));
+    smg::GxDrawState state;
+    smg::readGxDrawState(gpu, state);
+    check(state.passes.empty(), "an alpha test of one compare takes no passes");
+}
+
 // A perspective projection keeps w, and GX's depth range turns into citro3d's: near -1, far 0.
 void perspective() {
     auto owned = std::make_unique<smg::GxCommandProcessor>(host());  // 80 KiB: more than a 3DS thread's stack
@@ -1561,6 +1601,7 @@ int runGxDrawTests() {
     lighting();
     layoutMaterial();
     texturedQuad();
+    sparkleWater();
     perspective();
     channels();
     pipelineAcrossPrimitives();

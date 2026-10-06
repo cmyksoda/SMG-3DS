@@ -997,6 +997,119 @@ void oceanSphereLines(std::mt19937& rng) {
     check(onLine > 10 && offLines * 2 < offPlain, "and misses less than half the points the version without lines does");
 }
 
+// The game's water sparkle (the castle lake, a dozen planets' water): white by 4 RASA T0 T1, over the frame by that alpha,
+// shown where (a <= 160) xor (a >= 40). Unclamped the alpha wraps modulo 256; clamped it saturates.
+smg::ModelMaterial sparkleWater(bool clamped, unsigned scale = 2) {
+    smg::ModelMaterial m;
+    m.textures[0] = 0, m.textures[1] = 1;
+    m.konstColors[0] = {1, 1, 1, 1};
+    m.tevStageCount = 2;
+    const std::uint8_t color[2][4]{{15, 14, 8, 15}, {14, 15, 15, 15}};
+    const std::uint8_t alpha[2][4]{{7, 5, 4, 7}, {7, 0, 4, 7}};
+    for (int i = 0; i < 2; ++i) {
+        auto& s = m.stages[i];
+        s = {};
+        std::copy(color[i], color[i] + 4, s.colorIn), std::copy(alpha[i], alpha[i] + 4, s.alphaIn);
+        s.texMap = s.texCoord = static_cast<std::uint8_t>(i), s.channel = 4, s.konstColor = 0x0c;
+    }
+    m.stages[1].alphaScale = static_cast<std::uint8_t>(scale), m.stages[1].alphaClamp = clamped;
+    m.alphaTest.compare0 = 3, m.alphaTest.reference0 = 160, m.alphaTest.op = 2, m.alphaTest.compare1 = 6, m.alphaTest.reference1 = 40;
+    m.blend.type = 1, m.blend.source = 4, m.blend.destination = 5;
+    m.depth.update = false;
+    return m;
+}
+
+std::vector<smg::CombinerProgram> compilePasses(const smg::TevPasses& passes) {
+    std::vector<smg::CombinerProgram> programs{smg::compileTev(passes.first)};
+    for (const auto& pass : passes.extra) programs.push_back(smg::compilePass(pass));
+    return programs;
+}
+
+// What the passes draw against GX, over inputs whose product P = RASA T0 T1 is a whole byte (RASA and T1 one): each of the
+// 256 levels, over a few frames; then over random bytes, where a step sharpened to a level disagrees with GX's continuous
+// edge for the share of points within one level of it.
+void checkWrap(const smg::ModelMaterial& m, std::size_t passCount, std::mt19937& rng, const char* what) {
+    smg::TevPasses passes;
+    check(!smg::compileTev(m).exact && smg::splitTev(m, passes) && passes.extra.size() == passCount, what);
+    const auto programs = compilePasses(passes);
+    bool exact = true;
+    for (const auto& p : programs) exact &= p.exact && p.stageCount <= smg::CombinerProgram::MaxStages;
+    check(exact, "and each pass is a program of up to six stages");
+    std::uniform_int_distribution<int> byte(0, 255);
+    const auto frame = [&] { return Rgba{byte(rng) / 255.0f, byte(rng) / 255.0f, byte(rng) / 255.0f, 1}; };
+    const auto near = [](const Rgba& a, const Rgba& b) {
+        return std::abs(a[0] - b[0]) <= 2 / 255.0f && std::abs(a[1] - b[1]) <= 2 / 255.0f && std::abs(a[2] - b[2]) <= 2 / 255.0f;
+    };
+    for (int level = 0; level < 256; ++level) {
+        Inputs in{};
+        in.raster = {1, 1, 1, 1}, in.texture[1] = {1, 1, 1, 1}, in.texture[0] = {1, 1, 1, level / 255.0f};
+        for (int k = 0; k < 4; ++k) {
+            const Rgba dst = frame(), want = drawn(m, in, dst), got = drawnInPasses(m, passes, programs, in, dst);
+            if (near(got, want)) continue;
+            std::printf("level %d want %.3f %.3f %.3f got %.3f %.3f %.3f\n", level, want[0], want[1], want[2], got[0], got[1], got[2]);
+            check(false, "and draw what GX draws at every level of the product");
+        }
+    }
+    int off = 0;
+    for (int i = 0; i < 4000; ++i) {
+        auto in = byteInputs(rng);
+        if (i & 1) in.raster[3] = 1, in.texture[1][3] = 1;  // products spread over every band, not the first
+        const Rgba dst = frame();
+        off += !near(drawnInPasses(m, passes, programs, in, dst), drawn(m, in, dst));
+    }
+    check(off < 25, "and nearly all of random inputs, but those within a level of a band's end");
+}
+
+void sparkleWrap(std::mt19937& rng) {
+    checkWrap(sparkleWater(false), 7, rng, "water whose alpha wraps splits into a pass per band and shown span");
+    checkWrap(sparkleWater(false, 1), 3, rng, "and a doubled one, with two bands");
+    auto additive = sparkleWater(false);
+    additive.blend.destination = 1;
+    additive.alphaTest.compare0 = 3, additive.alphaTest.reference0 = 20, additive.alphaTest.op = 1, additive.alphaTest.compare1 = 6, additive.alphaTest.reference1 = 160;
+    checkWrap(additive, 7, rng, "and an added one under an or of two compares");
+    smg::TevPasses passes;
+    auto opaque = sparkleWater(false);
+    opaque.blend.type = 0;
+    check(!smg::splitTev(opaque, passes), "but not one that replaces the frame, where a pass with no alpha would draw");
+}
+
+// The same water saturating its alpha translates exactly, but a draw keeps one of the test's two compares.
+void alphaTestSplit(std::mt19937& rng) {
+    const auto m = sparkleWater(true);
+    smg::TevPasses passes;
+    check(smg::compileTev(m).exact && smg::splitAlphaTest(m, passes) && passes.extra.size() == 1 && passes.first.alphaTest.compare0 == 1 &&
+              passes.first.alphaTest.reference0 == 40 && passes.extra[0].blend == smg::TevPass::Retest && passes.extra[0].compare == 6 &&
+              passes.extra[0].reference == 161,
+          "a test of two compares that passes two spans is drawn as one pass per span");
+    const auto programs = compilePasses(passes);
+    check(programs[0].exact && programs[1].stageCount == programs[0].stageCount, "each running the material's program");
+    std::uniform_int_distribution<int> byte(0, 255);
+    int shown = 0;
+    for (int i = 0; i < 2000; ++i) {
+        const auto in = byteInputs(rng);
+        const Rgba dst{byte(rng) / 255.0f, byte(rng) / 255.0f, byte(rng) / 255.0f, 1};
+        const Rgba want = drawn(m, in, dst), got = drawnInPasses(m, passes, programs, in, dst);
+        shown += !same(want, dst);
+        if (same(want, got)) continue;
+        std::printf("want %.3f %.3f %.3f got %.3f %.3f %.3f\n", want[0], want[1], want[2], got[0], got[1], got[2]);
+        check(false, "and together they draw what GX draws");
+    }
+    check(shown > 200, "over points both in and out of the spans");
+    smg::TevPasses unused;
+    auto test = m;
+    test.alphaTest.compare0 = 6, test.alphaTest.reference0 = 128, test.alphaTest.op = 0, test.alphaTest.compare1 = 3, test.alphaTest.reference1 = 255;
+    check(!smg::splitAlphaTest(test, unused), "a test whose second compare always passes is one the draw keeps");
+    test.alphaTest.compare0 = 6, test.alphaTest.reference0 = 32, test.alphaTest.compare1 = 6, test.alphaTest.reference1 = 64;
+    check(smg::splitAlphaTest(test, unused) && unused.extra.empty() && unused.first.alphaTest.compare0 == 6 && unused.first.alphaTest.reference0 == 64,
+          "an and of two bounds keeps the stricter, not the first");
+    test.alphaTest.compare0 = 6, test.alphaTest.reference0 = 40, test.alphaTest.compare1 = 3, test.alphaTest.reference1 = 160;
+    check(!smg::splitAlphaTest(test, unused), "and a span between two bytes it fails is not one a compare reaches");
+    test.alphaTest.compare0 = 3, test.alphaTest.reference0 = 20, test.alphaTest.op = 1, test.alphaTest.compare1 = 6, test.alphaTest.reference1 = 160;
+    check(smg::splitAlphaTest(test, unused) && unused.extra.size() == 1 && unused.extra[0].compare == 6 && unused.extra[0].reference == 160 &&
+              unused.first.alphaTest.compare0 == 1 && unused.first.alphaTest.reference0 == 21,
+          "an or of at most 20 and at least 160 passes two spans");
+}
+
 // RockPlanetOrbitSky's sky: (C0 + lerp(K0, T0, R) - 1/2 + lerp(K1, R, T1)) / 2, its first sum unclamped and C0's blue
 // negative. The chain of halves folds C0 and the bias into one signed constant, applied with the halving.
 // WaterBazookaCapsule's alpha: three unclamped sums from a negative A0, the last doubled.
@@ -1054,6 +1167,8 @@ int runCombinerTests() {
     lavaHalved(rng);
     waterBand(rng);
     oceanSphereLines(rng);
+    sparkleWrap(rng);
+    alphaTestSplit(rng);
     sumChains(rng);
     compareWithoutC(rng);
     compareAddsC(rng);

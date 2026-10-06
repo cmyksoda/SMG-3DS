@@ -48,17 +48,31 @@ CombinerProgram compileTev(const ModelMaterial& material, bool color1FromUnit = 
 struct TevPass {
     // Its color times its alpha added (under the material's alpha test), its color added where its alpha equals
     // reference, its color added (under the alpha test), its color over the rest by its alpha; or, under the alpha
-    // test, its color taken from the rest, the rest times its color, or the rest times one plus its color.
-    enum Blend : std::uint8_t { AddTimesAlpha, AddWhereEqual, Add, Over, Sub, Scale, Gain };
+    // test, its color taken from the rest, the rest times its color, or the rest times one plus its color. Retest
+    // blends as the material does, under a compare of its own.
+    enum Blend : std::uint8_t { AddTimesAlpha, AddWhereEqual, Add, Over, Sub, Scale, Gain, Retest };
     ModelMaterial material;
     Blend blend = AddTimesAlpha;
     std::uint8_t reference = 0;
+    std::uint8_t compare = 7;  // Retest: the GX compare of the alpha byte against reference
     bool writesAlpha = false;  // its alpha replaces the rest's: the first pass left out the stage that made it
+    bool hasProgram = false;   // program is built here, not translated from material
+    CombinerProgram program;
 };
 struct TevPasses {
     ModelMaterial first;
     std::vector<TevPass> extra;
 };
 // False when the material fits one pass, or isn't of a shape split here (its compare or the rest of it not additive).
+// first's alpha test is the one compare its pass draws under.
 bool splitTev(const ModelMaterial& material, TevPasses& out, std::uint8_t grayMaps = 0);
+// A pass's program: the one built for it, or its material's translation.
+CombinerProgram compilePass(const TevPass& pass, std::uint8_t grayMaps = 0);
+
+// GX's alpha test takes two compares of the alpha byte, a draw keeps one (keptAlphaCompare, as a GX compare code and its
+// reference). splitAlphaTest redraws the bytes it loses under compares of their own: the first pass keeps one, each extra
+// Retest the same program. False when the draw's is GX's, or the test passes a byte between two it fails.
+struct AlphaCompare { std::uint8_t compare = 7, reference = 0; };
+AlphaCompare keptAlphaCompare(const ModelMaterial& material);
+bool splitAlphaTest(const ModelMaterial& material, TevPasses& out);
 } // namespace smg

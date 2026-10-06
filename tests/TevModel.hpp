@@ -150,23 +150,25 @@ inline Rgba pica(const smg::CombinerProgram& p, const Inputs& in) {
     return previous;
 }
 
+// One GX compare of an alpha byte against a reference.
+inline bool compareAlpha(std::uint8_t compare, long a, long r) {
+    switch (compare) {
+    case 0: return false;
+    case 1: return a < r;
+    case 2: return a == r;
+    case 3: return a <= r;
+    case 4: return a > r;
+    case 5: return a != r;
+    case 6: return a >= r;
+    default: return true;
+    }
+}
+
 // GX's alpha test: two compares of the alpha byte, joined by and, or, xor or xnor.
 inline bool alphaPasses(const smg::ModelMaterial& m, float alpha) {
     const long a = std::lround(alpha * 255);
-    const auto compare = [a](std::uint8_t c, long r) {
-        switch (c) {
-        case 0: return false;
-        case 1: return a < r;
-        case 2: return a == r;
-        case 3: return a <= r;
-        case 4: return a > r;
-        case 5: return a != r;
-        case 6: return a >= r;
-        default: return true;
-        }
-    };
     const auto& t = m.alphaTest;
-    const bool x = compare(t.compare0, t.reference0), y = compare(t.compare1, t.reference1);
+    const bool x = compareAlpha(t.compare0, a, t.reference0), y = compareAlpha(t.compare1, a, t.reference1);
     return t.op == 0 ? x && y : t.op == 1 ? x || y : t.op == 2 ? x != y : x == y;
 }
 
@@ -178,7 +180,8 @@ inline Rgba blended(const smg::ModelMaterial& m, const Rgba& c, Rgba dst) {
     return dst;
 }
 
-// What GX draws over dst, and what passes split from it (splitTev) draw over dst in turn as the renderer blends them.
+// What GX draws over dst, and what passes split from it (splitTev, splitAlphaTest) draw over dst in turn as the renderer blends
+// them: the first under its own alpha test.
 inline Rgba drawn(const smg::ModelMaterial& m, const Inputs& in, const Rgba& dst) {
     const Rgba c = tev(m, in);
     return alphaPasses(m, c[3]) ? blended(m, c, dst) : dst;
@@ -186,13 +189,18 @@ inline Rgba drawn(const smg::ModelMaterial& m, const Inputs& in, const Rgba& dst
 inline Rgba drawnInPasses(const smg::ModelMaterial& m, const smg::TevPasses& passes, const std::vector<smg::CombinerProgram>& programs,
                           const Inputs& in, Rgba dst) {
     const Rgba first = pica(programs[0], in);
-    if (alphaPasses(m, first[3])) dst = blended(m, first, dst);
+    if (alphaPasses(passes.first, first[3])) dst = blended(m, first, dst);
     for (std::size_t e = 0; e < passes.extra.size(); ++e) {
         const smg::TevPass& pass = passes.extra[e];
         const Rgba x = pica(programs[e + 1], in);
-        const bool shown = pass.blend == smg::TevPass::Over ||
-                           (pass.blend == smg::TevPass::AddWhereEqual ? std::lround(x[3] * 255) == pass.reference : alphaPasses(m, x[3]));
+        const long byte = std::lround(x[3] * 255);
+        const bool shown = pass.blend == smg::TevPass::Over || (pass.blend == smg::TevPass::AddWhereEqual ? byte == pass.reference
+                           : pass.blend == smg::TevPass::Retest ? compareAlpha(pass.compare, byte, pass.reference) : alphaPasses(m, x[3]));
         if (!shown) continue;
+        if (pass.blend == smg::TevPass::Retest) {
+            dst = blended(m, x, dst);
+            continue;
+        }
         const float by = pass.blend == smg::TevPass::AddTimesAlpha || pass.blend == smg::TevPass::Over ? x[3] : 1;
         const float keep = pass.blend == smg::TevPass::Over ? 1 - x[3] : 1;
         for (int c = 0; c < 3; ++c) {

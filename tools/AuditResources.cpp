@@ -65,7 +65,7 @@ std::uint8_t grayMaps(const smg::Model& model, const smg::ModelMaterial& m) {
 bool splitExactly(const smg::ModelMaterial& m, std::uint8_t gray, smg::TevPasses& passes, std::vector<smg::CombinerProgram>& programs) {
     if (!smg::splitTev(m, passes, gray)) return false;
     programs = {smg::compileTev(passes.first, false, gray)};
-    for (const auto& pass : passes.extra) programs.push_back(smg::compileTev(pass.material, false, gray));
+    for (const auto& pass : passes.extra) programs.push_back(smg::compilePass(pass, gray));
     return std::all_of(programs.begin(), programs.end(), [](const smg::CombinerProgram& p) { return p.exact; });
 }
 
@@ -727,6 +727,7 @@ int main(int argc, char** argv) {
     if (ec) { std::fprintf(stderr,"Directory traversal: %s\n",ec.message().c_str()); return 2; }
     std::sort(archives.begin(), archives.end());
     std::size_t tables=0, records=0, resources=0, errors=0, modelCount=0, triangles=0, materials=0, exact=0, inPasses=0, visiblyOff=0;
+    std::size_t testsInPasses=0, testsLost=0;
     std::size_t bcsvInPlace=0, bcsvRepack=0, bcsvDiffer=0;
     std::vector<float> xanimeGaps;
     std::size_t brks=0, brkErrors=0, brkUnmatched=0, skinChecked=0, skinWrong=0, j3dChecked=0, j3dWrong=0, xanimeChecked=0, bcks=0, bckErrors=0;
@@ -914,6 +915,17 @@ int main(int argc, char** argv) {
                     if (program.exact) ++exact;
                     else if (split) ++inPasses;
                     else ++approximations[program.approximation];
+                    // An alpha test of two compares: a draw keeps one, so the bytes only the other passes need passes of their own.
+                    const smg::AlphaCompare kept = smg::keptAlphaCompare(material);
+                    bool keptIsTest = true;
+                    for (int a = 0; a < 256 && keptIsTest; ++a)
+                        keptIsTest = tevmodel::compareAlpha(kept.compare, a, kept.reference) == tevmodel::alphaPasses(material, a / 255.0f);
+                    if (!keptIsTest && !split) {
+                        smg::TevPasses retest;
+                        const bool passes = smg::splitAlphaTest(material, retest);
+                        ++(passes ? testsInPasses : testsLost);
+                        if (list) std::fprintf(stderr, "alpha test %s: %s :: %s :: %s\n", passes ? "in passes" : "not drawn", path.c_str(), entry.path.c_str(), material.name.c_str());
+                    }
                     if (program.exact || !list) continue;
                     std::fprintf(stderr, "%s (%s): %s :: %s :: %s", split ? "in passes" : "approximated", program.approximation, path.c_str(),
                                  entry.path.c_str(), material.name.c_str());
@@ -940,6 +952,8 @@ int main(int argc, char** argv) {
         std::printf("%zu models, %zu loaded, %zu triangles\n", modelCount, modelCount - failed, triangles);
         std::printf("%zu materials, %zu translated to the 3DS combiner exactly, %zu more as passes that each do\n", materials, exact, inPasses);
         for (const auto& [reason, count] : approximations) std::printf("%6zu  approximated: %s\n", count, reason.c_str());
+        std::printf("%zu more have an alpha test of two compares that one draw doesn't keep: %zu drawn under single compares of their own, %zu not\n",
+                    testsInPasses + testsLost, testsInPasses, testsLost);
         if (std::getenv("SMG_MEASURE_APPROXIMATED"))
             std::printf("%zu of the rest draw more than 1%% of their own surface off by over 3/255\n", visiblyOff);
         std::printf("%zu BRK files, %zu failed to load, %zu name no material of their archive's models\n", brks, brkErrors, brkUnmatched);

@@ -128,12 +128,12 @@ bool upload(C3D_Tex& texture, const std::vector<TiledTexture>& levels, bool line
     return true;
 }
 
-namespace {
 GPU_TESTFUNC testFunction(unsigned gx) {
     const GPU_TESTFUNC functions[]{GPU_NEVER, GPU_LESS, GPU_EQUAL, GPU_LEQUAL, GPU_GREATER, GPU_NOTEQUAL, GPU_GEQUAL, GPU_ALWAYS};
     return functions[gx & 7];
 }
 
+namespace {
 // citro3d's projection keeps nearer fragments at larger depth values.
 GPU_TESTFUNC depthFunction(unsigned gx) {
     const GPU_TESTFUNC functions[]{GPU_NEVER, GPU_GREATER, GPU_EQUAL, GPU_GEQUAL, GPU_LESS, GPU_NOTEQUAL, GPU_LEQUAL, GPU_ALWAYS};
@@ -209,16 +209,10 @@ PicaPixel preparePixel(const ModelMaterial& m, const CombinerProgram& program) {
     out.bufferUpdate[0] = program.bufferUpdate[0];
     out.bufferUpdate[1] = program.bufferUpdate[1];
 
-    const auto& test = m.alphaTest;
-    unsigned compare = test.compare0, reference = test.reference0;
-    if ((test.op == 0 && test.compare0 == 7) || (test.op == 1 && test.compare0 == 0)) {
-        compare = test.compare1;
-        reference = test.reference1;
-    }
-    if (test.op == 1 && (test.compare0 == 7 || test.compare1 == 7)) compare = 7;
-    out.alphaTest = compare != 7;
-    out.alphaFunc = testFunction(compare);
-    out.alphaReference = reference;
+    const AlphaCompare kept = keptAlphaCompare(m);
+    out.alphaTest = kept.compare != 7;
+    out.alphaFunc = testFunction(kept.compare);
+    out.alphaReference = kept.reference;
     const GPU_BLENDFACTOR sources[]{GPU_ZERO, GPU_ONE, GPU_DST_COLOR, GPU_ONE_MINUS_DST_COLOR, GPU_SRC_ALPHA,
                                     GPU_ONE_MINUS_SRC_ALPHA, GPU_DST_ALPHA, GPU_ONE_MINUS_DST_ALPHA};
     const GPU_BLENDFACTOR destinations[]{GPU_ZERO, GPU_ONE, GPU_SRC_COLOR, GPU_ONE_MINUS_SRC_COLOR, GPU_SRC_ALPHA,
