@@ -174,13 +174,13 @@ void renderLoop(void*) {
     }
 }
 
-// The game waiting on the render thread (for room, or for it to finish): timed for the perf line.
-template <class Done> void waitFor(Done done) {
+// The game waiting on the render thread (for room, or for it to finish): timed for the perf line, in `waits`.
+template <class Done> void waitFor(Done done, std::atomic<u32>& waits = sClock.gameWaits) {
     const u64 start = svcGetSystemTick();
     LightLock_Lock(&sQueueLock);
     while (!done()) CondVar_Wait(&sDone, &sQueueLock);
     LightLock_Unlock(&sQueueLock);
-    sClock.gameWaits.fetch_add(static_cast<u32>(svcGetSystemTick() - start), std::memory_order_relaxed);
+    waits.fetch_add(static_cast<u32>(svcGetSystemTick() - start), std::memory_order_relaxed);
 }
 
 void enqueue(const Entry& entry) {
@@ -234,7 +234,7 @@ void makeRoom(u32 bytes) {
 // Everything handed over so far read and drawn, before another thread reads what the GPU made.
 void drain() {
     if (!sRenderThread || getThreadLocalStorage() == sRenderTls) return;
-    waitFor([] { return sHead == sTail && !sBusy; });
+    waitFor([] { return sHead == sTail && !sBusy; }, sClock.drainWaits);
 }
 
 // The New 3DS's third core, which the game's own threads (all on the app core, by priority) never use; else the
@@ -477,7 +477,7 @@ void smgWaitFramesOut() {
     const u64 start = svcGetSystemTick();
     while (sCopiesRead.load(std::memory_order_acquire) - issued < 0)
         syncArbitrateAddress(reinterpret_cast<s32*>(&sCopiesRead), ARBITRATION_WAIT_IF_LESS_THAN, issued);
-    sClock.gameWaits.fetch_add(static_cast<u32>(svcGetSystemTick() - start), std::memory_order_relaxed);
+    sClock.frameWaits.fetch_add(static_cast<u32>(svcGetSystemTick() - start), std::memory_order_relaxed);
 }
 void smgFrameDrawn() { ++sDrawnFrames; }
 // A double buffer the game swaps at every write (J3D's deformed vertices): swapped only when a frame has been drawn

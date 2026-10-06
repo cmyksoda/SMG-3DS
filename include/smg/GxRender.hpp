@@ -18,9 +18,10 @@ void gxRenderMemoryChanged(const void* start, std::uint32_t size);
 void gxRenderCopiesStayOnGpu(bool stay);
 void gxRenderKeepCopiesOnGpu(bool stay);
 // The GX stream's reader (source/compat/GxFifo.cpp): ticks spent reading and drawing it, ticks the game waited for the
-// render thread, bytes read, and the core the render thread runs on (-1: none, the game's own thread draws).
+// render thread (for ring room, for the frame before to be drawn, for everything to be drawn before a peek or movie
+// frame), bytes read, and the core the render thread runs on (-1: none, the game's own thread draws).
 struct GxThreadClock {
-    std::atomic<std::uint32_t> busy{0}, gameWaits{0}, bytes{0};
+    std::atomic<std::uint32_t> busy{0}, gameWaits{0}, frameWaits{0}, drainWaits{0}, bytes{0};
     int core = -1;
 };
 GxThreadClock& gxThreadClock();
