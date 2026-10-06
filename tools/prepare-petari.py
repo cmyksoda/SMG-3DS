@@ -1716,6 +1716,11 @@ adapt("libs/JSystem/include/JSystem/JAudio2/JASResArcLoader.hpp", "include/JSyst
     ("/* 0x14 */ u32 mCallbackArg;", "/* 0x14 */ uintptr_t mCallbackArg;", 1),
     ("int loadResourceAsync(JKRArchive*, u16, u8*, u32, void (*)(u32, u32), u32);", "int loadResourceAsync(JKRArchive*, u16, u8*, u32, LoadCallback, uintptr_t);", 1),
 ])
+# A DSP channel's six bus connections (setBusConnect, setMixerVolume: one row of four per bus) fill 0x10 to 0x40.
+adapt("libs/JSystem/include/JSystem/JAudio2/JASDspInterface.hpp", "include/JSystem/JAudio2/JASDspInterface.hpp", [
+    ("        /* 0x010 */ u16 _10[1][4];  // array size unknown\n        /* 0x018 */ u8 _18[0x050 - 0x018];",
+     "        /* 0x010 */ u16 _10[6][4];\n        /* 0x040 */ u8 _40[0x050 - 0x040];", 1),
+])
 # A stream's first channel asks for bus 255 (JASAramStream::init's 0xffff), past the table: the Wii read 0x4861 from a
 # string there, an address no mix buffer has, so it mixed nowhere; 0 connects nowhere too.
 adapt("src/JSystem/JAudio2/JASDSPInterface.cpp", "JSystem/JAudio2/JASDSPInterface.cpp", [
