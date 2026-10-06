@@ -394,7 +394,7 @@ so only programs without the game (the preview, tests, tools) ever take one.
 | --- | --- | --- |
 | OS threads, mutexes, messages, clock | `OsThreads.cpp` | libctru threads on the app core, Wii priorities mapped in order (16 = 0x30); recursive mutexes on LightLocks; blocking queues; time base at 60.75 MHz from the system tick, dated from 2000-01-01 |
 | Arenas | `OsMemory.cpp` | MEM1 (0x806C0000-0x81800000, from main.dol's end) and MEM2 (0x90000800-0x935E0000, the arena IOS33, the disc's IOS, leaves) as two blocks of the 3DS heap; boot info with the Wii's 24 MB |
-| Allocation | `GameHeap.cpp` | plain `new` from the game's current JKRHeap once the root heap exists (as the original), the free store before; `delete` by address. The port's own long-lived containers use `compat/smg/FreeStore.hpp`'s allocator, and port code the game calls into opens an `smg::PortMemory` scope, so its scratch never spends a game heap (a solid heap would never get it back) |
+| Allocation | `GameHeap.cpp` | plain `new` from the game's current JKRHeap once the root heap exists (as the original), the free store before; `delete` by address. The port's own long-lived containers use `compat/smg/FreeStore.hpp`'s allocator, and port code the game calls into opens an `smg::PortMemory` scope, so its scratch never spends a game heap (a solid heap would never get it back). Its alignment stays the Wii's 4, where ARM's ABI promises 8: the ARM11 with unaligned access on loads 8-byte values from word-aligned addresses (`LDRD`, `VLDR`, `LDM`; only `LDREXD` wants 8), and 8 would pad heaps sized for the Wii's own use |
 | Disc | `Dvd.cpp`, `DiscImage.cpp` | entry numbers from the disc's file table, the RVZ image's or `sys/fst.bin` (not reproducible by sorting: MovieData precedes ModuleData); reads from the image or the extracted files; async reads finish on a worker that calls back like the drive's interrupt |
 | Video | `Video.cpp` | a retrace thread on the 3DS VBlank runs the game's retrace callbacks, latches flushed buffers |
 | System settings | `SystemConfig.cpp` | language and sound mode from the 3DS's settings; the game's wide mode, adapted to the 5:3 screen (`compat/smg/Screen.hpp`) |
@@ -542,6 +542,24 @@ declaration finds no other.
 `getScenarioNum`, which skips hidden scenarios. That is safe: the game never plays a hidden scenario's own row (below,
 `dev.galaxy`). When `dev.galaxy` did, Freezeflame's sixth indexed one slot past the array and Space Junk's, whose row
 turns on no layer and so has no start point for Mario, hung looking up the zone of an empty placement row.
+
+**What a sanitizer build finds.** A 3DS build with `-fsanitize=undefined -fsanitize-trap=undefined` (no runtime: each
+check that fails is an undefined instruction, which the probe's fault handler names) runs where the host can't. Two
+checks stay off: `alignment`, because JSystem's plain `new` gives the Wii's 4-byte alignment everywhere while ARM's ABI
+promises 8 (the ARM11 with unaligned access on loads 8-byte values from word-aligned addresses, so it stays, see the SDK
+table's Allocation row), and `shift-base`, because the SDK's masks shift negative ints left (`PHY_ADDR_MASK`), which gcc
+defines as two's complement. A check gcc proves will fail is compiled as a trap reached from ordinary code rather than
+from a check's branch, so the disassembly lists them without running anything. Three were ours (the fourth,
+`rbtree_remove`, is libctru's own null-path isolation). `TVec2::subInline` returned a reference to its own local: gcc
+passed null in its place, so `MR::calcStarPointerWorldVelocityDirectionOnPlane` read address 4 whenever `SpaceCocoon`,
+`SpiderThread`, `PunchingKinoko` or `KoopaFireShort` asked for it (an earlier session had found `addInline`'s twin;
+`subOperatorInline` and `scaleInline` had it too, and all five return by value now). The floater's base
+`getCurrentVelocity` bound a temporary (no galaxy builds the base alone; a static zero now). `JASHeap::insertChild`
+named the next heap's tree through a null pointer (`mTree` sits at 0, so the value was right; spelled out now). Running,
+the build stopped at boot in `LayoutCoreUtil::initTextBoxPane`, whose placeholder ended at index 9 of `L"XXXXXXXX"`, one
+past its end, in `main.dol` too; ending it at 8 shows the same text. `ub-scan.sh` missed the returned temporaries
+because the decomp's include dirs are SYSTEM ones, whose warnings gcc hides: it passes `-Wsystem-headers` now and flags
+both on the old headers.
 
 **Which zone a placed object is in.** `StageDataHolder::findPlacedStageDataHolder` told an object's zone (whose rails,
 start points and matrix it uses) by address: whether the object's row lies between the lowest of a holder's tables and
