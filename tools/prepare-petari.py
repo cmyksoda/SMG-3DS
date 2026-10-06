@@ -1437,6 +1437,10 @@ adapt("src/Game/Util/LayoutUtil.cpp", "Game/Util/LayoutUtil.cpp", [
      "template const nw4r::lyt::Pane* nw4r::lyt::PaneList::ConstIterator::operator->() const;", 1),
     ("template nw4r::lyt::PaneList::Iterator nw4r::ut::LinkList< nw4r::lyt::Pane, 4 >::Iterator::operator++(int);",
      "template nw4r::lyt::PaneList::Iterator nw4r::lyt::PaneList::Iterator::operator++(int);", 1),
+    # The same 5:3 adjust scale as LayoutManager::calcAnim, for the galaxy map's capture.
+    ('#include "Game/Util/LayoutUtil.hpp"\n', '#include "Game/Util/LayoutUtil.hpp"\n#include <smg/Screen.hpp>\n', 1),
+    ("            pDrawInfo->mLocationAdjustScale = nw4r::math::VEC2(0.75f, 1.0f);",
+     "            pDrawInfo->mLocationAdjustScale = nw4r::math::VEC2(smg::screen::LayoutAdjustX, 1.0f);", 1),
 ])
 
 adapt("src/Game/AreaObj/ChangeBgmCube.cpp", "Game/AreaObj/ChangeBgmCube.cpp", [], cases=["        case 0:", "        case 1:"])
@@ -1931,6 +1935,9 @@ adapt("src/Game/Scene/LogoScene.cpp", "Game/Scene/LogoScene.cpp", [
     ("    if (tryFadeoutLayout()) {\n        setNerve(GET_NERVE_ANON(LogoSceneStrapFadein));",
      "    if (tryFadeoutLayout()) {\n        setNerve(GET_NERVE_ANON(LogoSceneWaitReadDoneSystemArchive));", 1),
     ('    mStrapLayout = MR::createSimpleLayout("ストラップ着用画面", "WiiRemoteStrap", 1);\n    mStrapLayout->kill();\n', "", 1),
+    # The Chinese ISBN screen's layout adjusts to the 5:3 screen as every other layout does.
+    ('#include "Game/Scene/LogoScene.hpp"\n', '#include "Game/Scene/LogoScene.hpp"\n#include <smg/Screen.hpp>\n', 1),
+    ("        mIsbnManager->setAdjustRate(0.75f, 1.0f);", "        mIsbnManager->setAdjustRate(smg::screen::LayoutAdjustX, 1.0f);", 1),
 ])
 # DspBoot hands the DSP its microcode at cached-mirror addresses (0x80000000 up), which no 3DS image can hold; on
 # the 3DS every view of memory is the address itself (source/compat/WiiAudio.cpp runs the DSP).
@@ -2204,6 +2211,9 @@ adapt("src/JSystem/JKernel/JKRUnitHeap.cpp", "JSystem/JKernel/JKRUnitHeap.cpp", 
 adapt("src/Game/Screen/LayoutManager.cpp", "Game/Screen/LayoutManager.cpp", [
     ("    if (useArchiveNamePrefix) {\n        char fileNameWithoutExtension[0x60];\n        char fileNameFromPrefix[0x80];\n",
      "    char fileNameWithoutExtension[0x60];\n    char fileNameFromPrefix[0x80];\n    if (useArchiveNamePrefix) {\n", 1),
+    # The 5:3 screen's own share of a layout's width (compat/smg/Screen.hpp), for the panes that adjust to the screen.
+    ('#include "Game/Screen/LayoutManager.hpp"\n', '#include "Game/Screen/LayoutManager.hpp"\n#include <smg/Screen.hpp>\n', 1),
+    ("        scale.x = 0.75f;", "        scale.x = smg::screen::LayoutAdjustX;", 1),
 ])
 # The Wii's HOME Button Menu is PowerPC code loaded from the disc; the 3DS's HOME button replaces it.
 adapt("src/Game/System/HomeButtonMenuWrapper.cpp", "Game/System/HomeButtonMenuWrapper.cpp", [], drop=[
@@ -2537,6 +2547,37 @@ adapt("src/Game/System/ResourceHolder.cpp", "Game/System/ResourceHolder.cpp", [
      '                sprintf(path, "%s%s%s", pPath ? pPath : "", "/", finder->mName);', 1),
     ('                snprintf(path, 128, "%s/%s", pPath, finder->mName);',
      '                snprintf(path, 128, "%s/%s", pPath ? pPath : "", finder->mName);', 1),
+])
+
+# The top screen is 5:3 where the game's wide mode composes for 16:9 (832 columns, layouts at 0.75): these sites take
+# compat/smg/Screen.hpp's 5:3 values, and the rest of screen space derives from MR::getScreenWidth.
+adapt("src/Game/Util/ScreenUtil.cpp", "Game/Util/ScreenUtil.cpp", [
+    ('#include "Game/Util/ScreenUtil.hpp"\n', '#include "Game/Util/ScreenUtil.hpp"\n#include <smg/Screen.hpp>\n', 1),
+    ("        return isScreen16Per9() ? 832 : 608;", "        return isScreen16Per9() ? smg::screen::Width : 608;", 1),
+])
+adapt("src/Game/Camera/CameraContext.cpp", "Game/Camera/CameraContext.cpp", [
+    ('#include "Game/Camera/CameraContext.hpp"\n', '#include "Game/Camera/CameraContext.hpp"\n#include <smg/Screen.hpp>\n', 1),
+    ("        return 16.0f / 9.0f;", "        return smg::screen::Aspect;", 1),
+])
+adapt("src/Game/Camera/CameraViewInterpolator.cpp", "Game/Camera/CameraViewInterpolator.cpp", [
+    ("    f32 nearPlaneWidth = nearPlaneHeight * 16.0f / 9.0f;", "    f32 nearPlaneWidth = nearPlaneHeight * MR::getAspect();", 1),
+])
+adapt("src/Game/Screen/ImageEffectLocalUtil.cpp", "Game/Screen/ImageEffectLocalUtil.cpp", [
+    ('#include "Game/Screen/ImageEffectLocalUtil.hpp"\n', '#include "Game/Screen/ImageEffectLocalUtil.hpp"\n#include <smg/Screen.hpp>\n', 1),
+    ("    f32 aspect = MR::isScreen16Per9() ? 1.333f : 1.0f;", "    f32 aspect = MR::isScreen16Per9() ? smg::screen::PixelAspect : 1.0f;", 1),
+])
+# The HOME Button Menu never opens here (source/compat/HomeButtonMenu.cpp); its adjust still follows the screen.
+adapt("src/Game/Screen/HomeButtonLayout.cpp", "Game/Screen/HomeButtonLayout.cpp", [
+    ("    mHomeButtonInfo->adjust.x = 832.0f / 608.0f;", "    mHomeButtonInfo->adjust.x = static_cast< f32 >(MR::getScreenWidth()) / 608.0f;", 1),
+])
+# A movie's 640x368 picture is framed for 16:9: the 5:3 screen shows it whole at its width, a 16th shorter, between
+# bars that grow to match. (The 4:3 branch, which would crop instead, never runs here.)
+adapt("src/Game/Screen/MoviePlayerSimple.cpp", "Game/Screen/MoviePlayerSimple.cpp", [
+    ('#include "Game/Screen/MoviePlayerSimple.hpp"\n', '#include "Game/Screen/MoviePlayerSimple.hpp"\n#include <smg/Screen.hpp>\n', 1),
+    ("    static const s16 sCinemaFrameHeightTop = 44;\n    static const s16 sCinemaFrameHeightBottom = 412;",
+     "    static const s16 sCinemaFrameHeightTop = smg::screen::MovieBarTop;\n"
+     "    static const s16 sCinemaFrameHeightBottom = smg::screen::MovieBarBottom;", 1),
+    ("        u32 ySize = mMovie->mVideoInfo.ySize;\n", "        u32 ySize = mMovie->mVideoInfo.ySize * smg::screen::MovieHeightScale;\n", 1),
 ])
 
 # A copy this script no longer writes would still be preferred over upstream's file by the build (and a stale

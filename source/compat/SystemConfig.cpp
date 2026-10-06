@@ -29,7 +29,8 @@ u8 SCGetLanguage() {
     }
 }
 
-// The top screen is 5:3, far nearer the Wii's widescreen than its 4:3.
+// The top screen is 5:3, far nearer the Wii's widescreen than its 4:3; the game's wide mode is adapted to be 5:3
+// (compat/smg/Screen.hpp).
 u8 SCGetAspectRatio() { return SC_ASPECT_RATIO_16x9; }
 
 // The 3DS's sound setting (config block 0x70001) has the Wii's three modes in the same order.
