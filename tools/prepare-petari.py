@@ -1716,6 +1716,11 @@ adapt("libs/JSystem/include/JSystem/JAudio2/JASResArcLoader.hpp", "include/JSyst
     ("/* 0x14 */ u32 mCallbackArg;", "/* 0x14 */ uintptr_t mCallbackArg;", 1),
     ("int loadResourceAsync(JKRArchive*, u16, u8*, u32, void (*)(u32, u32), u32);", "int loadResourceAsync(JKRArchive*, u16, u8*, u32, LoadCallback, uintptr_t);", 1),
 ])
+# A stream's first channel asks for bus 255 (JASAramStream::init's 0xffff), past the table: the Wii read 0x4861 from a
+# string there, an address no mix buffer has, so it mixed nowhere; 0 connects nowhere too.
+adapt("src/JSystem/JAudio2/JASDSPInterface.cpp", "JSystem/JAudio2/JASDSPInterface.cpp", [
+    ("    r30 = connect_table[param_1];", "    r30 = param_1 < 12 ? connect_table[param_1] : 0;", 1),
+])
 # A heap inserted last names no next heap: the tree's null, without a member access through a null pointer.
 adapt("src/JSystem/JAudio2/JASHeapCtrl.cpp", "JSystem/JAudio2/JASHeapCtrl.cpp", [
     ("    mTree.insertChild(&pNext->mTree, &pHeap->mTree);", "    mTree.insertChild(pNext ? &pNext->mTree : nullptr, &pHeap->mTree);", 1),
