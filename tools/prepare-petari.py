@@ -240,8 +240,12 @@ adapt("libs/JSystem/include/JSystem/JGeometry/TVec.hpp", "include/JSystem/JGeome
     ("inline void negateInternal(const f32* rSrc, f32* rDest);", "inline void negateInternal(const f32* rSrc, f32* rDest) {\n        const f32 x = -rSrc[0], y = -rSrc[1], z = -rSrc[2];\n        rDest[0] = x; rDest[1] = y; rDest[2] = z;\n    }", 1),
     ("static void subInternal(const f32* vec1, const f32* vec2, f32* dst);", "void subInternal(const f32* vec1, const f32* vec2, f32* dst); // Unused; not implemented on ARM.", 1),
     ("void mulInternal(const f32* vec1, const f32* vec2, f32* dst);", "inline void mulInternal(const f32* a, const f32* b, f32* dst) {\n        const f32 x = a[0]*b[0], y = a[1]*b[1], z = a[2]*b[2];\n        dst[0] = x; dst[1] = y; dst[2] = z;\n    }", 1),
+    # These return their own local: Metrowerks left it intact on the stack, GCC returns null.
     ("inline TVec2& addInline", "inline TVec2 addInline", 1),
     ("inline const TVec2& addOperatorInline", "inline TVec2 addOperatorInline", 1),
+    ("inline TVec2& subInline", "inline TVec2 subInline", 1),
+    ("inline const TVec2& subOperatorInline", "inline TVec2 subOperatorInline", 1),
+    ("inline TVec2& scaleInline", "inline TVec2 scaleInline", 1),
     ("        TVec3(const Vec& vec);", "        TVec3(const Vec& vec) : Vec(vec) {}", 1),
     ("        TVec3(const TVec3< f32 >& vec);", "        TVec3(const TVec3< f32 >& vec) : Vec(vec) {}", 1),
     ("            stfs b_x, 8(v_b)\n            }\n            ;\n#endif", "            stfs b_x, 8(v_b)\n            }\n            ;\n#else\n            static_cast<Vec&>(*this) = static_cast<const Vec&>(vec);\n#endif", 1),
