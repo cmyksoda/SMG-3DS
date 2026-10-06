@@ -349,6 +349,7 @@ private:
     const float* clipMatrix(std::uint32_t index) { return index < 64 && clipReady_[index >> 5] >> (index & 31) & 1 ? clip_[index] : makeClipMatrix(index); }
     const float* makeClipMatrix(std::uint32_t index);
     bool foldStillHolds(Fold& f, const TexGen& t, std::uint32_t ctrl, std::uint32_t post) const;
+    bool foldHolds(const TexGen& t) const;
     void refold(TexGen& t) const;
     void loadMatrices(Fold& f, const TexGen& t) const;
     // Lighting read again only when an XF register or a light changed (matrix loads leave it as it was).

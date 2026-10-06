@@ -531,10 +531,14 @@ std::uint32_t GxCommandProcessor::bpRun(const std::uint8_t* at, std::uint32_t av
             mask = bpMask_;
             continue;
         }
-        const std::uint32_t old = bp[address], data = mask == 0xFFFFFF ? value & 0xFFFFFF : (old & ~mask) | (value & mask);
+        const bool whole = mask == 0xFFFFFF;
+        const std::uint32_t old = bp[address], data = whole ? value & 0xFFFFFF : (old & ~mask) | (value & mask);
         mask = 0xFFFFFF;
         if (old != data) bp[address] = data, changes += kind & BpDrawn, beside += !(kind & BpColor) && (kind & BpDrawn);
         if (!(kind & BpColor)) continue;
+        // GXSetTevColor sends a color's second register three times: the same whole load again changes nothing.
+        if (whole)
+            while (end - from >= 10 && from[5] == 0x61 && word(from + 6) == value) from += 5;
         // 0xE0-0xE7 hold a TEV color register or a konst color by their type bit: the last write of each kind.
         const bool konst = data >> 23 & 1;
         std::uint32_t& color = (konst ? tevKonst : tevColor)[address - 0xE0];

@@ -139,6 +139,24 @@ unsigned textureSide(float texels) {
 
 GPU_TEXTURE_WRAP_PARAM wrapMode(unsigned gx) { return gx == 1 ? GPU_REPEAT : gx == 2 ? GPU_MIRRORED_REPEAT : GPU_CLAMP_TO_EDGE; }
 
+constexpr unsigned morton(unsigned x, unsigned y) { return (x & 1) | (y & 1) << 1 | (x & 2) << 1 | (y & 2) << 2 | (x & 4) << 2 | (y & 4) << 3; }
+
+// Each slot of a C1 palette: its texel's place in the PICA's tiled order (rows from the last up), and its center as texture coordinates.
+struct PaletteTexel {
+    std::uint8_t offset;
+    float s, t;
+};
+struct PaletteTexels {
+    PaletteTexel slot[64] = {};
+    constexpr PaletteTexels() {
+        for (unsigned i = 0; i < 64; ++i) {
+            const unsigned x = i % 8, row = i / 8, y = 7 - row;
+            slot[i] = {static_cast<std::uint8_t>(morton(x, y)), (static_cast<float>(x) + 0.5f) / 8, (static_cast<float>(row) + 0.5f) / 8};
+        }
+    }
+};
+constexpr PaletteTexels sPaletteTexels;
+
 [[noreturn]] void stop(const char* what) {
     std::fprintf(stderr, "The Wii GPU's drawing: %s is not the port's yet\n", what);
     std::abort();
@@ -911,26 +929,23 @@ struct Renderer {
     // C1 for states that read it from the palette unit: 8x8 RGBA8 textures of 64 colors each, taken in order through a
     // command list (startBuffers starts over), so the texels a recorded draw samples never change under it.
     static constexpr unsigned PaletteTextures = 64, PaletteSlots = 64;
+    static_assert(PaletteSlots == sizeof sPaletteTexels.slot / sizeof *sPaletteTexels.slot);
     C3D_Tex palettes[PaletteTextures];
     unsigned paletteUsed = 0, paletteFlushed = 0;
     int batchPalette = -1;  // the palette the pending batch samples
     u32 paletteColor = 0;  // the last texel's
-    static unsigned morton(unsigned x, unsigned y) {
-        return (x & 1) | (y & 1) << 1 | (x & 2) << 1 | (y & 2) << 2 | (x & 4) << 2 | (y & 4) << 3;
-    }
     void choosePaletteTexel(const GxCommandProcessor& gpu) {
         std::uint8_t c[4];
         gxColor1Bytes(gpu, c);  // in range, or the state would not read it from here
         const u32 rgba = u32(c[0]) << 24 | u32(c[1]) << 16 | u32(c[2]) << 8 | c[3];
         if (paletteUsed && rgba == paletteColor && int((paletteUsed - 1) / PaletteSlots) == batchPalette) return;
         if (paletteUsed == PaletteTextures * PaletteSlots) pause(), resume();
-        const unsigned slot = paletteUsed++, texture = slot / PaletteSlots, at = slot % PaletteSlots;
+        const unsigned slot = paletteUsed++, texture = slot / PaletteSlots;
+        const PaletteTexel& texel = sPaletteTexels.slot[slot % PaletteSlots];
         if (int(texture) != batchPalette) flushBatch(), batchPalette = int(texture), ++stateVersion;
         paletteColor = rgba;
-        // GX rows run down from the first; the PICA's run up from the last in memory, as tile() lays them.
-        const unsigned x = at % 8, row = at / 8;
-        std::memcpy(static_cast<std::uint8_t*>(palettes[texture].data) + 4 * morton(x, 7 - row), &rgba, 4);
-        pipeline.setPaletteTexel((static_cast<float>(x) + 0.5f) / 8, (static_cast<float>(row) + 0.5f) / 8);
+        std::memcpy(static_cast<std::uint8_t*>(palettes[texture].data) + 4 * texel.offset, &rgba, 4);
+        pipeline.setPaletteTexel(texel.s, texel.t);
     }
 
     // readGxDrawState through a cache keyed by the registers it reads for the stages and maps in use (gxDrawStateKey):
@@ -1496,7 +1511,7 @@ struct Renderer {
     void dropAllMeshes() {
         if (inFrame) pause(), resume();  // the GPU may still read them
         while (!meshes.empty()) dropMesh(meshes.begin());
-        decodedLists.clear();  // its page marks go too
+        clearDecoded();  // its page marks go too
         meshPages.clear();
         for (auto& bits : sMeshPageBits) bits.store(0, std::memory_order_relaxed);
         for (std::uintptr_t page : texturePages) sMeshPageBits[page >> 5].fetch_or(1u << (page & 31), std::memory_order_relaxed);
@@ -1553,7 +1568,7 @@ struct Renderer {
             for (auto it = decodedLists.begin(); it != decodedLists.end();) {
                 const auto& r = it->second.range;
                 const bool overlaps = (r[0][0] < end[i] && start[i] < r[0][1]) || (r[1][0] < end[i] && start[i] < r[1][1]);
-                it = overlaps ? decodedLists.erase(it) : std::next(it);
+                it = overlaps ? eraseDecoded(it) : std::next(it);
             }
         }
     }
@@ -1573,7 +1588,7 @@ struct Renderer {
     // read again when the list's bytes or the CP registers it was read under differ, or memory it came from changes
     // (the meshes' page marks).
     struct DecodedList {
-        u32 size = 0, cpChanges = 0;
+        u32 address = 0, size = 0, cpChanges = 0;
         std::uint8_t bytes[32] = {};
         std::vector<std::pair<std::uint8_t, u32>> depends;
         struct Primitive {
@@ -1585,13 +1600,24 @@ struct Renderer {
         std::uintptr_t range[2][2] = {};  // the list, the array elements
     };
     std::unordered_map<u32, DecodedList> decodedLists;
+    // A direct-mapped index in front of the map, whose lookup divides.
+    static constexpr u32 DecodedSlots = 256;
+    DecodedList* decodedIndex[DecodedSlots] = {};
+    static u32 decodedSlot(u32 address) { return address >> 5 & (DecodedSlots - 1); }
+    std::unordered_map<u32, DecodedList>::iterator eraseDecoded(std::unordered_map<u32, DecodedList>::iterator it) {
+        if (DecodedList*& slot = decodedIndex[decodedSlot(it->first)]; slot == &it->second) slot = nullptr;
+        return decodedLists.erase(it);
+    }
+    void clearDecoded() { decodedLists.clear(), std::fill(std::begin(decodedIndex), std::end(decodedIndex), nullptr); }
     // A list as it was: by words for the usual one block (the library's memcmp goes a byte at a time).
     static bool sameBytes(const std::uint8_t* kept, const std::uint8_t* list, u32 size) {
         if (size != 32) return !std::memcmp(kept, list, size);
-        u32 a[8], b[8];
-        std::memcpy(a, kept, 32), std::memcpy(b, list, 32);
         u32 differ = 0;
-        for (int i = 0; i < 8; ++i) differ |= a[i] ^ b[i];
+        for (int i = 0; i < 32; i += 4) {
+            u32 a, b;
+            std::memcpy(&a, kept + i, 4), std::memcpy(&b, list + i, 4);
+            differ |= a ^ b;
+        }
         return !differ;
     }
 
@@ -1599,24 +1625,31 @@ struct Renderer {
         applyChangedMemory();
         const GxZoneScope zone(ZoneSmallList);
         const std::uint8_t* list = gpu.memoryFunction()(address);
-        auto found = decodedLists.find(address);
-        bool valid = found != decodedLists.end() && found->second.size == size && sameBytes(found->second.bytes, list, size);
-        if (valid && found->second.cpChanges != gpu.cpChanges) {
-            for (const auto& [reg, value] : found->second.depends) valid &= gpu.cp[reg] == value;
-            if (valid) found->second.cpChanges = gpu.cpChanges;
+        DecodedList*& slot = decodedIndex[decodedSlot(address)];
+        if (!slot || slot->address != address) {
+            const auto it = decodedLists.find(address);
+            slot = it == decodedLists.end() ? nullptr : &it->second;
+        }
+        DecodedList* kept = slot;
+        bool valid = kept && kept->size == size && sameBytes(kept->bytes, list, size);
+        if (valid && kept->cpChanges != gpu.cpChanges) {
+            for (const auto& [reg, value] : kept->depends) valid &= gpu.cp[reg] == value;
+            if (valid) kept->cpChanges = gpu.cpChanges;
         }
         if (!valid) {
-            if (found != decodedLists.end()) decodedLists.erase(found);
-            if (decodedLists.size() >= 1024) decodedLists.clear();
+            if (kept) eraseDecoded(decodedLists.find(address));
+            if (decodedLists.size() >= 1024) clearDecoded();
             DecodedList decoded;
             if (!decodeList(gpu, list, size, decoded)) return false;
             // Its pages are marked before it is read for good, as a mesh's are.
             for (const auto& r : decoded.range) markPages(r[0], r[1]);
             std::atomic_thread_fence(std::memory_order_seq_cst);
             if (!decodeList(gpu, list, size, decoded)) return false;
-            found = decodedLists.emplace(address, std::move(decoded)).first;
+            decoded.address = address;
+            kept = &decodedLists.emplace(address, std::move(decoded)).first->second;
+            decodedIndex[decodedSlot(address)] = kept;
         }
-        const DecodedList& d = found->second;
+        const DecodedList& d = *kept;
         for (const auto& p : d.primitives) {
             perf.listVertices += p.count, perf.refusedVertices[GxVertexPipeline::MeshSmall] += p.count;
             draw(gpu, p.kind, p.format, p.count, nullptr, &d.vertices[p.first]);

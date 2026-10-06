@@ -443,12 +443,10 @@ namespace {
 // TEV register `reg` (1 C0, 2 C1) as four bytes: BP 0xE0 + 2 reg and the next, eleven-bit two's complement components.
 bool tevColorBytes(const GxCommandProcessor& gpu, unsigned reg, std::uint8_t out[4]) {
     const std::uint32_t ra = gpu.tevColor[2 * reg], bg = gpu.tevColor[2 * reg + 1];
-    const std::int32_t c[4] = {static_cast<std::int32_t>(TEV_REGISTERL_GET_R(ra) << 21) >> 21, static_cast<std::int32_t>(TEV_REGISTERH_GET_G(bg) << 21) >> 21,
-                               static_cast<std::int32_t>(TEV_REGISTERH_GET_B(bg) << 21) >> 21, static_cast<std::int32_t>(TEV_REGISTERL_GET_A(ra) << 21) >> 21};
-    for (int i = 0; i < 4; ++i) {
-        if (c[i] < 0 || c[i] > 255) return false;
-        out[i] = static_cast<std::uint8_t>(c[i]);
-    }
+    // A component is a byte when its top three bits are clear (R and A in ra, B and G in bg).
+    if ((ra | bg) & 0x700700) return false;
+    out[0] = static_cast<std::uint8_t>(ra), out[1] = static_cast<std::uint8_t>(bg >> 12);
+    out[2] = static_cast<std::uint8_t>(bg), out[3] = static_cast<std::uint8_t>(ra >> 12);
     return true;
 }
 } // namespace
@@ -649,7 +647,7 @@ bool GxVertexPipeline::prepare(const GxCommandProcessor& gpu, const GxDrawState&
         }
         if (gpu.xfChanges != preparedXf_) {
             for (unsigned u = 0; u < units_; ++u)
-                if (!texgens_[u].palette) refold(texgens_[u]);
+                if (!texgens_[u].palette && !foldHolds(texgens_[u])) refold(texgens_[u]);
             if (channel_ && lightingLights_ != gpu.xfLightChanges) readLighting(gpu);
             preparedXf_ = xfSeen_ = gpu.xfChanges, clipReady_[0] = clipReady_[1] = 0;
         }
@@ -782,6 +780,21 @@ bool GxVertexPipeline::foldStillHolds(Fold& f, const TexGen& t, std::uint32_t ct
     return same;
 }
 
+// refold's early return without its calls: a folded texgen whose matrix rows (and dual rows) are as its fold was made from. Only
+// after a full prepare, which left the fold made from this texgen's setup.
+bool GxVertexPipeline::foldHolds(const TexGen& t) const {
+    if (!t.folded) return false;
+    Fold& f = folds_[t.coord & 7];
+    if (t.foldOf != &f || t.foldAt != f.version) return false;
+    const std::uint32_t* rows = gpu_->xfRowChanges;
+    for (int r = 0; r < t.rows; ++r)
+        if (rows[(t.matrix + r) & 0x3FF] != f.rowChanges[r]) return false;
+    for (int r = 0; r < 3 && t.dual; ++r)
+        if (rows[(t.post + r) & 0x3FF] != f.rowChanges[3 + r]) return false;
+    f.foldXf = gpu_->xfChanges;
+    return true;
+}
+
 // A folded texgen's map again when the matrices it was made from changed, and whether it is planar.
 void GxVertexPipeline::refold(TexGen& t) const {
     Fold& f = folds_[t.coord & 7];
@@ -837,14 +850,25 @@ void GxVertexPipeline::loadMatrices(Fold& f, const TexGen& t) const {
 // and the viewport.
 const float* GxVertexPipeline::makeClipMatrix(std::uint32_t index) {
     float* out = index < 64 ? clip_[index] : clipScratch_;
-    float m[3][4];
-    copyRows(&m[0][0], gpu_->xf, index, 3);
-    for (int r = 0; r < 4; ++r)
-        for (int c = 0; c < 4; ++c) {
-            float sum = c == 3 ? toClipFloat_[r][3] : 0;  // the position matrix's fourth row is (0, 0, 0, 1)
-            for (int k = 0; k < 3; ++k) sum += toClipFloat_[r][k] * m[k][c];
+    // The matrix's words where they lie (a copy only where the index wraps), and toClip_ in locals: each store to `out` would
+    // make the compiler read what it can't prove untouched again.
+    std::uint32_t wrapped[12];
+    const std::uint32_t first = index * 4 & 0xFFF;
+    const std::uint32_t* words = gpu_->xf + first;
+    if (first + 12 > 0x1000) {
+        for (unsigned i = 0; i < 12; ++i) wrapped[i] = gpu_->xf[(index * 4 + i) & 0xFFF];
+        words = wrapped;
+    }
+    float t[16];
+    for (int i = 0; i < 16; ++i) t[i] = toClipFloat_[i >> 2][i & 3];
+    for (int c = 0; c < 4; ++c) {
+        const float m0 = asFloat(words[c]), m1 = asFloat(words[4 + c]), m2 = asFloat(words[8 + c]);
+        for (int r = 0; r < 4; ++r) {
+            float sum = c == 3 ? t[r * 4 + 3] : 0;  // the position matrix's fourth row is (0, 0, 0, 1)
+            sum += t[r * 4] * m0, sum += t[r * 4 + 1] * m1, sum += t[r * 4 + 2] * m2;
             out[r * 4 + c] = sum;
         }
+    }
     if (index < 64) clipReady_[index >> 5] |= 1u << (index & 31);
     return out;
 }
@@ -1053,8 +1077,8 @@ void GxVertexPipeline::vertices(const GxVertex* v, unsigned n, GxDrawVertex* d, 
         for (int r = 0; r < 4; ++r) out[r] = m[r * 4] * x + m[r * 4 + 1] * y + m[r * 4 + 2] * z + m[r * 4 + 3];
     };
     if (fixedClip) {
-        float m[16];
-        std::memcpy(m, fixedClip, sizeof m);
+        const float* c = fixedClip;
+        const float m[16] = {c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7], c[8], c[9], c[10], c[11], c[12], c[13], c[14], c[15]};
         for (unsigned j = 0; j < n; ++j) transform(m, v[j].position, d[j].position);
     } else {
         for (unsigned j = 0; j < n; ++j) transform(clipMatrix(v[j].matrixIndex), v[j].position, d[j].position);
@@ -1064,7 +1088,9 @@ void GxVertexPipeline::vertices(const GxVertex* v, unsigned n, GxDrawVertex* d, 
         for (unsigned j = 0; j < n; ++j) d[j].position[2] = depth * d[j].position[3];
     }
     if (color0InVertex_) {
-        for (unsigned j = 0; j < n; ++j) std::memcpy(d[j].color, color0_, 4);
+        std::uint32_t color;
+        std::memcpy(&color, color0_, 4);
+        for (unsigned j = 0; j < n; ++j) std::memcpy(d[j].color, &color, 4);
     } else if (!channel_) {
         for (unsigned j = 0; j < n; ++j) std::memset(d[j].color, 0, 4);
     } else if (!lit_) {
@@ -1117,9 +1143,11 @@ void GxVertexPipeline::texcoords(const GxVertex* v, unsigned n, GxDrawVertex* d)
         const TexGen& t = texgens_[u];
         const auto input = [&](unsigned j) { return reinterpret_cast<const float*>(reinterpret_cast<const std::uint8_t*>(&v[j]) + t.input); };
         switch (t.kind) {
-        case TexGen::Palette:
-            for (unsigned j = 0; j < n; ++j) d[j].texcoord[u][0] = palette_[0], d[j].texcoord[u][1] = palette_[1];
+        case TexGen::Palette: {
+            const float s = palette_[0], r = palette_[1];  // locals: each store to a vertex would make the compiler read them again
+            for (unsigned j = 0; j < n; ++j) d[j].texcoord[u][0] = s, d[j].texcoord[u][1] = r;
             break;
+        }
         case TexGen::Planar: {
             const float a0 = t.fold[0][0], b0 = t.fold[0][1], k0 = t.fold[0][2] + t.fold[0][3];
             const float a1 = t.fold[1][0], b1 = t.fold[1][1], k1 = t.fold[1][2] + t.fold[1][3];
@@ -1183,6 +1211,14 @@ std::size_t GxVertexPipeline::triangles(GxDrawVertex* vertices, std::uint16_t co
             out += 6;
         }
         if (i + 2 < count) out[0] = a, out[1] = static_cast<std::uint16_t>(a + 1), out[2] = static_cast<std::uint16_t>(a + 2), out += 3;
+        return static_cast<std::size_t>(out - indices);
+    }
+    if (!reject_ && (kind_ == 0x80 || kind_ == 0x88)) {  // quads with nothing culled, two triangles each
+        std::uint16_t* out = indices;
+        for (int i = 0; i + 3 < count; i += 4, out += 6) {
+            out[0] = out[3] = static_cast<std::uint16_t>(first + i), out[1] = static_cast<std::uint16_t>(first + i + 1);
+            out[2] = out[4] = static_cast<std::uint16_t>(first + i + 2), out[5] = static_cast<std::uint16_t>(first + i + 3);
+        }
         return static_cast<std::size_t>(out - indices);
     }
     switch (kind_) {

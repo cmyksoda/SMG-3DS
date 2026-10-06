@@ -460,6 +460,38 @@ void color0Rides() {
     check(!state.color0InVertex, "a program that reads the rasterized color keeps C0 a constant");
 }
 
+// A TEV color as bytes: R and A in the first register's halves, B and G in the second's, each component eleven bits of two's
+// complement that must fit a byte.
+void byteColors() {
+    auto owned = std::make_unique<smg::GxCommandProcessor>(host());
+    smg::GxCommandProcessor& gpu = *owned;
+    const auto set = [&](unsigned reg, unsigned r, unsigned g, unsigned b, unsigned a) {
+        gpu.tevColor[2 * reg] = a << 12 | r, gpu.tevColor[2 * reg + 1] = g << 12 | b;
+    };
+    std::uint8_t c[4] = {};
+    set(1, 0x12, 0x34, 0x56, 0x78);
+    check(smg::gxColor0Bytes(gpu, c) && c[0] == 0x12 && c[1] == 0x34 && c[2] == 0x56 && c[3] == 0x78, "C0's bytes are red, green, blue, alpha");
+    set(2, 0xFF, 0, 0xFF, 0);
+    check(smg::gxColor1Bytes(gpu, c) && c[0] == 0xFF && c[1] == 0 && c[2] == 0xFF && c[3] == 0, "C1's, from its own registers");
+    bool refused = true, taken = true;
+    for (unsigned component = 0; component < 4; ++component)
+        for (unsigned value : {0x100u, 0x1FFu, 0x400u, 0x7FFu, 0x700u}) {
+            unsigned parts[4] = {1, 2, 3, 4};
+            parts[component] = value;
+            set(1, parts[0], parts[1], parts[2], parts[3]);
+            refused &= !smg::gxColor0Bytes(gpu, c);
+        }
+    for (unsigned component = 0; component < 4; ++component)
+        for (unsigned value : {0u, 1u, 0x80u, 0xFFu}) {
+            unsigned parts[4] = {1, 2, 3, 4};
+            parts[component] = value;
+            set(1, parts[0], parts[1], parts[2], parts[3]);
+            taken &= smg::gxColor0Bytes(gpu, c) && c[component] == value;
+        }
+    check(refused, "a component over 255 or negative is not a byte color");
+    check(taken, "every byte value in every place is");
+}
+
 // With C0 riding, a program that also reads C1 takes it from a palette unit when the CPU path asks, so primitives whose
 // C1 alone differs share one program too; the GPU path's state keeps C1 a constant.
 void color1Rides() {
@@ -1793,6 +1825,7 @@ int runGxDrawTests() {
     dualTexgen();
     atlasPlace();
     color0Rides();
+    byteColors();
     color1Rides();
     decodedVertices();
     meshSpans();

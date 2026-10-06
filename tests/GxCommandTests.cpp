@@ -351,6 +351,29 @@ void runsOfLoads() {
     check(compares, "sameWords compares whole words");
     delete whole, delete bytes, delete listed;
 }
+
+// GXSetTevColor sends a color's second register three times, and a whole load repeated is read past: the registers and counts are those
+// of reading each load alone (a byte at a time), also where a masked load comes first, which only the first of two equal loads takes.
+void repeatedColorLoads() {
+    std::vector<std::uint8_t> stream;
+    const auto bp = [&](std::uint32_t value) { stream.push_back(0x61), put32(stream, value); };
+    bp(0xE2 << 24 | 0x00C0A0), bp(0xE3 << 24 | 0x00D0B0), bp(0xE3 << 24 | 0x00D0B0), bp(0xE3 << 24 | 0x00D0B0);  // C0
+    bp(0xE4 << 24 | 0x0A10AB), bp(0xE5 << 24 | 0x019037), bp(0xE5 << 24 | 0x019037), bp(0xE5 << 24 | 0x019037);  // C1
+    bp(0xFE << 24 | 0x00FF00), bp(0xE3 << 24 | 0x00AA55), bp(0xE3 << 24 | 0x00AA55);                              // a mask, then the load twice
+    bp(0xE6 << 24 | 0x800001), bp(0xE6 << 24 | 0x800001), bp(0x28 << 24 | 0x000001), bp(0x28 << 24 | 0x000001);  // a konst color, a plain register
+    bp(0xE2 << 24 | 0x00C0A0), bp(0xE2 << 24 | 0x00C0A0), bp(0xE2 << 24 | 0x00C0A1);                              // as it was twice, then not
+    auto* whole = new smg::GxCommandProcessor(host());
+    whole->put(stream.data(), static_cast<std::uint32_t>(stream.size()));
+    auto* bytes = new smg::GxCommandProcessor(host());
+    for (std::uint8_t byte : stream) bytes->put(&byte, 1);
+    check(whole->bp[0xE3] == 0x00AA55 && whole->tevColor[3] == 0x00AA55 && whole->bp[0xE2] == 0x00C0A1 && whole->tevKonst[6] == 0x800001 && whole->bp[0x28] == 1,
+          "a repeated load takes what it brings: the mask first, then the whole load");
+    check(!std::memcmp(whole->bp, bytes->bp, sizeof whole->bp) && !std::memcmp(whole->tevColor, bytes->tevColor, sizeof whole->tevColor) &&
+              !std::memcmp(whole->tevKonst, bytes->tevKonst, sizeof whole->tevKonst) && whole->bpChanges == bytes->bpChanges &&
+              whole->bpChangesBesideColors == bytes->bpChangesBesideColors && whole->color1Changes == bytes->color1Changes,
+          "reading a repeated load past leaves the registers and counts as reading it every time");
+    delete whole, delete bytes;
+}
 } // namespace
 
 int runGxCommandTests() {
@@ -364,6 +387,7 @@ int runGxCommandTests() {
     vertexDecoders();
     copyMode();
     runsOfLoads();
+    repeatedColorLoads();
     std::printf("%u GX command processor checks passed\n", checks);
     return 0;
 }

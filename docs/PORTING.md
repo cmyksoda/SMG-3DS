@@ -1192,6 +1192,23 @@ lighting, primitive kind, VAT and array changes between draws, NaNs and infiniti
 `runPass` hash the same as the old code on x86, and 3,000 on the ARM11 build, except for which NaN's sign a sum keeps,
 which the compiler chooses.
 
+**Particles, counted.** The same ARM11 counting over a stream of Dusty Dune's kind: 3,000 JPA particles, each its C0 and C1
+(`GXSetTevColor`, seven in ten of them), one position matrix and a call of a 32-byte quad list, C1 through the palette unit.
+A particle took 2,292 instructions: the CPU vertex path 754 (the clip matrix 206, vertices 227, texcoords 162), the renderer's
+list and draw glue 464, BP loads 292, XF 239, prepare 257, the command loop and calls 275. Now 1,891. The clip matrix is made
+with `toClip_` and the matrix in locals (every store to the output made the compiler read them again): 206 to 137. The
+decoded-list lookup was a `std::unordered_map::find` (a division by the bucket count): a direct-mapped index in front of it,
+as the states and meshes have; `sameBytes` reads each word of the list once. The palette's texel offsets and coordinates are
+a table, not Morton arithmetic and int-to-float conversions for each new C1. A texgen whose matrix rows didn't move
+(`foldHolds`) is skipped inline in `prepare`'s quick path, without `refold` and `foldStillHolds`. A TEV color's range test is one
+mask (`tevColorBytes`). Unculled quads write their six indices straight, and a BP load repeated whole straight after itself
+(`GXSetTevColor` sends its second register three times) is read past in `bpRun`. The same stream with the quad inline: 7.51
+to 6.65 million instructions a frame, with a texture matrix loaded for every particle 8.91 to 7.95, at 2,000 particles with a
+third of them loading one 4.62 to 3.96; the texture matrix's refold (about 600 a particle) is untouched. Everything the PICA
+is given is as it was: a hash of every call, uniform row, command-list word, vertex and index byte through 24 J3D-like frames
+and 16 particle frames is equal, as are 600 random particle streams on the ARM11 build (kinds of event between particles,
+lists rewritten or colliding in the index, 1,100 lists past the table's 1,024) and 8,000 vertex pipeline scenes on x86.
+
 **The Comet Observatory at 30.** At the session 8 build the Observatory ran 26 to 29 frames a second with the render
 thread busy 34.2 ms a frame. In order, each measured on the same standing-still route: the commonest commands are read
 without a call (`GxCommandProcessor::command` takes BP runs, CP and XF loads itself; BP runs keep the mask and change
