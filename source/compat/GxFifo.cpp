@@ -197,11 +197,11 @@ void enqueue(const Entry& entry) {
 
 // What the game thread wrote since it last handed over.
 void publish() {
-    const u32 size = static_cast<u32>(smgFifoAt - sPublishFrom);
+    const u32 size = static_cast<u32>(smgFifo.at - sPublishFrom);
     if (!size) return;
     sProduced += size;
     enqueue({sPublishFrom, size, size, static_cast<u8>(sMainStream), {}});
-    sPublishFrom = smgFifoAt;
+    sPublishFrom = smgFifo.at;
 }
 
 // Room for `bytes` more at the game thread's write point, in one piece: a skip to the ring's start when its end is
@@ -212,7 +212,7 @@ void makeRoom(u32 bytes) {
         LightLock_Lock(&sQueueLock);
         const u32 consumed = sConsumed;
         LightLock_Unlock(&sQueueLock);
-        const u32 free = RingBytes - (sProduced - consumed), toEnd = RingBytes - static_cast<u32>(smgFifoAt - sRing);
+        const u32 free = RingBytes - (sProduced - consumed), toEnd = RingBytes - static_cast<u32>(smgFifo.at - sRing);
         if (toEnd < bytes) {
             if (free < toEnd) {
                 waitFor([consumed] { return sConsumed != consumed; });
@@ -220,11 +220,11 @@ void makeRoom(u32 bytes) {
             }
             sProduced += toEnd;
             enqueue({nullptr, 0, toEnd, 0, {}});
-            smgFifoAt = sPublishFrom = sRing;
+            smgFifo.at = sPublishFrom = sRing;
             continue;
         }
         if (free >= bytes) {
-            smgFifoEnd = smgFifoAt + std::min({free, toEnd, Chunk});
+            smgFifo.end = smgFifo.at + std::min({free, toEnd, Chunk});
             return;
         }
         waitFor([consumed] { return sConsumed != consumed; });
@@ -251,23 +251,23 @@ void startRenderThread() {
 
 void begin(void* self) {
     processor().countCommands = smgDevGxTiming();
-    smgFifoThread = self;
+    smgFifo.thread = self;
     smgMarkGameThread();
     sMainStream = streamOf(reinterpret_cast<u32>(self));
     startRenderThread();
-    if (sRenderThread) smgFifoAt = sPublishFrom = sRing, smgFifoEnd = sRing + Chunk;
-    else smgFifoAt = sBuffer, smgFifoEnd = sBuffer + sizeof sBuffer;
+    if (sRenderThread) smgFifo.at = sPublishFrom = sRing, smgFifo.end = sRing + Chunk;
+    else smgFifo.at = sBuffer, smgFifo.end = sBuffer + sizeof sBuffer;
 }
 
 void flushBuffer() {
     if (sRenderThread) return publish();
-    if (smgFifoAt == sBuffer) return;
-    process(sMainStream, sBuffer, static_cast<u32>(smgFifoAt - sBuffer));
-    smgFifoAt = sBuffer;
+    if (smgFifo.at == sBuffer) return;
+    process(sMainStream, sBuffer, static_cast<u32>(smgFifo.at - sBuffer));
+    smgFifo.at = sBuffer;
 }
 
 void flushIfBuffering() {
-    if (getThreadLocalStorage() == smgFifoThread) flushBuffer();
+    if (getThreadLocalStorage() == smgFifo.thread) flushBuffer();
 }
 
 // Another thread's write: after what the game thread has handed over, as before its own buffered words.
@@ -281,9 +281,7 @@ void writeThrough(void* self, const u8* bytes, unsigned count) {
 } // namespace
 
 extern "C" {
-unsigned char* smgFifoAt = sBuffer;
-unsigned char* smgFifoEnd = sBuffer;  // nothing gathers until the first writer is known
-void* smgFifoThread = nullptr;
+SmgGXFifo smgFifo = {sBuffer, sBuffer, nullptr};  // nothing gathers until the first writer is known
 }
 
 extern "C" void (*smgGpuMemoryChanged)(const void* start, u32 size);  // source/compat/Os.cpp
@@ -329,7 +327,7 @@ volatile void* smgUnportedRegisters(const char* block) {
 void smgGXFifoFlush() { flushIfBuffering(); }
 
 // The game's own thread: the one that writes GX (GXInit's), for memos only it keeps.
-int smgOnGameThread() { return getThreadLocalStorage() == smgFifoThread; }
+int smgOnGameThread() { return getThreadLocalStorage() == smgFifo.thread; }
 
 namespace {
 // The write point sits at any byte (commands are 1, 5 or 9 bytes long), where newlib's memcpy goes a byte at a time:
@@ -345,7 +343,7 @@ void copyToFifo(u8* to, const u8* from, unsigned size) {
 } // namespace
 
 namespace {
-// The write point is kept in a local: a store through it may alias smgFifoAt itself, which is otherwise read again each word.
+// The write point is kept in a local: a store through it may alias smgFifo.at itself, which is otherwise read again each word.
 u8* putFloats(u8* at, const f32* values, unsigned count) {
     for (unsigned i = 0; i < count; ++i, at += 4) {
         u32 word;
@@ -359,41 +357,48 @@ u8* putFloats(u8* at, const f32* values, unsigned count) {
 
 void smgGXFifoFloats(const f32* values, unsigned count) {
     const unsigned bytes = 4 * count;
-    if (getThreadLocalStorage() != smgFifoThread || !sRenderThread) {
+    if (getThreadLocalStorage() != smgFifo.thread || !sRenderThread) {
         for (unsigned i = 0; i < count; ++i) smgGXFifo_f32(values[i]);
         return;
     }
-    if (smgFifoAt + bytes > smgFifoEnd) makeRoom(bytes);
-    smgFifoAt = putFloats(smgFifoAt, values, count);
+    if (smgFifo.at + bytes > smgFifo.end) makeRoom(bytes);
+    smgFifo.at = putFloats(smgFifo.at, values, count);
 }
 
-void smgGXFifoXfLoad(u32 reg, const f32* values, unsigned count) {
+// What smgGXFifoXfLoad (GxFifoWrite.h) leaves: another thread's load, or one that does not fit inline.
+void smgGXFifoXfLoadSlow(unsigned reg, const f32* values, unsigned count) {
     constexpr u8 LoadXf = 0x10;  // CP_OPCODE(0, CP_CMD_XF_LOADREGS)
     const unsigned bytes = 5 + 4 * count;
-    if (getThreadLocalStorage() != smgFifoThread || !sRenderThread) {
+    if (getThreadLocalStorage() != smgFifo.thread || !sRenderThread) {
         smgGXFifo_u8(LoadXf), smgGXFifo_u32(reg);
         for (unsigned i = 0; i < count; ++i) smgGXFifo_f32(values[i]);
         return;
     }
-    if (smgFifoAt + bytes > smgFifoEnd) makeRoom(bytes);
-    u8* at = smgFifoAt;
+    if (smgFifo.at + bytes > smgFifo.end) makeRoom(bytes);
+    u8* at = smgFifo.at;
     at[0] = LoadXf;
     reg = __builtin_bswap32(reg);
     __builtin_memcpy(at + 1, &reg, 4);
-    smgFifoAt = putFloats(at + 5, values, count);
+    smgFifo.at = putFloats(at + 5, values, count);
+}
+
+// The same for smgGXFifoXfLoadNrm, a row of three at a time.
+void smgGXFifoXfLoadNrmSlow(unsigned reg, const f32* mtx) {
+    smgGXFifoSlow(0x10, 1), smgGXFifoSlow(reg, 4);
+    for (unsigned row = 0; row < 3; ++row) smgGXFifoFloats(mtx + 4 * row, 3);
 }
 
 void smgGXFifoBytes(const void* bytes, unsigned size) {
     const u8* from = static_cast<const u8*>(bytes);
-    if (getThreadLocalStorage() != smgFifoThread || !sRenderThread) {
+    if (getThreadLocalStorage() != smgFifo.thread || !sRenderThread) {
         for (unsigned i = 0; i < size; ++i) smgGXFifoSlow(from[i], 1);
         return;
     }
     while (size) {
-        if (smgFifoAt == smgFifoEnd) makeRoom(1);
-        const unsigned n = std::min<unsigned>(size, static_cast<unsigned>(smgFifoEnd - smgFifoAt));
-        copyToFifo(smgFifoAt, from, n);
-        smgFifoAt += n, from += n, size -= n;
+        if (smgFifo.at == smgFifo.end) makeRoom(1);
+        const unsigned n = std::min<unsigned>(size, static_cast<unsigned>(smgFifo.end - smgFifo.at));
+        copyToFifo(smgFifo.at, from, n);
+        smgFifo.at += n, from += n, size -= n;
     }
 }
 
@@ -402,6 +407,16 @@ void smgGXFifoBytes(const void* bytes, unsigned size) {
 namespace {
 const u8* sMatrixArrays[4] = {};
 u32 sMatrixStrides[4] = {};
+
+// Words as the stream holds them, from the CPU's own order; inlined, so a matrix's size unrolls the loop.
+__attribute__((always_inline)) inline void putWords(u8* to, const u8* from, unsigned count) {
+    for (unsigned i = 0; i < count; ++i) {
+        u32 word;
+        std::memcpy(&word, from + 4 * i, 4);
+        word = __builtin_bswap32(word);
+        std::memcpy(to + 4 * i, &word, 4);
+    }
+}
 }
 
 void smgGXMatrixArray(unsigned array, const void* base, unsigned stride) {
@@ -416,18 +431,15 @@ void smgGXLoadIndexedNow(unsigned command, unsigned index, unsigned target) {
     }
     const u8* from = sMatrixArrays[array] + index * sMatrixStrides[array];
     const unsigned bytes = 5 + 4 * count;
-    if (getThreadLocalStorage() == smgFifoThread && sRenderThread) {
+    if (getThreadLocalStorage() == smgFifo.thread && sRenderThread) {
         // The usual case, the game thread's: the whole load stored at once, each word big-endian as the stream holds it.
-        if (smgFifoAt + bytes > smgFifoEnd) makeRoom(bytes);
-        u8* at = smgFifoAt;
+        if (smgFifo.at + bytes > smgFifo.end) makeRoom(bytes);
+        u8* at = smgFifo.at;
         at[0] = 0x10, at[1] = 0, at[2] = static_cast<u8>(count - 1), at[3] = static_cast<u8>(address >> 8), at[4] = static_cast<u8>(address);
-        for (unsigned i = 0; i < count; ++i) {
-            u32 word;
-            std::memcpy(&word, from + 4 * i, 4);  // the CPU's own order, as the processor reads an array
-            word = __builtin_bswap32(word);
-            std::memcpy(at + 5 + 4 * i, &word, 4);
-        }
-        smgFifoAt = at + bytes;
+        if (count == 12) putWords(at + 5, from, 12);
+        else if (count == 9) putWords(at + 5, from, 9);
+        else putWords(at + 5, from, count);
+        smgFifo.at = at + bytes;
         return;
     }
     smgGXFifo_u8(0x10), smgGXFifo_u16(static_cast<unsigned short>(count - 1)), smgGXFifo_u16(static_cast<unsigned short>(address));
@@ -493,15 +505,15 @@ int smgSwapSinceDrawn(const void* owner) {
 
 void smgGXFifoSlow(unsigned value, unsigned bytes) {
     void* const self = getThreadLocalStorage();
-    if (!smgFifoThread) begin(self);  // the first GX writer, GXInit's: the main thread
+    if (!smgFifo.thread) begin(self);  // the first GX writer, GXInit's: the main thread
     u8 order[4];
     for (unsigned i = 0; i < bytes; ++i) order[i] = static_cast<u8>(value >> (8 * (bytes - 1 - i)));
-    if (self != smgFifoThread) return writeThrough(self, order, bytes);
-    if (smgFifoAt + bytes > smgFifoEnd) {
+    if (self != smgFifo.thread) return writeThrough(self, order, bytes);
+    if (smgFifo.at + bytes > smgFifo.end) {
         if (sRenderThread) makeRoom(bytes);
         else flushBuffer();
     }
-    std::memcpy(smgFifoAt, order, bytes);
-    smgFifoAt += bytes;
+    std::memcpy(smgFifo.at, order, bytes);
+    smgFifo.at += bytes;
 }
 }

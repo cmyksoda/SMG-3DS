@@ -834,28 +834,54 @@ adapt("src/RVL_SDK/gd/GDBase.c", "RVL_SDK/gd/GDBase.cpp", [
 ])
 
 # The Wii's write-gather pipe to its GPU: the port's FIFO takes its writes (source/compat/GxFifo.cpp).
+gx_vert = (root / "libs/RVL_SDK/include/revolution/gx/GXVert.h").read_text()
+gx_vertex_writers = gx_vert[gx_vert.index("#define __GXCDEF1(func, ts, td)"):gx_vert.index("__GXCDEF(GXCmd, 1, u8)")]
 adapt("libs/RVL_SDK/include/revolution/gx/GXVert.h", "include/revolution/gx/GXVert.h", [
     ("#ifdef __MWERKS__\nvolatile PPCWGPipe GXWGFifo : 0xCC008000;\n#else\nvolatile PPCWGPipe GXWGFifo;\n#endif",
-     "#ifdef __MWERKS__\nvolatile PPCWGPipe GXWGFifo : 0xCC008000;\n#define GXWGFIFO_PUT(td, v) (GXWGFifo.td = (td)(v))\n#else\n"
+     "#ifdef __MWERKS__\nvolatile PPCWGPipe GXWGFifo : 0xCC008000;\n#define GXWGFIFO_PUT(td, v) (GXWGFifo.td = (td)(v))\n"
+     "#define GXWGFIFO_PUT2(td, x, y) (GXWGFIFO_PUT(td, x), GXWGFIFO_PUT(td, y))\n"
+     "#define GXWGFIFO_PUT3(td, x, y, z) (GXWGFIFO_PUT2(td, x, y), GXWGFIFO_PUT(td, z))\n"
+     "#define GXWGFIFO_PUT4(td, x, y, z, w) (GXWGFIFO_PUT3(td, x, y, z), GXWGFIFO_PUT(td, w))\n#else\n"
      "extern volatile PPCWGPipe GXWGFifo;\n"
      "// The pipe to the GPU is the port's FIFO, which takes each value big-endian as the Wii's pipe does.\n"
-     "#include <smg/GxFifoWrite.h>\n#define GXWGFIFO_PUT(td, v) smgGXFifo_##td((td)(v))\n#endif", 1),
-    ("GXWGFifo.td = (td)x;", "GXWGFIFO_PUT(td, x);", 4),
-    ("GXWGFifo.td = (td)y;", "GXWGFIFO_PUT(td, y);", 3),
-    ("GXWGFifo.td = (td)z;", "GXWGFIFO_PUT(td, z);", 2),
-    ("GXWGFifo.td = (td)w;", "GXWGFIFO_PUT(td, w);", 1),
+     "#include <smg/GxFifoWrite.h>\n#define GXWGFIFO_PUT(td, v) smgGXFifo_##td((td)(v))\n"
+     "// A vertex's values of one type go in with one look for room.\n"
+     "#define GXWGFIFO_BITS(td, v) SMG_GX_FIFO_BITS_##td((td)(v))\n"
+     "#define GXWGFIFO_PIECE(td, v) GXWGFIFO_BITS(td, v), SMG_GX_FIFO_BYTES_##td\n"
+     "#define GXWGFIFO_PUT2(td, x, y) smgGXFifoPut2(GXWGFIFO_PIECE(td, x), GXWGFIFO_PIECE(td, y))\n"
+     "#define GXWGFIFO_PUT3(td, x, y, z) smgGXFifoPut3(GXWGFIFO_PIECE(td, x), GXWGFIFO_PIECE(td, y), GXWGFIFO_PIECE(td, z))\n"
+     "#define GXWGFIFO_PUT4(td, x, y, z, w) smgGXFifoPut4(GXWGFIFO_PIECE(td, x), GXWGFIFO_PIECE(td, y), GXWGFIFO_PIECE(td, z), GXWGFIFO_PIECE(td, w))\n#endif", 1),
     # Inline, so a file that includes the writers without calling them emits none.
-    ("    static void func(", "    static inline void func(", 4),
+    (gx_vertex_writers,
+     "#define __GXCDEF1(func, ts, td) static inline void func(const ts x) { GXWGFIFO_PUT(td, x); }\n"
+     "#define __GXCDEF2(func, ts, td) static inline void func(const ts x, const ts y) { GXWGFIFO_PUT2(td, x, y); }\n"
+     "#define __GXCDEF3(func, ts, td) static inline void func(const ts x, const ts y, const ts z) { GXWGFIFO_PUT3(td, x, y, z); }\n"
+     "#define __GXCDEF4(func, ts, td) static inline void func(const ts x, const ts y, const ts z, const ts w) { GXWGFIFO_PUT4(td, x, y, z, w); }\n\n", 1),
 ])
 
 # J3D's own index loads name its double-buffered draw matrices, which calcAnim rewrites while the render thread is still
 # a frame behind: they go as immediate loads of what the index names when sent (source/compat/GxFifo.cpp).
 adapt("libs/JSystem/include/JSystem/J3DGraphBase/J3DFifo.hpp", "include/JSystem/J3DGraphBase/J3DFifo.hpp", [
     ("#include <revolution/gx/GXVert.h>\n",
-     "#include <revolution/gx/GXVert.h>\n\nextern \"C\" void smgGXLoadIndexedNow(unsigned command, unsigned index, unsigned target);\n", 1),
+     "#include <revolution/gx/GXVert.h>\n\nextern \"C\" void smgGXLoadIndexedNow(unsigned command, unsigned index, unsigned target);\n\n"
+     "// The same commands as pieces of a run (smgGXFifoRun).\n"
+     "template <class Out> inline void J3DFifoLoadCPCmd(Out& out, u8 reg, u32 value) {\n    out.u8(0x08);\n    out.u8(reg);\n    out.u32(value);\n}\n\n"
+     "template <class Out> inline void J3DFifoLoadXFCmdHdr(Out& out, u16 addr, u8 len) {\n    out.u8(0x10);\n    out.u16(len - 1);\n    out.u16(addr);\n}\n", 1),
     ("    GXWGFifo.u8 = cmd;\n    GXWGFifo.u16 = indx;\n    GXWGFifo.u16 = addr;", "    smgGXLoadIndexedNow(cmd, indx, addr);", 1),
     ("    GXCmd1u8(0x28);\n    GXCmd1u16(index);\n    GXCmd1u16(((9 - 1) << 12) | (u16)((addr * 3) + 0x400));",
      "    smgGXLoadIndexedNow(0x28, index, ((9 - 1) << 12) | (u16)((addr * 3) + 0x400));", 1),
+    # A command's pieces go in with one look for room.
+    ("    GXCmd1u8(0x10);\n    GXCmd1u16(len - 1);\n    GXCmd1u16(addr);", "    smgGXFifoPut3(0x10, 1, len - 1, 2, addr, 2);", 2),
+    ("    GXCmd1u8(0x08);\n    GXCmd1u8(reg);\n    GXCmd1u32(value);", "    smgGXFifoPut3(0x08, 1, reg, 1, value, 4);", 1),
+    ("    GXCmd1u8(0x61);\n    GXCmd1u32(regval);", "    smgGXFifoPut2(0x61, 1, regval, 4);", 1),
+])
+# A shape's current matrix indices (two CP loads, an XF load of the same two words) go in with one look for room.
+adapt("libs/JSystem/include/JSystem/J3DGraphBase/J3DShape.hpp", "include/JSystem/J3DGraphBase/J3DShape.hpp", [
+    ("    void load() const {\n        J3DFifoLoadCPCmd(0x30, mMtxIdxRegA);\n        J3DFifoLoadCPCmd(0x40, mMtxIdxRegB);\n"
+     "        J3DFifoLoadXFCmdHdr(0x1018, 2);\n        GXCmd1u32(mMtxIdxRegA);\n        GXCmd1u32(mMtxIdxRegB);\n    }",
+     "    void load() const {\n        smgGXFifoRun(6 + 6 + 5 + 4 + 4, [&](auto& out) {\n            J3DFifoLoadCPCmd(out, 0x30, mMtxIdxRegA);\n"
+     "            J3DFifoLoadCPCmd(out, 0x40, mMtxIdxRegB);\n            J3DFifoLoadXFCmdHdr(out, 0x1018, 2);\n"
+     "            out.u32(mMtxIdxRegA);\n            out.u32(mMtxIdxRegB);\n        });\n    }", 1),
 ])
 # J3D's deformed vertices are double-buffered by calcAnim, and the render thread may still read the last drawn frame's:
 # they swap only when a frame has been drawn since (smgSwapSinceDrawn, source/compat/GxFifo.cpp).
@@ -1190,6 +1216,15 @@ adapt("src/JSystem/J3DGraphBase/J3DShape.cpp", "JSystem/J3DGraphBase/J3DShape.cp
     # which the command processor undoes.
     ("#include <revolution/gd.h>\n", "#include <revolution/gd.h>\n#include <revolution/os.h>\n", 1),
     ("J3DLoadCPCmd(0xA0 + idx, ((uintptr_t)data & 0x7FFFFFFF));", "J3DLoadCPCmd(0xA0 + idx, OSCachedToPhysical(data));", 1),
+    # The three array bases are one run of CP loads, in one look for room.
+    ("static void J3DLoadArrayBasePtr(GXAttr attr, void* data) {", "template <class Out> static void J3DLoadArrayBasePtr(Out& out, GXAttr attr, void* data) {", 1),
+    ("    J3DLoadCPCmd(0xA0 + idx, OSCachedToPhysical(data));", "    J3DFifoLoadCPCmd(out, 0xA0 + idx, OSCachedToPhysical(data));", 1),
+    ("void J3DShape::loadVtxArray() const {\n    J3DLoadArrayBasePtr(GX_VA_POS, j3dSys.getVtxPos());\n\n    if (!mHasNBT) {\n"
+     "        J3DLoadArrayBasePtr(GX_VA_NRM, j3dSys.getVtxNrm());\n    }\n\n    J3DLoadArrayBasePtr(GX_VA_CLR0, j3dSys.getVtxCol());\n}",
+     "void J3DShape::loadVtxArray() const {\n    smgGXFifoRun(mHasNBT ? 12 : 18, [&](auto& out) {\n"
+     "        J3DLoadArrayBasePtr(out, GX_VA_POS, j3dSys.getVtxPos());\n        if (!mHasNBT) {\n"
+     "            J3DLoadArrayBasePtr(out, GX_VA_NRM, j3dSys.getVtxNrm());\n        }\n"
+     "        J3DLoadArrayBasePtr(out, GX_VA_CLR0, j3dSys.getVtxCol());\n    });\n}", 1),
 ])
 
 # Class operator new and delete take size_t, which is unsigned int on ARM where u32 is unsigned long.
@@ -1806,6 +1841,14 @@ adapt("libs/RVL_SDK/include/revolution/gx/GXRegs.h", "include/revolution/gx/GXRe
     for kind, arg, field, cast in [("U8", "ub", "u8", "u8"), ("U16", "us", "u16", "u16"), ("S16", "us", "s16", "u16"),
                                    ("U32", "ui", "u32", "u32"), ("F32", "f", "f32", "f32")]
 ] + [("#define MEM_PE_REQCOUNTH_IDX", "#include <smg/GxFifoWrite.h>\n\n#define MEM_PE_REQCOUNTH_IDX", 1),
+      # A BP, CP or XF load is one command: its pieces go in with one look for room, the same bytes.
+      ("#ifdef __MWERKS__\n#define GX_DEFINE_GX_READ_COUNTER(unit)",
+       "#undef GX_WRITE_CP_STRM_REG\n#undef GX_WRITE_XF_REG\n#undef GX_WRITE_RA_REG\n"
+       "#define GX_WRITE_CP_STRM_REG(addr, vtxfmt, data) smgGXFifoPut3(CP_OPCODE(0, 1), 1, CP_STREAM_REG((vtxfmt), (addr)), 1, (u32)(data), 4)\n"
+       "#define GX_WRITE_XF_REG(addr, data, cnt) smgGXFifoPut3(CP_OPCODE(0, 0x2), 1, CP_XF_LOADREGS((addr), (cnt)), 4, (u32)(data), 4)\n"
+       "#define GX_WRITE_RA_REG(reg) smgGXFifoPut2(CP_OPCODE(1, 0xC), 1, (u32)(reg), 4)\n"
+       "#define GX_WRITE_RA_REG2(first, second) smgGXFifoPut4(CP_OPCODE(1, 0xC), 1, (u32)(first), 4, CP_OPCODE(1, 0xC), 1, (u32)(second), 4)\n\n"
+       "#ifdef __MWERKS__\n#define GX_DEFINE_GX_READ_COUNTER(unit)", 1),
       # Upstream's fallbacks for other compilers are empty, fit only for an editor's parser: the counters read
       # nothing and FAST_FLAG_SET, which packs every register's fields, does nothing. GCC gets real ones:
       # Metrowerks' counter reader, and rlwimi's insert under its mask in C.
@@ -2450,6 +2493,17 @@ adapt("src/RVL_SDK/gx/GXTev.c", "RVL_SDK/gx/GXTev.c", [
     # A TEV color's BG half goes three times for the Wii GPU's register latch; the port's processor takes it once (a
     # particle sets two colors, so this was four of its loads).
     ("    GX_WRITE_RA_REG(regBG);\n    GX_WRITE_RA_REG(regBG);\n    GX_WRITE_RA_REG(regBG);\n", "    GX_WRITE_RA_REG(regBG);\n", 2),
+    # The two halves of a color register, and of the Z texture's, go in with one look for room.
+    ("    GX_WRITE_RA_REG(regRA);\n    GX_WRITE_RA_REG(regBG);\n", "    GX_WRITE_RA_REG2(regRA, regBG);\n", 2),
+    ("    GX_WRITE_RA_REG(regRA);\n    GX_WRITE_RA_REG(regBG); \n", "    GX_WRITE_RA_REG2(regRA, regBG);\n", 1),
+    ("    GX_WRITE_RA_REG(zenv0);\n    GX_WRITE_RA_REG(zenv1);\n", "    GX_WRITE_RA_REG2(zenv0, zenv1);\n", 1),
+])
+# A texture's six registers go in with one look for room.
+adapt("src/RVL_SDK/gx/GXTexture.c", "RVL_SDK/gx/GXTexture.c", [
+    ("    GX_WRITE_RA_REG(t->mode0);\n    GX_WRITE_RA_REG(t->mode1);\n    GX_WRITE_RA_REG(t->image0);\n"
+     "    GX_WRITE_RA_REG(r->image1);\n    GX_WRITE_RA_REG(r->image2);\n    GX_WRITE_RA_REG(t->image3);\n",
+     "    smgGXFifoRun(6 * 5, [&](auto& out) {\n        out.bp(t->mode0), out.bp(t->mode1), out.bp(t->image0);\n"
+     "        out.bp(r->image1), out.bp(r->image2), out.bp(t->image3);\n    });\n", 1),
 ])
 adapt("src/RVL_SDK/gx/GXPixel.c", "RVL_SDK/gx/GXPixel.c", [inc, ("    rgba = *(u32*)(&color);", "    rgba = smgColorWord(color);", 1)])
 adapt("src/RVL_SDK/gx/GXTransform.c", "RVL_SDK/gx/GXTransform.c", [
@@ -2459,6 +2513,8 @@ adapt("src/RVL_SDK/gx/GXTransform.c", "RVL_SDK/gx/GXTransform.c", [
     # A matrix sent whole (every particle sends one): the same bytes, with one look for room.
     ("    GX_WRITE_U8(CP_OPCODE(0, CP_CMD_XF_LOADREGS));\n    GX_WRITE_U32(reg);\n    WriteMTXPS4x3(mtx, (volatile void*)GX_FIFO_ADDR);\n",
      "    smgGXFifoXfLoad(reg, &mtx[0][0], 12);\n", 1),
+    ("    GX_WRITE_U8(CP_OPCODE(0, CP_CMD_XF_LOADREGS));\n    GX_WRITE_U32(reg);\n\n    WriteMTXPS3x3from3x4((void*)mtx, (volatile void*)0xCC008000);\n",
+     "    smgGXFifoXfLoadNrm(reg, &mtx[0][0]);\n", 1),
     ("    GX_WRITE_U8(CP_OPCODE(0, CP_CMD_XF_LOADREGS));\n    GX_WRITE_U32(reg);\n\n    if (type == GX_MTX3x4) {\n"
      "        WriteMTXPS4x3(mtx, (volatile void*)GX_FIFO_ADDR);\n    } else {\n        WriteMTXPS4x2(mtx, (volatile void*)GX_FIFO_ADDR);\n    }\n",
      "    smgGXFifoXfLoad(reg, &mtx[0][0], count);\n", 1),
@@ -2476,10 +2532,15 @@ adapt("src/RVL_SDK/gx/GXLight.c", "RVL_SDK/gx/GXLight.c", [
     ("(*(u32*)(&mat_color)) >> 8", "smgColorWord(mat_color) >> 8", 2), ("*(u32*)(&mat_color))", "smgColorWord(mat_color))", 2),
     ("#else\nstatic inline void WriteLightObjPS(const GXLightObjInt* lt_obj, void* dest);\n#endif",
      "#else\n// Three reserved words, the color, then the attenuation, position and direction, as the asm stores them.\n"
-     "static inline void WriteLightObjPS(const GXLightObjInt* lt_obj, void*) {\n"
-     "    for (int i = 0; i < 3; ++i) GX_WRITE_U32(0);\n    GX_WRITE_U32(lt_obj->Color);\n"
-     "    for (int i = 0; i < 3; ++i) GX_WRITE_F32(lt_obj->a[i]);\n    for (int i = 0; i < 3; ++i) GX_WRITE_F32(lt_obj->k[i]);\n"
-     "    for (int i = 0; i < 3; ++i) GX_WRITE_F32(lt_obj->lpos[i]);\n    for (int i = 0; i < 3; ++i) GX_WRITE_F32(lt_obj->ldir[i]);\n}\n#endif", 1),
+     "template <class Out> static inline void WriteLightObjPS(Out& out, const GXLightObjInt* lt_obj) {\n"
+     "    for (int i = 0; i < 3; ++i) out.u32(0);\n    out.u32(lt_obj->Color);\n"
+     "    for (int i = 0; i < 3; ++i) out.f32(lt_obj->a[i]);\n    for (int i = 0; i < 3; ++i) out.f32(lt_obj->k[i]);\n"
+     "    for (int i = 0; i < 3; ++i) out.f32(lt_obj->lpos[i]);\n    for (int i = 0; i < 3; ++i) out.f32(lt_obj->ldir[i]);\n}\n#endif", 1),
+    # The whole load, its header and sixteen words, goes in with one look for room.
+    ("    GX_WRITE_U8(CP_OPCODE(0, 2));\n    GX_WRITE_U32(CP_XF_LOADREGS((addr), 0xF));\n    WriteLightObjPS(obj, (void*)0xCC008000);\n",
+     "#ifdef __MWERKS__\n    GX_WRITE_U8(CP_OPCODE(0, 2));\n    GX_WRITE_U32(CP_XF_LOADREGS((addr), 0xF));\n    WriteLightObjPS(obj, (void*)0xCC008000);\n#else\n"
+     "    smgGXFifoRun(5 + 4 * 16, [&](auto& out) {\n        out.u8(CP_OPCODE(0, 2));\n        out.u32(CP_XF_LOADREGS((addr), 0xF));\n"
+     "        WriteLightObjPS(out, obj);\n    });\n#endif\n", 1),
 ])
 adapt("src/RVL_SDK/gx/GXInit.c", "RVL_SDK/gx/GXInit.c", [
     ('#include "revolution/gx.h"\n', '#include "revolution/gx.h"\n#include <smg/GxPrivate.h>\n', 1),
@@ -2495,13 +2556,14 @@ adapt("src/RVL_SDK/gx/GXFrameBuf.c", "RVL_SDK/gx/GXFrameBuf.c", [
 adapt("src/RVL_SDK/gx/GXDisplayList.c", "RVL_SDK/gx/GXDisplayList.c", [
     ('#include "revolution/gx.h"\n', '#include "revolution/gx.h"\n#include <smg/GxPrivate.h>\n', 1),
     ("    GX_WRITE_U8(0x40);\n    GX_WRITE_U32((u32)list);\n    GX_WRITE_U32((u32)nbytes);\n}\n",
-     "    GX_WRITE_U8(0x40);\n    GX_WRITE_U32((u32)list);\n    GX_WRITE_U32((u32)nbytes);\n}\n\n"
+     "    smgGXFifoPut3(0x40, 1, (u32)list, 4, (u32)nbytes, 4);\n}\n\n"
      "void smgGXCallDisplayListNow(const void* list, u32 nbytes) {\n    if (gx->dirtyState) {\n        __GXSetDirtyState();\n    }\n\n"
      "    if (!(*(u32*)(&gx->vNumNot))) {\n        __GXSendFlushPrim();\n    }\n\n    smgGXFifoBytes(list, nbytes);\n}\n", 1),
 ])
 # The flush primitive is a strip of one repeated vertex, for the Wii GPU's vertex cache after matrix loads: it covers no
 # pixels and the port's GPU path has no such cache, so none is sent (JPA would send one before every particle).
 adapt("src/RVL_SDK/gx/GXGeometry.c", "RVL_SDK/gx/GXGeometry.c", [
+    ("    GX_WRITE_U8((vtxfmt | type));\n    GX_WRITE_U16(nverts);\n}", "    smgGXFifoPut2(vtxfmt | type, 1, nverts, 2);\n}", 1),
     ("""void __GXSendFlushPrim(void) {
     u32 i, numD;
     numD = (u32)(gx->vNum * gx->vLim);
