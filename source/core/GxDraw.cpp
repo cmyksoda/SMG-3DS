@@ -1075,7 +1075,7 @@ bool GxVertexPipeline::meshSpan(const std::uint8_t* list, std::uint32_t size, co
 unsigned GxVertexPipeline::buildMesh(const std::uint8_t* list, std::uint32_t size, GxMesh& mesh) const {
     mesh = GxMesh{};
     mesh.arraysLo = reinterpret_cast<const std::uint8_t*>(UINTPTR_MAX), mesh.arraysHi = nullptr;
-    const bool fromVertex = meshColorFromVertex();
+    const MeshCopy attributes = meshCopy(meshColorFromVertex());
     std::uint8_t slotTexgen[CombinerProgram::MaxUnits] = {};
     std::uint32_t at = 0;
     while (at < size) {
@@ -1097,7 +1097,7 @@ unsigned GxVertexPipeline::buildMesh(const std::uint8_t* list, std::uint32_t siz
             layout.read(list + at + 3 + std::uint32_t(i) * layout.size, v);
             layout.indexedSpan(list + at + 3 + std::uint32_t(i) * layout.size, mesh.arraysLo, mesh.arraysHi);
             GxMeshVertex m{};
-            meshAttributes(v, fromVertex, m);
+            meshAttributes(attributes, &v, 1, &m, nullptr);
             if (perVertexMatrix_) {
                 if (v.matrixIndex % 3 || v.matrixIndex >= 30) return MeshMatrixIndex;
                 const unsigned slot = v.matrixIndex / 3;
@@ -1188,30 +1188,89 @@ unsigned GxVertexPipeline::buildMesh(const std::uint8_t* list, std::uint32_t siz
     return MeshOk;
 }
 
-void GxVertexPipeline::meshAttributes(const GxVertex& v, bool fromVertex, GxMeshVertex& m) const {
-    std::memcpy(m.position, v.position, sizeof m.position);
-    if (fromVertex) std::memcpy(m.color, v.color[0], 4);
-    for (unsigned u = 0; u < units_; ++u) {
-        const TexGen& t = texgens_[u];
-        float* in = m.source[u];
-        if (t.source == 0) std::memcpy(in, v.position, 12);
-        else if (t.source == 1) std::memcpy(in, v.normal, 12);
-        else in[0] = v.texcoord[t.source - 5][0], in[1] = v.texcoord[t.source - 5][1], in[2] = 1;
-        if (!t.threeInputs) in[2] = 1;
+GxVertexPipeline::MeshCopy GxVertexPipeline::meshCopy(bool fromVertex) const {
+    MeshCopy copy;
+    copy.fromVertex = fromVertex, copy.units = units_;
+    for (unsigned u = 0; u < units_; ++u) copy.input[u] = texgens_[u].input, copy.wide[u] = texgens_[u].threeInputs && texgens_[u].source <= 1;
+    return copy;
+}
+
+// `count` vertices into as many GxMeshVertex, each field written (a refresh may land on memory that holds anything);
+// the slot only when `slots` is given, from the one in the same place there.
+void GxVertexPipeline::meshAttributes(const MeshCopy& copy, const GxVertex* v, std::size_t count, GxMeshVertex* m, const GxMeshVertex* slots) {
+    using Copy = void (*)(MeshCopy, const GxVertex*, std::size_t, GxMeshVertex*, const GxMeshVertex*);
+    static constexpr Copy copies[CombinerProgram::MaxUnits + 1][2] = {{copyAttributes<0, false>, copyAttributes<0, true>}, {copyAttributes<1, false>, copyAttributes<1, true>},
+                                                                      {copyAttributes<2, false>, copyAttributes<2, true>}, {copyAttributes<3, false>, copyAttributes<3, true>}};
+    copies[copy.units][copy.fromVertex](copy, v, count, m, slots);
+}
+
+// By value, so its fields stay in registers: the compiler can't tell that the stores below miss it.
+template <unsigned Units, bool FromVertex>
+void GxVertexPipeline::copyAttributes(MeshCopy copy, const GxVertex* v, std::size_t count, GxMeshVertex* m, const GxMeshVertex* slots) {
+    for (std::size_t i = 0; i < count; ++i, ++v, ++m) {
+        std::memcpy(m->position, v->position, sizeof m->position);
+        if constexpr (FromVertex) std::memcpy(m->color, v->color[0], 4);
+        else std::memset(m->color, 0, 4);
+        const std::uint8_t* const vertex = reinterpret_cast<const std::uint8_t*>(v);
+        for (unsigned u = 0; u < Units; ++u) {
+            std::memcpy(m->source[u], vertex + copy.input[u], 8);
+            if (copy.wide[u]) std::memcpy(m->source[u] + 2, vertex + copy.input[u] + 8, 4);
+            else m->source[u][2] = 1;
+        }
+        for (unsigned u = Units; u < CombinerProgram::MaxUnits; ++u) std::memset(m->source[u], 0, sizeof m->source[u]);
+        std::memcpy(m->normal, v->normal, sizeof m->normal);
+        if (slots) m->slot = slots++->slot;
     }
-    std::memcpy(m.normal, v.normal, sizeof m.normal);
+}
+
+// The attributes meshAttributes reads.
+std::uint16_t GxVertexPipeline::meshReads(bool fromVertex) const {
+    std::uint16_t mask = GxVertexLayout::ReadPosition | GxVertexLayout::ReadNormal | (fromVertex ? GxVertexLayout::ReadColor0 : 0);
+    for (unsigned u = 0; u < units_; ++u)
+        if (texgens_[u].source >= 5) mask = static_cast<std::uint16_t>(mask | 1u << (texgens_[u].source - 1));
+    return mask;
 }
 
 bool GxVertexPipeline::refreshMesh(const std::uint8_t* list, std::uint32_t size, const std::uint32_t* origin, const GxMeshVertex* built,
                                    GxMeshVertex* out, std::size_t count) const {
     const bool fromVertex = meshColorFromVertex();
+    const std::uint16_t mask = meshReads(fromVertex);
+    const MeshCopy attributes = meshCopy(fromVertex);
     // An unlit mesh keeps its list's vertices in order, decoded straight into place; a lit one's groups copy them in
     // triangle order, gathered from a scratch kept between refreshes (moving meshes refresh every frame).
-    bool inOrder = true;
-    for (std::size_t i = 0; i < count && inOrder; ++i) inOrder = origin[i] == i;
+    std::size_t ordered = 0;
+    while (ordered < count && origin[ordered] == ordered) ++ordered;
+    const bool inOrder = ordered == count;
     thread_local std::vector<GxMeshVertex> fresh;
-    fresh.clear();
+    // Primitives run a few vertices, so vertices are decoded RefreshChunk at a time, from wherever each starts, in the
+    // format of the primitive that began the chunk.
+    constexpr unsigned RefreshChunk = 32;
+    alignas(GxVertex) std::uint8_t storage[RefreshChunk * sizeof(GxVertex)];
+    GxVertex* const chunk = reinterpret_cast<GxVertex*>(storage);
+    const std::uint8_t* vertices[RefreshChunk];
+    // A plan leaves the attributes its format lacks, and a narrow one's last components, as they were: they must read
+    // as zero, as the build's fresh GxVertex has them, so a new plan zeroes what the last had written and it won't.
+    constexpr std::uint8_t Components[12] = {3, 3, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2};  // a color counts as one
+    std::uint8_t zeroFrom[12];  // from this component on, each attribute is zero in every chunk vertex
+    std::copy(Components, Components + 12, zeroFrom);
+    const auto clear = [&](unsigned a, unsigned k) {
+        for (unsigned i = 0; i < RefreshChunk; ++i) {
+            if (a == 2) std::memset(chunk[i].color[0], 0, 4);
+            else (a == 0 ? chunk[i].position : a == 1 ? chunk[i].normal : chunk[i].texcoord[a - 4])[k] = 0;
+        }
+    };
+    const GxVertexLayout* layouts[8] = {};
+    GxVertexLayout::Plan plan;
+    unsigned format = 8, filled = 0;
     std::size_t decoded = 0;
+    const auto flush = [&] {
+        if (!filled) return;
+        if (!inOrder && fresh.size() < decoded + filled) fresh.resize(decoded + filled);
+        GxMeshVertex* const into = inOrder ? out + decoded : fresh.data() + decoded;
+        layouts[format]->read(vertices, chunk, filled, plan);
+        meshAttributes(attributes, chunk, filled, into, inOrder ? built + decoded : nullptr);
+        decoded += filled, filled = 0;
+    };
     for (std::uint32_t at = 0; at < size;) {
         const std::uint8_t op = list[at];
         if (op == 0x00) {
@@ -1219,21 +1278,39 @@ bool GxVertexPipeline::refreshMesh(const std::uint8_t* list, std::uint32_t size,
             continue;
         }
         if (op < 0x80 || op >= 0xA8 || at + 3 > size) return false;
-        const std::uint16_t vertices = static_cast<std::uint16_t>(list[at + 1] << 8 | list[at + 2]);
-        const GxVertexLayout& layout = gpu_->layout(op & 7);
-        if (at + 3 + std::uint32_t(vertices) * layout.size > size) return false;
-        GxVertex v;
-        for (std::uint16_t i = 0; i < vertices && (!inOrder || decoded < count); ++i, ++decoded) {
-            layout.read(list + at + 3 + std::uint32_t(i) * layout.size, v);
-            if (!inOrder) meshAttributes(v, fromVertex, fresh.emplace_back());
-            else meshAttributes(v, fromVertex, out[decoded]), out[decoded].slot = built[decoded].slot;
+        const std::uint16_t primitive = static_cast<std::uint16_t>(list[at + 1] << 8 | list[at + 2]);
+        const unsigned f = op & 7;
+        if (!layouts[f]) layouts[f] = &gpu_->layout(static_cast<std::uint8_t>(f));
+        const GxVertexLayout& layout = *layouts[f];
+        if (at + 3 + std::uint32_t(primitive) * layout.size > size) return false;
+        std::size_t take = inOrder ? std::min<std::size_t>(primitive, count - decoded - filled) : primitive;
+        if (take && f != format) {
+            flush();
+            plan = layout.plan(mask);
+            for (unsigned a = 0; a < 12; ++a) {
+                if (!(mask >> a & 1)) continue;
+                for (unsigned k = plan.width[a]; k < zeroFrom[a]; ++k) clear(a, k);
+                zeroFrom[a] = plan.width[a];
+            }
+            format = f;
         }
-        at += 3 + std::uint32_t(vertices) * layout.size;
+        for (const std::uint8_t* vertex = list + at + 3; take;) {
+            const std::size_t run = std::min<std::size_t>(take, RefreshChunk - filled);
+            for (std::size_t k = 0; k < run; ++k, vertex += layout.size) vertices[filled + k] = vertex;
+            filled += static_cast<unsigned>(run), take -= run;
+            if (filled == RefreshChunk) flush();
+        }
+        at += 3 + std::uint32_t(primitive) * layout.size;
     }
+    flush();
     if (inOrder) return decoded >= count;
+    static_assert(offsetof(GxMeshVertex, slot) % 16 == 0 && sizeof(GxMeshVertex) == offsetof(GxMeshVertex, slot) + sizeof(float), "the gather copies all but the slot in 16 bytes at a time");
     for (std::size_t i = 0; i < count; ++i) {
-        if (origin[i] >= fresh.size()) return false;
-        out[i] = fresh[origin[i]], out[i].slot = built[i].slot;
+        if (origin[i] >= decoded) return false;
+        const std::uint8_t* from = reinterpret_cast<const std::uint8_t*>(&fresh[origin[i]]);
+        std::uint8_t* to = reinterpret_cast<std::uint8_t*>(&out[i]);
+        for (unsigned k = 0; k < offsetof(GxMeshVertex, slot); k += 16) std::memcpy(to + k, from + k, 16);
+        out[i].slot = built[i].slot;
     }
     return true;
 }

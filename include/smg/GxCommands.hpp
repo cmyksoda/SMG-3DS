@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 #include <cstdint>
 
 namespace smg {
@@ -28,16 +29,22 @@ public:
     static constexpr std::uint16_t ReadPosition = 1, ReadNormal = 2, ReadColor0 = 4, ReadColor1 = 8, ReadTexcoords = 0x0FF0, ReadAll = 0x0FFF;
     struct Plan {
         struct Op {
-            std::uint8_t kind = 0, offset = 0;  // how to fetch it, and where in the vertex's bytes
-            std::uint16_t to = 0;               // where the result goes in the GxVertex
-            const void* attribute = nullptr;    // the layout's Attribute
+            // One attribute of `count` vertices, each at `vertices[i] + offset`, into `to`'s, `next` bytes apart.
+            using Run = void (*)(const void* attribute, const std::uint8_t* const* vertices, unsigned offset, std::uint8_t* to, std::size_t next, unsigned count);
+            Run run = nullptr;
+            const void* attribute = nullptr;  // the layout's Attribute
+            std::uint16_t to = 0;             // where the result goes in the GxVertex
+            std::uint8_t offset = 0;          // where in the vertex's bytes
         };
         Op ops[12];
         std::uint8_t count = 0;
+        std::uint8_t width[12] = {};  // the components (a color's four bytes count as one) each attribute's op writes, by the bits above
     };
     Plan plan(std::uint16_t mask) const;
     // `count` vertices from `at` (each `size` bytes after the last) into `out`.
     void read(const std::uint8_t* at, GxVertex* out, unsigned count, const Plan& plan) const;
+    // The same for vertices anywhere (the list's primitives have a header between them): each vertex's address.
+    void read(const std::uint8_t* const* vertices, GxVertex* out, unsigned count, const Plan& plan) const;
     // The arrays (0 position, 1 normal, 2-3 colors, 4-11 texture coordinates) this format reads by index, a bit each.
     std::uint16_t indexedArrays() const;
     // Widens [lo, hi) over the array elements the vertex at `at` reads by index (what a cached copy depends on).
@@ -61,6 +68,13 @@ private:
     template <int Kind, int Format, int Count> static void decodeAs(const Attribute& a, const std::uint8_t*& at, float* out);
     static void decodeAny(const Attribute& a, const std::uint8_t*& at, float* out);
     static Decoder pick(const Attribute& a);
+    // A plan's loops over a chunk of vertices: made for the attribute's kind, format and components where it has one
+    // (as decodeAs is), general (decodeAny's, per vertex) where it doesn't.
+    template <int Kind, int Format, int Count> static void fetch(const void* attribute, const std::uint8_t* const* vertices, unsigned offset, std::uint8_t* to, std::size_t next, unsigned count);
+    template <int Kind> static void fetchColor(const void* attribute, const std::uint8_t* const* vertices, unsigned offset, std::uint8_t* to, std::size_t next, unsigned count);
+    static void fetchGeneral(const void* attribute, const std::uint8_t* const* vertices, unsigned offset, std::uint8_t* to, std::size_t next, unsigned count);
+    static void fetchColorGeneral(const void* attribute, const std::uint8_t* const* vertices, unsigned offset, std::uint8_t* to, std::size_t next, unsigned count);
+    static Plan::Op::Run pickRun(const Attribute& a, bool color);
     bool matrixIndex_ = false;
     std::uint8_t texMatrixIndexes_ = 0;
     std::uint32_t words_[5] = {};  // VCD low and high, VAT A, B and C as read

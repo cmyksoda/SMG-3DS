@@ -285,9 +285,20 @@ private:
         lightingRegisters_ = gpu.xfRegisterChanges, lightingLights_ = gpu.xfLightChanges;
     }
     void vertex(const GxVertex& v, GxDrawVertex& d, const float* fixedClip);
-    void meshAttributes(const GxVertex& v, bool fromVertex, GxMeshVertex& m) const;
     std::size_t triangles(GxDrawVertex* vertices, std::uint16_t count, std::uint16_t first, std::uint16_t* indices) const;
     // Lines and points from their vertices, transformed into the last `count` of maxVertices, as quads from the first.
+    // What meshAttributes copies from a vertex, made once for a run of them: the color, and each texgen's input.
+    struct MeshCopy {
+        bool fromVertex = false;
+        unsigned units = 0;
+        std::uint16_t input[CombinerProgram::MaxUnits] = {};  // where in a GxVertex, and whether all three components are read
+        bool wide[CombinerProgram::MaxUnits] = {};
+    };
+    MeshCopy meshCopy(bool fromVertex) const;
+    static void meshAttributes(const MeshCopy& copy, const GxVertex* v, std::size_t count, GxMeshVertex* m, const GxMeshVertex* slots);
+    template <unsigned Units, bool FromVertex>
+    static void copyAttributes(MeshCopy copy, const GxVertex* v, std::size_t count, GxMeshVertex* m, const GxMeshVertex* slots);
+    std::uint16_t meshReads(bool fromVertex) const;
     std::size_t widen(GxDrawVertex* vertices, std::uint16_t count, std::uint16_t first, std::uint16_t* indices);
     void texgen(const TexGen& t, const GxVertex& v, float st[2]) const;
     void texgenNormalized(const TexGen& t, const GxVertex& v, float st[2]) const;

@@ -74,6 +74,25 @@ void components(const std::uint8_t* at, std::uint32_t format, std::uint32_t coun
         }
     }
 }
+// One component of a format, as `components` has it, for a format and byte order known when it is compiled.
+template <int Format, bool Native>
+float decodeComponent(const std::uint8_t* c, float scale) {
+    if constexpr (Format == 0) {
+        return c[0] * scale;
+    } else if constexpr (Format == 1) {
+        return static_cast<std::int8_t>(c[0]) * scale;
+    } else if constexpr (Format == 2) {
+        return static_cast<float>(half(c, Native)) * scale;
+    } else if constexpr (Format == 3) {
+        return static_cast<std::int16_t>(half(c, Native)) * scale;
+    } else {
+        const std::uint32_t bits = word(c, Native);
+        float value;
+        std::memcpy(&value, &bits, 4);
+        return value;
+    }
+}
+
 // A color's bytes by its format: RGB565, RGB888, RGB888x, RGBA4444, RGBA6666, RGBA8888.
 std::uint32_t colorSize(std::uint32_t format) { static const std::uint8_t sizes[] = {2, 3, 4, 2, 3, 4, 4, 4}; return sizes[format & 7]; }
 void readColor(const std::uint8_t* at, std::uint32_t format, bool native, std::uint8_t out[4]) {
@@ -157,17 +176,7 @@ void GxVertexLayout::decodeAs(const Attribute& a, const std::uint8_t*& at, float
     } else {
         data = a.array + (std::uint32_t(at[0]) << 8 | at[1]) * a.stride, at += 2;
     }
-    for (int i = 0; i < Count; ++i) {
-        const std::uint8_t* c = data + i * size;
-        if constexpr (Format == 0) out[i] = c[0] * a.scale;
-        else if constexpr (Format == 1) out[i] = static_cast<std::int8_t>(c[0]) * a.scale;
-        else if constexpr (Format == 2) out[i] = static_cast<float>(half(c, native)) * a.scale;
-        else if constexpr (Format == 3) out[i] = static_cast<std::int16_t>(half(c, native)) * a.scale;
-        else {
-            const std::uint32_t bits = word(c, native);
-            std::memcpy(&out[i], &bits, 4);
-        }
-    }
+    for (int i = 0; i < Count; ++i) out[i] = decodeComponent<Format, native>(data + i * size, a.scale);
 }
 
 void GxVertexLayout::decodeAny(const Attribute& a, const std::uint8_t*& at, float* out) {
@@ -213,25 +222,76 @@ void GxVertexLayout::read(const std::uint8_t* at, GxVertex& vertex) const {
     }
 }
 
-namespace {
-// How a plan's op fetches its attribute: float forms in place, the rest through the attribute's own decoder.
-enum Fetch : std::uint8_t { FetchGeneral, FetchColorGeneral, FetchDirect2, FetchDirect3, FetchIndex16x2, FetchIndex16x3, FetchIndex8x2, FetchIndex8x3,
-                            FetchColorDirect, FetchColorIndex16, FetchColorIndex8 };
-} // namespace
+template <int Kind, int Format, int Count>
+void GxVertexLayout::fetch(const void* attribute, const std::uint8_t* const* vertices, unsigned offset, std::uint8_t* to, std::size_t next, unsigned count) {
+    const Attribute& a = *static_cast<const Attribute*>(attribute);
+    constexpr int size = Format == 4 ? 4 : Format >= 2 ? 2 : 1;
+    constexpr bool native = Kind != 1;  // arrays are the CPU's (native here), the stream the GPU's
+    const std::uint8_t* const array = a.array;  // the stores below would make the loop read these again
+    const std::uint32_t arrayStride = a.stride;
+    const float scale = a.scale;
+    for (unsigned i = 0; i < count; ++i, to += next) {
+        const std::uint8_t* const from = vertices[i] + offset;
+        const std::uint8_t* data;
+        if constexpr (Kind == 1) data = from;
+        else if constexpr (Kind == 2) data = array + *from * arrayStride;
+        else data = array + (std::uint32_t(from[0]) << 8 | from[1]) * arrayStride;
+        float* out = reinterpret_cast<float*>(to);
+        for (int k = 0; k < Count; ++k) out[k] = decodeComponent<Format, native>(data + k * size, scale);
+    }
+}
+
+template <int Kind>
+void GxVertexLayout::fetchColor(const void* attribute, const std::uint8_t* const* vertices, unsigned offset, std::uint8_t* to, std::size_t next, unsigned count) {
+    const Attribute& a = *static_cast<const Attribute*>(attribute);
+    const std::uint8_t* const array = a.array;
+    const std::uint32_t arrayStride = a.stride;
+    for (unsigned i = 0; i < count; ++i, to += next) {
+        const std::uint8_t* const from = vertices[i] + offset;
+        if constexpr (Kind == 1) std::memcpy(to, from, 4);
+        else if constexpr (Kind == 2) std::memcpy(to, array + *from * arrayStride, 4);
+        else std::memcpy(to, array + (std::uint32_t(from[0]) << 8 | from[1]) * arrayStride, 4);
+    }
+}
+
+void GxVertexLayout::fetchGeneral(const void* attribute, const std::uint8_t* const* vertices, unsigned offset, std::uint8_t* to, std::size_t next, unsigned count) {
+    const Attribute& a = *static_cast<const Attribute*>(attribute);
+    for (unsigned i = 0; i < count; ++i, to += next) {
+        const std::uint8_t* q = vertices[i] + offset;
+        a.decode(a, q, reinterpret_cast<float*>(to));
+    }
+}
+
+void GxVertexLayout::fetchColorGeneral(const void* attribute, const std::uint8_t* const* vertices, unsigned offset, std::uint8_t* to, std::size_t next, unsigned count) {
+    const Attribute& a = *static_cast<const Attribute*>(attribute);
+    for (unsigned i = 0; i < count; ++i, to += next) {
+        const std::uint8_t* q = vertices[i] + offset;
+        readColor(source(a, q), a.format, a.type != 1, to);
+    }
+}
+
+GxVertexLayout::Plan::Op::Run GxVertexLayout::pickRun(const Attribute& a, bool color) {
+    if (color) {
+        // RGBA8888's bytes are the GPU's: copied as they are.
+        if (a.format < 5 || a.skip) return &fetchColorGeneral;
+        return a.type == 1 ? &fetchColor<1> : a.type == 3 ? &fetchColor<3> : &fetchColor<2>;
+    }
+    if (!a.type || a.skip || a.format > 4 || a.count < 1 || a.count > 3 || (a.type == 1 && a.directSize != a.count * a.componentSize)) return &fetchGeneral;
+#define SMG_FETCHES(kind, format) {&fetch<kind, format, 1>, &fetch<kind, format, 2>, &fetch<kind, format, 3>}
+#define SMG_KIND(kind) {SMG_FETCHES(kind, 0), SMG_FETCHES(kind, 1), SMG_FETCHES(kind, 2), SMG_FETCHES(kind, 3), SMG_FETCHES(kind, 4)}
+    static constexpr Plan::Op::Run table[3][5][3] = {SMG_KIND(1), SMG_KIND(2), SMG_KIND(3)};
+#undef SMG_KIND
+#undef SMG_FETCHES
+    return table[a.type - 1][a.format][a.count - 1];
+}
 
 GxVertexLayout::Plan GxVertexLayout::plan(std::uint16_t mask) const {
     Plan plan;
     const auto add = [&](int bit, const Attribute& a, std::size_t to, bool color) {
         if (!(mask >> bit & 1) || !a.type) return;
         Plan::Op& op = plan.ops[plan.count++];
-        op.offset = a.offset, op.to = static_cast<std::uint16_t>(to), op.attribute = &a;
-        if (color) {
-            op.kind = a.format >= 5 && !a.skip ? (a.type == 1 ? FetchColorDirect : a.type == 3 ? FetchColorIndex16 : FetchColorIndex8) : FetchColorGeneral;
-            return;
-        }
-        const bool inPlace = a.format == 4 && !a.skip && (a.count == 2 || a.count == 3) && (a.type != 1 || a.directSize == a.count * 4);
-        const int wide = a.count == 3;
-        op.kind = !inPlace ? FetchGeneral : a.type == 1 ? FetchDirect2 + wide : a.type == 3 ? FetchIndex16x2 + wide : FetchIndex8x2 + wide;
+        op.offset = a.offset, op.to = static_cast<std::uint16_t>(to), op.attribute = &a, op.run = pickRun(a, color);
+        plan.width[bit] = color ? 1 : a.count;
     };
     add(0, position_, offsetof(GxVertex, position), false);
     add(1, normal_, offsetof(GxVertex, normal), false);
@@ -241,70 +301,27 @@ GxVertexLayout::Plan GxVertexLayout::plan(std::uint16_t mask) const {
 }
 
 void GxVertexLayout::read(const std::uint8_t* at, GxVertex* out, unsigned count, const Plan& plan) const {
-    const std::size_t stride = size;
+    constexpr unsigned Block = 32;
+    const std::uint8_t* vertices[Block];
+    for (unsigned i = 0; i < count; i += Block) {
+        const unsigned n = std::min(Block, count - i);
+        for (unsigned j = 0; j < n; ++j) vertices[j] = at + std::size_t(i + j) * size;
+        read(vertices, out + i, n, plan);
+    }
+}
+
+void GxVertexLayout::read(const std::uint8_t* const* vertices, GxVertex* out, unsigned count, const Plan& plan) const {
     if (matrixIndex_)
-        for (unsigned i = 0; i < count; ++i) out[i].matrixIndex = at[i * stride];
+        for (unsigned i = 0; i < count; ++i) out[i].matrixIndex = vertices[i][0];
     if (texMatrixIndexes_) {
         for (unsigned i = 0; i < count; ++i) {
-            const std::uint8_t* p = at + i * stride + matrixIndex_;
+            const std::uint8_t* p = vertices[i] + matrixIndex_;
             for (int k = 0; k < 8; ++k) if (texMatrixIndexes_ >> k & 1) out[i].texMatrixIndex[k] = *p++;
         }
     }
     std::uint8_t* const base = reinterpret_cast<std::uint8_t*>(out);
-    for (const Plan::Op* op = plan.ops, *end = op + plan.count; op != end; ++op) {
-        const Attribute& a = *static_cast<const Attribute*>(op->attribute);
-        const std::uint8_t* const array = a.array;  // the stores below would make the loops read these again
-        const std::uint32_t arrayStride = a.stride;
-        const std::uint8_t* p = at + op->offset;
-        std::uint8_t* to = base + op->to;
-        constexpr std::size_t next = sizeof(GxVertex);
-        switch (op->kind) {
-        case FetchDirect3:
-            for (unsigned i = 0; i < count; ++i, p += stride, to += next) {
-                const std::uint32_t x = word(p), y = word(p + 4), z = word(p + 8);
-                std::memcpy(to, &x, 4), std::memcpy(to + 4, &y, 4), std::memcpy(to + 8, &z, 4);
-            }
-            break;
-        case FetchDirect2:
-            for (unsigned i = 0; i < count; ++i, p += stride, to += next) {
-                const std::uint32_t x = word(p), y = word(p + 4);
-                std::memcpy(to, &x, 4), std::memcpy(to + 4, &y, 4);
-            }
-            break;
-        case FetchIndex16x2:
-            for (unsigned i = 0; i < count; ++i, p += stride, to += next) std::memcpy(to, array + (std::uint32_t(p[0]) << 8 | p[1]) * arrayStride, 8);
-            break;
-        case FetchIndex16x3:
-            for (unsigned i = 0; i < count; ++i, p += stride, to += next) std::memcpy(to, array + (std::uint32_t(p[0]) << 8 | p[1]) * arrayStride, 12);
-            break;
-        case FetchIndex8x2:
-            for (unsigned i = 0; i < count; ++i, p += stride, to += next) std::memcpy(to, array + *p * arrayStride, 8);
-            break;
-        case FetchIndex8x3:
-            for (unsigned i = 0; i < count; ++i, p += stride, to += next) std::memcpy(to, array + *p * arrayStride, 12);
-            break;
-        case FetchColorDirect:
-            for (unsigned i = 0; i < count; ++i, p += stride, to += next) std::memcpy(to, p, 4);
-            break;
-        case FetchColorIndex16:
-            for (unsigned i = 0; i < count; ++i, p += stride, to += next) std::memcpy(to, array + (std::uint32_t(p[0]) << 8 | p[1]) * arrayStride, 4);
-            break;
-        case FetchColorIndex8:
-            for (unsigned i = 0; i < count; ++i, p += stride, to += next) std::memcpy(to, array + *p * arrayStride, 4);
-            break;
-        case FetchColorGeneral:
-            for (unsigned i = 0; i < count; ++i, p += stride, to += next) {
-                const std::uint8_t* q = p;
-                readColor(source(a, q), a.format, a.type != 1, to);
-            }
-            break;
-        default:
-            for (unsigned i = 0; i < count; ++i, p += stride, to += next) {
-                const std::uint8_t* q = p;
-                a.decode(a, q, reinterpret_cast<float*>(to));
-            }
-        }
-    }
+    for (const Plan::Op* op = plan.ops, *end = op + plan.count; op != end; ++op)
+        op->run(op->attribute, vertices, op->offset, base + op->to, sizeof(GxVertex), count);
 }
 
 std::uint16_t GxVertexLayout::indexedArrays() const {

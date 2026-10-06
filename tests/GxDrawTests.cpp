@@ -1,5 +1,7 @@
 #include <smg/GxDraw.hpp>
 #include <smg/GxPrivate.h>
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -36,7 +38,7 @@ struct Stream {
 
 struct Drawn { std::uint8_t kind, format; std::uint16_t count; std::vector<std::uint8_t> data; };
 std::vector<Drawn> drawn;
-std::vector<std::uint8_t> memory(0x2000);
+std::vector<std::uint8_t> memory(0x20000);
 smg::GxCommandProcessor::Host host() {
     return {[](std::uint32_t physical) -> const std::uint8_t* { return memory.data() + physical; },
             [] {}, [](std::uint16_t, bool) {}, [](const char* what, std::uint32_t) { std::printf("unsupported: %s\n", what); std::exit(1); },
@@ -593,6 +595,253 @@ void meshRefresh() {
     check(same, "and out of order, each takes the list vertex its origin names");
 }
 
+// A refresh is the build again from the arrays as they are now: every byte of every vertex, the fields the shader
+// ignores included, whatever the output held before.
+struct RefreshField { unsigned format = 0, count = 0, shift = 0; };  // a VAT entry: GX component format, components, fixed-point shift
+struct RefreshFormat {
+    RefreshField position, normal, color[2], texcoord[8];
+    unsigned nbt = 0;  // normals with binormal and tangent: 1 in one array element, 2 from three indexes
+};
+struct RefreshCase {
+    explicit RefreshCase(const char* what) : what(what) {}
+    const char* what;
+    bool lit = false, vertexColor = false, matrixIndex = false;
+    unsigned texMatrixes = 0;  // texture matrix index bytes in the vertex, a bit per coordinate set
+    unsigned type[12] = {};    // the VCD's, for the position, normal, two colors and eight coordinate sets: 0 none, 1 direct, 2 an 8-bit index, 3 a 16-bit one
+    std::vector<RefreshFormat> formats;
+    struct Texgen { unsigned row; bool three; };
+    std::vector<Texgen> texgens;
+    struct Primitive { unsigned kind, format, count; };
+    std::vector<Primitive> primitives;
+};
+enum RefreshResult { RefreshNoMesh, RefreshDiffers, RefreshSame };
+
+struct Random {
+    std::uint32_t state;
+    unsigned next() { return state ^= state << 13, state ^= state >> 17, state ^= state << 5; }
+    unsigned below(unsigned n) { return next() % n; }
+};
+constexpr unsigned ArrayElements = 32, ArraySpan = 0x800, ArrayRegion = 0x8000;
+unsigned arrayBase(unsigned array, unsigned version) { return ArrayRegion + (version * 12 + array) * ArraySpan; }
+unsigned componentBytes(unsigned format) { return format == 4 ? 4 : format >= 2 ? 2 : 1; }
+unsigned colorBytes(unsigned format) { return std::array<unsigned, 8>{2, 3, 4, 2, 3, 4, 4, 4}[format & 7]; }
+
+// One attribute as a vertex stores it: finite floats for GX_F32, random bytes for the other formats and colors.
+void attributeBytes(Stream& s, Random& random, unsigned format, unsigned components, bool color) {
+    if (color || format != 4) {
+        for (unsigned i = 0, n = color ? colorBytes(format) : components * componentBytes(format); i < n; ++i) s.u8(random.next());
+        return;
+    }
+    for (unsigned i = 0; i < components; ++i) s.f32(static_cast<float>(random.below(20000)) / 100 - 100);
+}
+
+// What a case sets up: the processor with its formats and arrays, the state and pipeline prepared for it, the list, and
+// the mesh built from the arrays where they start.
+struct RefreshFixture {
+    std::unique_ptr<smg::GxCommandProcessor> gpu = std::make_unique<smg::GxCommandProcessor>(host());
+    smg::GxDrawState state;
+    smg::GxVertexPipeline pipeline;
+    std::vector<std::uint8_t> list;
+    smg::GxMesh mesh;
+    std::uint32_t size() const { return static_cast<std::uint32_t>(list.size()); }
+    bool build(const RefreshCase& c, std::uint32_t seed);
+    // As J3D sets the arrays before each shape: every array at a new base, with other contents.
+    void moveArrays() {
+        Stream moved;
+        for (unsigned a = 0; a < 12; ++a) moved.cp(0xA0 + a, arrayBase(a, 1));
+        gpu->put(moved.bytes.data(), static_cast<std::uint32_t>(moved.bytes.size()));
+    }
+};
+
+// False when the state or the list takes no mesh.
+bool RefreshFixture::build(const RefreshCase& c, std::uint32_t seed) {
+    Random random{seed | 1};
+    const unsigned units = static_cast<unsigned>(c.texgens.size());
+    Stream s;
+    clearState(s);
+    s.xf(0x103F, {units});
+    for (unsigned u = 0; u < units; ++u) s.xf(0x1040 + u, {c.texgens[u].row << 7 | unsigned(c.texgens[u].three) << 2});
+    const bool channel = c.vertexColor || c.lit;
+    s.bp(units | (channel ? 1u : 0u) << 4 | (units - 1) << 10);  // GEN_MODE: texgens, channels, stages - 1
+    s.xf(0x1009, {channel ? 1u : 0u});
+    const std::uint32_t control = (c.lit ? 1u << 1 | 1u << 2 | 2u << 7 : 0) | (c.vertexColor ? 1 : 0);
+    s.xf(0x100E, {control}), s.xf(0x1010, {control}), s.xf(0x100C, {0xFFFFFFFF}), s.xf(0x100A, {0x10203040});
+    s.xff(0x400, {1, 0, 0, 0, 1, 0, 0, 0, 1});
+    s.xf(0x600 + 3, {0x80604020}), s.xff(0x600 + 4, {1, 0, 0, 1, 0, 0, 300, 100, 200, 0, 0, 0});
+    const auto order = [](unsigned u) { return u | u << 3 | 0x3C0u; };  // texture u through coordinate u, no raster color
+    for (unsigned r = 0; 2 * r < units; ++r) s.bp((0x28 + r) << 24 | order(2 * r) | (2 * r + 1 < units ? order(2 * r + 1) << 12 : 0));
+    for (unsigned u = 0; u < units; ++u) {  // stage u: its texel, added to the stage before
+        s.bp((0xC0 + 2 * u) << 24 | (u ? 0x080FF8 : 0x08FFF8)), s.bp((0xC1 + 2 * u) << 24 | 0x08FF90);
+        s.bp((0x88 + u) << 24 | 0x600C03), s.bp((0x94 + u) << 24 | 0x80), s.bp((0x80 + u) << 24 | 0x30);
+    }
+    std::uint32_t vcdLo = c.matrixIndex | c.texMatrixes << 1 | c.type[0] << 9 | c.type[1] << 11 | c.type[2] << 13 | c.type[3] << 15, vcdHi = 0;
+    for (unsigned k = 0; k < 8; ++k) vcdHi |= c.type[4 + k] << 2 * k;
+    s.cp(0x50, vcdLo), s.cp(0x60, vcdHi);
+    // Each format's VAT, and the bytes of the largest element of each array (its stride a little over).
+    unsigned elementBytes[12] = {};
+    for (unsigned f = 0; f < c.formats.size(); ++f) {
+        const RefreshFormat& v = c.formats[f];
+        std::uint32_t vat[3] = {};  // A, B and C as one run of bits
+        const auto put = [&](unsigned bit, unsigned value) { vat[bit / 32] |= value << bit % 32; };
+        put(0, v.position.count - 2), put(1, v.position.format), put(4, v.position.shift);
+        put(9, v.nbt != 0), put(10, v.normal.format), put(31, v.nbt == 2), put(14, v.color[0].format), put(18, v.color[1].format);
+        const unsigned at[8][3] = {{21, 22, 25}, {32, 33, 36}, {41, 42, 45}, {50, 51, 54}, {59, 60, 64}, {69, 70, 73}, {78, 79, 82}, {87, 88, 91}};
+        for (unsigned k = 0; k < 8; ++k) put(at[k][0], v.texcoord[k].count - 1), put(at[k][1], v.texcoord[k].format), put(at[k][2], v.texcoord[k].shift);
+        s.cp(0x70 + f, vat[0]), s.cp(0x80 + f, vat[1]), s.cp(0x90 + f, vat[2]);
+        elementBytes[0] = std::max(elementBytes[0], v.position.count * componentBytes(v.position.format));
+        elementBytes[1] = std::max(elementBytes[1], 9 * componentBytes(v.normal.format));
+        for (unsigned k = 0; k < 2; ++k) elementBytes[2 + k] = std::max(elementBytes[2 + k], colorBytes(v.color[k].format));
+        for (unsigned k = 0; k < 8; ++k) elementBytes[4 + k] = std::max(elementBytes[4 + k], v.texcoord[k].count * componentBytes(v.texcoord[k].format));
+    }
+    unsigned strides[12];
+    for (unsigned a = 0; a < 12; ++a) strides[a] = elementBytes[a] + random.below(5), s.cp(0xA0 + a, arrayBase(a, 0)), s.cp(0xB0 + a, strides[a]);
+    gpu->put(s.bytes.data(), static_cast<std::uint32_t>(s.bytes.size()));
+    // The list: a vertex is its matrix indexes, then its attributes in the layout's order.
+    Stream stream;
+    for (const RefreshCase::Primitive& p : c.primitives) {
+        const RefreshFormat& v = c.formats[p.format];
+        stream.u8(p.kind | p.format), stream.u16(p.count);
+        for (unsigned i = 0; i < p.count; ++i) {
+            if (c.matrixIndex) stream.u8(3 * random.below(10));
+            for (unsigned k = 0; k < 8; ++k)
+                if (c.texMatrixes >> k & 1) stream.u8(random.below(60));
+            const auto attribute = [&](unsigned slot, const RefreshField& f, unsigned components, bool color, unsigned indexes) {
+                const unsigned type = c.type[slot];
+                if (type == 1) attributeBytes(stream, random, f.format, components, color);
+                for (unsigned n = 0; type > 1 && n < indexes; ++n) type == 2 ? stream.u8(random.below(ArrayElements)) : stream.u16(random.below(ArrayElements));
+            };
+            attribute(0, v.position, v.position.count, false, 1);
+            attribute(1, v.normal, v.nbt ? 9 : 3, false, v.nbt == 2 ? 3 : 1);
+            attribute(2, v.color[0], 0, true, 1), attribute(3, v.color[1], 0, true, 1);
+            for (unsigned k = 0; k < 8; ++k) attribute(4 + k, v.texcoord[k], v.texcoord[k].count, false, 1);
+        }
+    }
+    while (stream.bytes.size() % 32) stream.u8(0);
+    list = std::move(stream.bytes);
+    for (unsigned a = 0; a < 12; ++a) {  // the elements an index can name, in both versions of each array in use, as floats
+        for (unsigned version = 0; version < 2 && c.type[a] > 1; ++version) {
+            for (std::uint32_t at = arrayBase(a, version); at < arrayBase(a, version) + ArrayElements * strides[a]; at += 4) {
+                const float f = static_cast<float>(random.below(20000)) / 100 - 100;
+                std::memcpy(memory.data() + at, &f, 4);
+            }
+        }
+    }
+    smg::readGxDrawState(*gpu, state);
+    return pipeline.prepare(*gpu, state, {}, 0x90, 0) && state.program.unitCount == units && pipeline.meshEligible() == smg::GxVertexPipeline::MeshOk &&
+           pipeline.buildMesh(list.data(), size(), mesh) == smg::GxVertexPipeline::MeshOk;
+}
+
+// Fills the stack the next calls will use with garbage, so what a function reads before it writes it shows.
+__attribute__((noinline)) void dirtyStack() {
+    volatile std::uint32_t pad[0x800];
+    for (volatile std::uint32_t& w : pad) w = 0xA5A5A5A5;
+}
+
+// The refresh of a built mesh, once its arrays have moved, against the mesh built anew, byte for byte, over an output
+// that held garbage.
+RefreshResult refreshAgainstRebuild(const RefreshCase& c, std::uint32_t seed) {
+    RefreshFixture f;
+    if (!f.build(c, seed)) return RefreshNoMesh;
+    f.moveArrays();
+    smg::GxMesh rebuilt;
+    std::vector<smg::GxMeshVertex> out(f.mesh.vertices.size());
+    std::memset(out.data(), 0xA5, out.size() * sizeof(smg::GxMeshVertex));
+    bool same = f.pipeline.buildMesh(f.list.data(), f.size(), rebuilt) == smg::GxVertexPipeline::MeshOk && rebuilt.origin == f.mesh.origin;
+    dirtyStack();
+    same = same && f.pipeline.refreshMesh(f.list.data(), f.size(), f.mesh.origin.data(), f.mesh.vertices.data(), out.data(), out.size()) &&
+           !std::memcmp(out.data(), rebuilt.vertices.data(), out.size() * sizeof(smg::GxMeshVertex));
+    return same ? RefreshSame : RefreshDiffers;
+}
+
+RefreshCase randomRefreshCase(Random& random, const char* what) {
+    RefreshCase c{what};
+    c.lit = random.below(2), c.vertexColor = random.below(2), c.matrixIndex = random.below(2);
+    c.texMatrixes = random.below(4) ? 0 : random.below(32) << 3;  // only sets past the texgens', which take no per-vertex matrix
+    const unsigned units = 1 + random.below(3);
+    for (unsigned u = 0; u < units; ++u) c.texgens.push_back({random.below(3) ? 5 + random.below(8) : random.below(2), bool(random.below(2))});
+    c.type[0] = random.below(16) ? 1 + random.below(3) : 0;
+    for (unsigned a = 1; a < 12; ++a) c.type[a] = random.below(3) ? 0 : 1 + random.below(3);
+    for (unsigned f = 1 + random.below(2); f > 0; --f) {
+        RefreshFormat v;
+        v.position = {random.below(5), 2 + random.below(2), random.below(8)}, v.normal = {random.below(5), 3, 0};
+        v.nbt = random.below(8) ? 0 : 1 + random.below(2);
+        for (RefreshField& color : v.color) color.format = random.below(8);
+        for (RefreshField& t : v.texcoord) t = {random.below(5), 1 + random.below(2), random.below(8)};
+        c.formats.push_back(v);
+    }
+    for (unsigned p = 1 + random.below(4); p > 0; --p)
+        c.primitives.push_back({std::array<unsigned, 5>{0x80, 0x88, 0x90, 0x98, 0xA0}[random.below(5)], random.below(static_cast<unsigned>(c.formats.size())), 1 + random.below(40)});
+    return c;
+}
+
+void meshRefreshMatchesRebuild() {
+    const auto field = [](unsigned format, unsigned count, unsigned shift = 0) { return RefreshField{format, count, shift}; };
+    const auto triangles = [](unsigned format = 0, unsigned count = 24) { return RefreshCase::Primitive{0x90, format, count}; };
+    RefreshFormat j3d;  // J3D's usual: float positions, 16-bit normals, a coordinate set of 16-bit fixed point
+    j3d.position = field(4, 3), j3d.normal = field(3, 3), j3d.color[0] = field(5, 4), j3d.texcoord[0] = field(3, 2, 8);
+    RefreshCase unlit{"an unlit mesh with indexed positions and coordinates"};
+    unlit.type[0] = 3, unlit.type[4] = 3, unlit.formats = {j3d}, unlit.texgens = {{5, false}}, unlit.primitives = {{0x98, 0, 30}, triangles()};
+    RefreshCase normals = unlit;
+    normals.what = "a lit mesh with indexed normals and a texgen from them", normals.type[1] = 3, normals.lit = true, normals.texgens = {{5, false}, {1, true}};
+    RefreshCase colored = normals;
+    colored.what = "a vertex color the channel takes", colored.type[2] = 2, colored.vertexColor = true, colored.lit = false;
+    RefreshCase colored16 = colored;
+    colored16.what = "a vertex color by a 16-bit index", colored16.type[2] = 3;
+    RefreshCase colorInList = colored;
+    colorInList.what = "a vertex color stored in the list", colorInList.type[2] = 1;
+    RefreshCase ignored = colored;
+    ignored.what = "a vertex color in the format the channel ignores", ignored.vertexColor = false;
+    RefreshCase spare = unlit;
+    spare.what = "coordinate sets in the format that no texgen reads", spare.type[5] = 2, spare.type[6] = 3, spare.type[7] = 1;
+    spare.formats[0].texcoord[1] = field(4, 2), spare.formats[0].texcoord[2] = field(2, 1, 4), spare.formats[0].texcoord[3] = field(1, 2, 3);
+    spare.texgens = {{6, false}, {0, false}};  // one reads set 1, past an unread set 0; one reads the position
+    RefreshCase direct = unlit;
+    direct.what = "attributes stored in the list", direct.type[0] = direct.type[1] = direct.type[4] = 1;
+    RefreshCase absent = unlit;
+    absent.what = "texgens over coordinate sets the format lacks", absent.texgens = {{9, true}, {5, false}, {1, true}};
+    RefreshCase narrow = unlit;
+    narrow.what = "formats of one list that differ in components";
+    narrow.formats = {j3d, j3d}, narrow.formats[1].position = field(1, 2, 3), narrow.formats[1].texcoord[0] = field(2, 1, 5);
+    narrow.texgens = {{0, true}, {5, true}}, narrow.primitives = {triangles(0, 9), triangles(1, 12), {0xA0, 0, 7}, {0x98, 1, 5}, {0x80, 0, 8}};
+    RefreshCase skinned = normals;
+    skinned.what = "a lit, skinned mesh whose groups copy vertices out of order";
+    skinned.matrixIndex = true, skinned.texMatrixes = 0xF0, skinned.primitives = {{0x98, 0, 60}, {0xA0, 0, 20}, triangles(0, 30)};
+    for (const RefreshCase* c : {&unlit, &normals, &colored, &colored16, &colorInList, &ignored, &spare, &direct, &absent, &narrow, &skinned})
+        for (std::uint32_t seed : {1u, 2u, 3u}) check(refreshAgainstRebuild(*c, seed * 7919) == RefreshSame, c->what);
+    // Formats, arrays, texgens and primitives drawn at random.
+    Random random{12345};
+    unsigned built = 0;
+    char what[64];
+    for (unsigned i = 0; i < 100; ++i) {
+        std::snprintf(what, sizeof what, "random list %u refreshes as it builds", i);
+        const RefreshResult result = refreshAgainstRebuild(randomRefreshCase(random, what), random.next());
+        check(result != RefreshDiffers, what);
+        built += result == RefreshSame;
+    }
+    check(built > 30, "enough of the random lists make meshes to mean something");
+    // A list that no longer gives the mesh its vertices is refused; one that gives more is read as far as the mesh goes.
+    RefreshFixture f;
+    check(f.build(unlit, 5), "a mesh for the refusals");
+    f.moveArrays();
+    const std::size_t n = f.mesh.vertices.size();
+    std::vector<std::uint32_t> origin(n + 1);
+    for (std::size_t i = 0; i < origin.size(); ++i) origin[i] = static_cast<std::uint32_t>(i);
+    std::vector<smg::GxMeshVertex> out(n + 1);
+    const auto refresh = [&](std::uint32_t size, const std::uint32_t* from, std::size_t count) {
+        std::memset(out.data(), 0xA5, out.size() * sizeof out[0]);
+        return f.pipeline.refreshMesh(f.list.data(), size, from, f.mesh.vertices.data(), out.data(), count);
+    };
+    check(!refresh(f.size(), origin.data(), n + 1), "a list with fewer vertices than the mesh is refused");
+    check(!refresh(20, origin.data(), n), "and one cut inside a primitive");
+    origin[1] = 1000;
+    check(!refresh(f.size(), origin.data(), n), "and a gather from a vertex the list lacks");
+    origin[1] = 1;
+    smg::GxMesh rebuilt;
+    check(refresh(f.size(), origin.data(), 5) && f.pipeline.buildMesh(f.list.data(), f.size(), rebuilt) == smg::GxVertexPipeline::MeshOk &&
+              !std::memcmp(out.data(), rebuilt.vertices.data(), 5 * sizeof out[0]) && out[5].color[0] == 0xA5,
+          "a mesh of fewer vertices takes the list's first ones and leaves the rest of the output");
+}
+
 // A pass over the primitive the program just ran takes the program's positions and colors and works out only its own
 // coordinates: over the same state, exactly the program's vertices and triangles again.
 void passReuse() {
@@ -1052,6 +1301,7 @@ int runGxDrawTests() {
     litMeshSlotTexgens();
     linesAndPoints();
     meshRefresh();
+    meshRefreshMatchesRebuild();
     passReuse();
     drawStateKey();
     std::printf("%u GX draw checks passed\n", checks);
