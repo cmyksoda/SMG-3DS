@@ -205,10 +205,23 @@ void intensityTiles() {
     check(same, "I8 tiles straight into the PICA's LA8 layout");
 }
 
+// A mipmapped texture's levels as GX stores them (each halved, padded to whole blocks, one after another) and as many of
+// them as the PICA samples (8x8 and up, none past the max LOD).
+void mipLevels() {
+    check(smg::gxLevelOffset(smg::GxFormat::CMPR, 64, 32, 0) == 0 && smg::gxLevelOffset(smg::GxFormat::CMPR, 64, 32, 1) == 64 * 32 / 2 &&
+              smg::gxLevelOffset(smg::GxFormat::CMPR, 64, 32, 3) == (64 * 32 + 32 * 16 + 16 * 8) / 2,
+          "a CMPR level starts past the halved, block-padded levels before it");
+    check(smg::gxLevelOffset(smg::GxFormat::RGBA8, 8, 8, 2) == 8 * 8 * 4 + 4 * 4 * 4, "RGBA8's 4x4 blocks pad nothing at 4x4");
+    check(smg::picaMipLevels(64, 32, 160) == 3 && smg::picaMipLevels(64, 64, 16) == 2 && smg::picaMipLevels(64, 64, 15) == 1 &&
+              smg::picaMipLevels(96, 64, 160) == 1 && smg::picaMipLevels(8, 8, 160) == 1,
+          "the PICA takes the levels down to 8x8, as far as the max LOD goes, for power-of-two sizes");
+}
+
 int runModelTests() {
     models();
     textures();
     intensityTiles();
+    mipLevels();
     meshes();
     std::printf("%u J3D model/texture checks passed\n", checks);
     return 0;

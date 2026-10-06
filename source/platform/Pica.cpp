@@ -110,6 +110,24 @@ bool upload(C3D_Tex& texture, const TiledTexture& tiled) {
     return true;
 }
 
+bool upload(C3D_Tex& texture, const std::vector<TiledTexture>& levels, bool linear, float bias) {
+    const TiledTexture& first = levels.front();
+    const C3D_TexInitParams params{static_cast<u16>(first.width), static_cast<u16>(first.height), static_cast<u8>(levels.size() - 1), first.format,
+                                   GPU_TEX_2D, false};
+    if (!first.width || !C3D_TexInitWithParams(&texture, nullptr, params)) return false;
+    for (unsigned level = 0; level < levels.size(); ++level) {
+        u32 size = 0;
+        void* to = C3D_Tex2DGetImagePtr(&texture, static_cast<int>(level), &size);
+        std::memcpy(to, levels[level].bytes.data(), std::min<std::size_t>(size, levels[level].bytes.size()));
+    }
+    C3D_TexFlush(&texture);
+    C3D_TexSetFilter(&texture, first.magFilter ? GPU_LINEAR : GPU_NEAREST, first.minFilter ? GPU_LINEAR : GPU_NEAREST);
+    C3D_TexSetFilterMipmap(&texture, linear ? GPU_LINEAR : GPU_NEAREST);
+    C3D_TexSetLodBias(&texture, bias);
+    C3D_TexSetWrap(&texture, wrap(first.wrapS), wrap(first.wrapT));
+    return true;
+}
+
 namespace {
 GPU_TESTFUNC testFunction(unsigned gx) {
     const GPU_TESTFUNC functions[]{GPU_NEVER, GPU_LESS, GPU_EQUAL, GPU_LEQUAL, GPU_GREATER, GPU_NOTEQUAL, GPU_GEQUAL, GPU_ALWAYS};

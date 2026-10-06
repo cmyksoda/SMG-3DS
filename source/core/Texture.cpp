@@ -1,4 +1,5 @@
 #include <smg/Texture.hpp>
+#include <algorithm>
 
 namespace smg {
 namespace {
@@ -49,6 +50,19 @@ std::size_t gxImageSize(GxFormat format, unsigned width, unsigned height) {
     Layout l;
     if (!layout(format, l)) return 0;
     return std::size_t((width + l.blockWidth - 1) / l.blockWidth) * ((height + l.blockHeight - 1) / l.blockHeight) * l.blockBytes;
+}
+
+std::size_t gxLevelOffset(GxFormat format, unsigned width, unsigned height, unsigned level) {
+    std::size_t offset = 0;
+    for (unsigned l = 0; l < level; ++l) offset += gxImageSize(format, std::max(width >> l, 1u), std::max(height >> l, 1u));
+    return offset;
+}
+
+unsigned picaMipLevels(unsigned width, unsigned height, unsigned maxLod) {
+    if ((width & (width - 1)) || (height & (height - 1))) return 1;
+    unsigned levels = 1;
+    while (levels <= maxLod / 16 && (width >> levels) >= 8 && (height >> levels) >= 8) ++levels;
+    return levels;
 }
 
 void tileIntensity8(const std::uint8_t* gx, unsigned width, unsigned height, std::uint8_t* la8) {

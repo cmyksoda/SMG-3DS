@@ -18,6 +18,8 @@ struct TiledTexture {
 TiledTexture tile(const ModelTexture& source, int format = -1);
 GPU_TEXCOLOR tileFormat(const ModelTexture& source);
 bool upload(C3D_Tex& texture, const TiledTexture& tiled);
+// A mip chain, level 0 first, all in its format: sampled between levels when `linear`, `bias` added to the level chosen.
+bool upload(C3D_Tex& texture, const std::vector<TiledTexture>& levels, bool linear, float bias);
 
 // The fragment side of a GX material: the combiner program as texture environments, and the pixel tests.
 struct PicaPixel {

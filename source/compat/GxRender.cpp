@@ -164,7 +164,7 @@ struct Renderer {
     bool fresh[3] = {};  // [2]: the depth tile last read back (freshTile) still holds
     unsigned freshTile = 0;
     // A texture by where and how GX fetches it.
-    using Key = std::tuple<u32, u16, u16, u8, u8, u8, u8, u8>;
+    using Key = std::tuple<u32, u16, u16, u8, u8, u8, u8, u8, u8, u8>;  // ..., min and mag filters, max LOD and LOD bias
     std::map<Key, C3D_Tex> textures;
     // EFB copies kept on the PICA (gpuCopy), by the Wii address they were copied to: RGBA8 at about the screen's
     // resolution, holding what a read in `readFormat` would give.
@@ -651,12 +651,13 @@ struct Renderer {
             C3D_TexSetWrap(&g.texture, wrapMode(map.wrapS), wrapMode(map.wrapT));
             return g.texture;
         }
-        const Key key{map.address, map.width, map.height, map.format, map.wrapS, map.wrapT, map.minFilter, map.magFilter};
+        const Key key{map.address, map.width, map.height, map.format, map.wrapS, map.wrapT, map.minFilter, map.magFilter, map.maxLod, map.lodBias};
         if (auto found = textures.find(key); found != textures.end()) return found->second;
         if (map.format == 8 || map.format == 9 || map.format == 10) stop("a palette texture");
         const Step converting(perf, 11);
         const auto power = [](unsigned v) { return v >= 8 && v <= 1024 && !(v & (v - 1)); };
-        if (map.format == static_cast<int>(GxFormat::I8) && power(map.width) && power(map.height)) {
+        const unsigned levels = mipLevels(key);
+        if (map.format == static_cast<int>(GxFormat::I8) && power(map.width) && power(map.height) && levels == 1) {
             // Straight into LA8, without decoding to RGBA first: SnowFloor's footprints redraw theirs every frame.
             C3D_Tex& texture = textures[key];
             if (!withRoom([&] { return C3D_TexInit(&texture, map.width, map.height, GPU_LA8); })) stop("a texture the PICA takes no memory for");
@@ -682,11 +683,32 @@ struct Renderer {
             std::abort();
         }
         C3D_Tex& texture = textures[key];
-        const TiledTexture tiled = tile(source);
-        if (!withRoom([&] { return upload(texture, tiled); })) stop("a texture the PICA takes no memory for");
+        if (levels > 1) {
+            // The game's own mip levels, which the PICA samples as GX does (the 3DS's smaller screen minifies more).
+            std::vector<TiledTexture> chain{tile(source)};
+            for (unsigned level = 1; level < levels; ++level) {
+                const unsigned w = map.width >> level, h = map.height >> level;
+                const std::size_t offset = gxLevelOffset(source.format, map.width, map.height, level);
+                ModelTexture smaller = source;
+                if (!decodeGxImage({static_cast<const std::uint8_t*>(OSPhysicalToCached(map.address)) + offset, gxImageSize(source.format, w, h)},
+                                   source.format, w, h, {}, GxPalette::IA8, smaller.image, error))
+                    stop("a texture's mip level that doesn't decode");
+                chain.push_back(tile(smaller, chain.front().format));
+            }
+            const float bias = static_cast<std::int8_t>(map.lodBias) / 32.0f;
+            if (!withRoom([&] { return upload(texture, chain, (map.minFilter & 3) == 2, bias); })) stop("a texture the PICA takes no memory for");
+        } else {
+            const TiledTexture tiled = tile(source);
+            if (!withRoom([&] { return upload(texture, tiled); })) stop("a texture the PICA takes no memory for");
+        }
         const auto [lo, hi] = textureRange(key);
         markPages(lo, hi, texturePages);
         return texture;
+    }
+
+    // Levels for the PICA when the game samples between them (the min filter's low bits), else the first alone.
+    static unsigned mipLevels(const Key& key) {
+        return std::get<6>(key) & 3 ? picaMipLevels(std::get<1>(key), std::get<2>(key), std::get<8>(key)) : 1;
     }
 
     // Depth from a texture: the clear's constant Z texture is the one case the PICA can follow, by vertex depth.
@@ -906,7 +928,7 @@ struct Renderer {
             hash = (hash ^ (word == 0 ? e.words[i] : word == 1 ? e.words[i] & 0x00F00000u : 0)) * 0x01000193u;
         }
         e.oneMap = true, e.mapUnit = static_cast<std::uint8_t>(unit), e.base = hash;
-        e.texture = Key{m.address, m.width, m.height, m.format, m.wrapS, m.wrapT, m.minFilter, m.magFilter};
+        e.texture = Key{m.address, m.width, m.height, m.format, m.wrapS, m.wrapT, m.minFilter, m.magFilter, m.maxLod, m.lodBias};
     }
 
     void placeInAtlas(CachedState& e) {
@@ -959,7 +981,7 @@ struct Renderer {
         std::vector<ModelTexture> members(keys.size());
         GPU_TEXCOLOR format = GPU_RGBA8;
         for (std::size_t k = 0; k < keys.size(); ++k) {
-            const auto& [address, width, height, fmt, wrapS, wrapT, minFilter, magFilter] = keys[k];
+            const auto& [address, width, height, fmt, wrapS, wrapT, minFilter, magFilter, maxLod, lodBias] = keys[k];
             if (fmt != std::get<3>(keys[0]) || fmt == 8 || fmt == 9 || fmt == 10 || fmt == 14 || (width & (width - 1)) || (height & (height - 1)))
                 return false;
             ModelTexture& m = members[k];
@@ -1339,7 +1361,7 @@ struct Renderer {
     // Where a texture's texels lie in the game's memory, [lo, hi).
     static std::pair<std::uintptr_t, std::uintptr_t> textureRange(const Key& key) {
         const auto lo = reinterpret_cast<std::uintptr_t>(OSPhysicalToCached(std::get<0>(key)));
-        return {lo, lo + gxImageSize(static_cast<GxFormat>(std::get<3>(key)), std::get<1>(key), std::get<2>(key))};
+        return {lo, lo + gxLevelOffset(static_cast<GxFormat>(std::get<3>(key)), std::get<1>(key), std::get<2>(key), mipLevels(key))};
     }
 
     // The CPU wrote memory the GPU will read (the game's cache flushes, noted in sChanged): meshes made from it go.

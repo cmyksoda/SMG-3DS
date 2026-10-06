@@ -13,6 +13,7 @@ struct GxTextureMap {
     std::uint32_t address = 0;  // physical
     std::uint16_t width = 0, height = 0;
     std::uint8_t format = 0, wrapS = 0, wrapT = 0, minFilter = 0, magFilter = 0;
+    std::uint8_t maxLod = 0, lodBias = 0;  // TX_SETMODE1's (sixteenths of a level), TX_SETMODE0's (signed, 32nds)
 };
 
 // A vertex ready for the PICA: clip space with the EFB mapped onto [-1, 1] (y up) and depth onto [-1, 0] (near to far,

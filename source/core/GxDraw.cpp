@@ -137,6 +137,7 @@ void readPixel(const GxCommandProcessor& gpu, GxDrawState& out) {
         t.address = TX_SETIMAGE3_GET_IMAGE_BASE(image3) << 5;
         t.wrapS = static_cast<std::uint8_t>(TX_SETMODE0_GET_WRAP_S(mode)), t.wrapT = static_cast<std::uint8_t>(TX_SETMODE0_GET_WRAP_T(mode));
         t.magFilter = static_cast<std::uint8_t>(TX_SETMODE0_GET_MAG_FILTER(mode)), t.minFilter = static_cast<std::uint8_t>(TX_SETMODE0_GET_MIN_FILTER(mode));
+        t.maxLod = static_cast<std::uint8_t>(TX_SETMODE1_GET_MAXLOD(gpu.bp[bank + 0x04])), t.lodBias = static_cast<std::uint8_t>(TX_SETMODE0_GET_LODBIAS(mode));
     }
 }
 
