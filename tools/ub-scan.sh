@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Recompiles every Petari object of a configured 3DS build with the warnings that name reads past an array's end, which
 # gcc may treat as unreachable and fold away, and references to temporaries or locals returned, which gcc makes null
-# (docs/PORTING.md). Prints each warning once; exits 1 if any.
+# (docs/PORTING.md). Prints each warning once; exits 1 if any. -Wsystem-headers: the decomp's include dirs are SYSTEM
+# ones, whose warnings gcc otherwise hides.
 set -euo pipefail
 project_dir=$(cd -- "$(dirname -- "$0")/.." && pwd)
 build_dir=$(cd -- "${SMG_BUILD_DIR:-"$HOME/.cache/smg-3ds/3ds"}" && pwd)
@@ -12,7 +13,7 @@ docker run --rm --network none --user "$(id -u):$(id -g)" \
   "$builder_image" bash -c '
 cd /build
 ninja -t commands | grep -E -- "-o CMakeFiles/(petari_[a-z0-9_]+|msl_wide)\.dir/[^ ]*\.obj -c " |
-  sed "s| -MD -MT [^ ]* -MF [^ ]*||; s| -o [^ ]*| -Wall -Wno-unused -Wno-sign-compare -Wno-reorder -o /dev/null|" > /tmp/commands
+  sed "s| -MD -MT [^ ]* -MF [^ ]*||; s| -o [^ ]*| -Wall -Wsystem-headers -Wno-changes-meaning -Wno-unused -Wno-sign-compare -Wno-reorder -o /dev/null|" > /tmp/commands
 xargs -P "$(nproc)" -d "\n" -I{} sh -c "{} 2>&1 || echo SCAN-FAILED" < /tmp/commands > /tmp/output || true
 grep -E "invokes undefined behavior|Warray-bounds|is out of the bounds|Wstringop-overread|Wstringop-overflow|Wreturn-local-addr|Wdangling-reference|Wdangling-pointer" /tmp/output | sort -u > /tmp/found || true
 failed=$(grep -c "^SCAN-FAILED" /tmp/output || true)
