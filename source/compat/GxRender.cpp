@@ -10,6 +10,7 @@
 #include <smg/GxFifoWrite.h>
 #include <smg/GxCopy.hpp>
 #include <smg/GxDraw.hpp>
+#include <smg/GxFog.hpp>
 #include <smg/GxRender.hpp>
 #include <smg/GxZones.hpp>
 #include <smg/Pica.hpp>
@@ -195,7 +196,7 @@ struct Renderer {
     bool y2rTried = false, y2rOpen = false;
     Handle y2rDone = 0;
     GxFrame frame{640, 480, true};
-    bool indirectNoted = false, dstAlphaNoted = false, fogNoted = false;
+    bool indirectNoted = false, dstAlphaNoted = false, fogRangeNoted = false;
     // dev.gx_dump: one frame's draws, copies and states listed in the log every minute of the game's clock.
     const GxCommandProcessor* lastGpu = nullptr;
     // The GPU path (gx.v.pica with `transform` on): display lists of primitives kept as meshes in linear memory,
@@ -243,7 +244,7 @@ struct Renderer {
         u64 since = 0, syncTicks = 0;
         u32 frames = 0, primitives = 0, vertices = 0, triangles = 0, draws = 0, sameState = 0, color0Rides = 0;
         u32 meshDraws = 0, meshTriangles = 0, meshesMade = 0, citroDraws = 0;
-        u32 pendingWhy[9] = {};  // mesh draws through citro3d after each kind of change (Pending)
+        u32 pendingWhy[10] = {};  // mesh draws through citro3d after each kind of change (Pending)
         u32 meshInvalidated = 0, meshOverflows = 0, meshBudgetDrops = 0, meshMismatches = 0, flushesQueued = 0, texturesInvalidated = 0;
         u32 meshesEvicted = 0, meshesDroppedForRoom = 0, leftOutDraws = 0, passDraws = 0, meshesRefreshed = 0, meshVerticesRefreshed = 0;
         u32 mismatchWhy[5] = {};  // the key's words, the descriptor (CP 0x50/0x60), a format table, an array base, a stride
@@ -376,14 +377,18 @@ struct Renderer {
         C3D_FVec fixedWas[7] = {};
         int meshLayout = -1;  // the mesh loaders citro3d holds (meshLoaders' place), -1 none
         bool aliasBuffers = true;  // the GPU may hold buffers past the first (a mesh's texgen reading the vertex's bytes again)
+        bool fog = false;
+        std::uint32_t fogWords[6] = {};
     } sent;
     void forgetSent() { sent = Sent{}, pend(PendingList); }
+    // The port's own draws (copies, movies) and whatever draws after the frame take no fog; a GX draw sends its own again.
+    void fogOff() { C3D_FogGasMode(GPU_NO_FOG, GPU_PLAIN_DENSITY, false), fogBits = 0, sent.fog = false; }
     // Whether citro3d holds state of ours not yet sent (one of its setters since its last draw): then a draw goes through
     // citro3d, which sends it; otherwise a mesh draw writes its few registers itself (writeMeshDraw). Every command list
     // begins pending, so its first draw is citro3d's and citro3d submits the list.
     bool pending = true;
     enum Pending : unsigned { PendingCombiner, PendingFragment, PendingCull, PendingScissor, PendingTexture, PendingFixed, PendingCpuBuffers,
-                              PendingMeshLayout, PendingList };
+                              PendingMeshLayout, PendingFog, PendingList };
     u32 pendingWhy = 1u << PendingList;
     void pend(Pending why) { pending = true, pendingWhy |= 1u << why; }
     // The blocks a mesh draw writes into the command list itself when they are all that's pending (writeChangedBlocks),
@@ -392,6 +397,9 @@ struct Renderer {
     static constexpr u32 RawBlocks = 1u << PendingCombiner | 1u << PendingFragment | 1u << PendingCull | 1u << PendingTexture |
                                      1u << PendingFixed | 1u << PendingMeshLayout | 1u << PendingCpuBuffers;
     u32 stagesChanged = 0;  // combiner stages, and bit 6 the buffer's updates and color
+    std::uint32_t fogWords[6] = {};  // the state's fog registers (GxFogRegisters), all zero with fog off
+    C3D_FogLut fogLut;
+    u32 fogBits = 0;  // fog's mode and z flip, which share GPUREG_TEXENV_UPDATE_BUFFER with the buffer's updates
     u32 testsChanged = 0;   // 1 the alpha test, 2 the blend, 4 the depth test and write mask
     u32 unitsChanged = 0, fixedChanged = 0;
     u32 unitsBound = 0;     // texture units citro3d has a texture for: it never unbinds one
@@ -516,7 +524,8 @@ struct Renderer {
             if (stagesChanged >> i & 1)
                 at = putCommand(at, 0x800F0000 | (GPUREG_TEXENV0_SOURCE + (i < 4 ? i : i + 2) * 8), reinterpret_cast<const u32*>(&was.env[i]), 5);
         if (stagesChanged >> 6 & 1) {
-            at = putCommand(at, 0x00070000 | GPUREG_TEXENV_UPDATE_BUFFER, u32(was.bufferUpdate[0] & 0xF) << 8 | u32(was.bufferUpdate[1] & 0xF) << 12);
+            at = putCommand(at, 0x00070000 | GPUREG_TEXENV_UPDATE_BUFFER,
+                            u32(was.bufferUpdate[0] & 0xF) << 8 | u32(was.bufferUpdate[1] & 0xF) << 12 | fogBits);
             at = putCommand(at, 0x000F0000 | GPUREG_TEXENV_BUFFER_COLOR, was.bufferColor);
         }
         if (testsChanged & 1) at = putCommand(at, 0x000F0000 | GPUREG_FRAGOP_ALPHA_TEST, u32(was.alphaTest) | u32(was.alphaFunc & 7) << 4 | u32(was.alphaReference) << 8);
@@ -634,6 +643,26 @@ struct Renderer {
         }
         was.depthWrite = pixel.depthWrite, sent.writeMask = writeMask, sent.pixel = true;
     }
+    // GX fog through the PICA's fog unit, its table from the GX registers (smg::picaFogTable): citro3d sends it, as its draw
+    // writes the table, so a change makes the next draw citro3d's.
+    void sendFog() {
+        if (sent.fog && sameWords(sent.fogWords, fogWords, 6)) return;
+        std::memcpy(sent.fogWords, fogWords, sizeof fogWords), sent.fog = true;
+        const GxFog fog = readGxFog(fogWords);
+        if (fog.type) {
+            float table[256];
+            picaFogTable(fog, table);
+            FogLut_FromArray(&fogLut, table);
+            C3D_FogGasMode(GPU_FOG, GPU_PLAIN_DENSITY, true);
+            C3D_FogColor(u32(fog.color[0]) | u32(fog.color[1]) << 8 | u32(fog.color[2]) << 16);
+            C3D_FogLutBind(&fogLut);
+            fogBits = GPU_FOG | BIT(16);
+        } else {
+            C3D_FogGasMode(GPU_NO_FOG, GPU_PLAIN_DENSITY, false);
+            fogBits = 0;
+        }
+        pend(PendingFog);
+    }
     void sendCull(GPU_CULLMODE mode) {
         if (sent.cull && sent.cullMode == mode) return;
         C3D_CullFace(mode);
@@ -721,6 +750,7 @@ struct Renderer {
         const GxZoneScope zone(ZonePause);
         flushVertices();
         C3D_RenderTargetDetachOutput(target);
+        fogOff();
         C3D_FrameEnd(GX_CMDLIST_FLUSH);
     }
     void resume() {
@@ -1264,9 +1294,11 @@ struct Renderer {
             std::fprintf(stderr, "The Wii GPU's drawing: indirect texture offsets are left out (the PICA has no dependent reads)\n");
             indirectNoted = true;
         }
-        if (const unsigned fog = TEV_FOG_PARAM_3_GET_FSEL(gpu.bp[0xF1]); fog && !fogNoted) {
-            std::fprintf(stderr, "The Wii GPU's drawing: fog (type %u) is left out\n", fog);
-            fogNoted = true;
+        for (int i = 0; i < 6; ++i) fogWords[i] = gpu.bp[GxFogRegisters[i]];
+        if (!TEV_FOG_PARAM_3_GET_FSEL(fogWords[4])) std::fill(std::begin(fogWords), std::end(fogWords), 0u);  // off, whatever the rest
+        if ((fogWords[0] >> 10 & 1) && !fogRangeNoted) {
+            std::fprintf(stderr, "The Wii GPU's drawing: fog's range adjustment is left out\n");
+            fogRangeNoted = true;
         }
         // GX's scissor in screen pixels, then on the target turned a quarter as the LCD is (citro3d's convention), kept per entry and frame.
         if (!(stateEntry->scissorFrame == frame)) {
@@ -2147,6 +2179,7 @@ struct Renderer {
         const Step step(perf, 1);
         if (!applied || appliedVersion != stateVersion) {
             sendPixel();
+            sendFog();
             sendScissor();
             for (unsigned unit = 0; unit < state_->program.unitCount; ++unit) {
                 const int map = state_->program.units[unit].texture;
@@ -2267,8 +2300,8 @@ struct Renderer {
                          counts[6] / n, bytes[6] / n / 1024);
             const u32* why = perf.pendingWhy;
             std::fprintf(stderr, "gx perf: mesh draws through citro3d after a change of: combiner %.0f, fragment ops %.0f, cull %.0f, scissor %.0f, "
-                         "textures %.0f, fixed attributes %.0f, CPU-path buffers %.0f, mesh layout %.0f, command list %.0f\n", why[0] / n, why[1] / n,
-                         why[2] / n, why[3] / n, why[4] / n, why[5] / n, why[6] / n, why[7] / n, why[8] / n);
+                         "textures %.0f, fixed attributes %.0f, CPU-path buffers %.0f, mesh layout %.0f, fog %.0f, command list %.0f\n", why[0] / n,
+                         why[1] / n, why[2] / n, why[3] / n, why[4] / n, why[5] / n, why[6] / n, why[7] / n, why[8] / n, why[9] / n);
             std::fprintf(stderr, "gx perf: pipeline per frame: %.0f prepares read whole, %.0f folds made, %.0f lighting reads; vertex layouts %.0f read, "
                          "%.0f reused; unfolded texgen vertices: matrix the position's %.0f, its pair %.0f, another %.0f, the last again %.0f, normalized %.0f\n",
                          pipeline.fullPrepares / n, pipeline.foldsMade / n, pipeline.lightingReads / n, lastGpu->layoutsRead / n,
@@ -2504,6 +2537,7 @@ struct Renderer {
         for (int unit = 0; unit < 3; ++unit) C3D_TexBind(unit, &scratch);
         unitsBound = 7;
         forgetSent();
+        fogOff();
         ensureCpuBuffers();
         C3D_DrawArrays(GPU_TRIANGLES, static_cast<int>(used), static_cast<int>(n));
         used += n;
@@ -2704,6 +2738,7 @@ struct Renderer {
         C3D_TexBind(0, &m.texture);
         unitsBound |= 1;
         forgetSent();
+        fogOff();
         ensureCpuBuffers();
         C3D_DrawArrays(GPU_TRIANGLES, static_cast<int>(used), static_cast<int>(n));
         used += n;
@@ -2818,6 +2853,7 @@ struct Renderer {
         flushBatch();
         if (dumping) std::fprintf(stderr, "gx dump: frame ends after %u draws\n", dumpIndex), dumping = false;
         flushVertices();
+        fogOff();
         C3D_FrameEnd(GX_CMDLIST_FLUSH);
         inFrame = false;
         if (smgAvSyncFramePending.exchange(false))

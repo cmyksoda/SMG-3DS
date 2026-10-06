@@ -242,7 +242,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
 add_library(smg_platform STATIC
   source/core/Input.cpp source/core/Motion.cpp source/core/Settings.cpp source/core/Session.cpp
   source/core/Archive.cpp source/core/Bcsv.cpp source/core/Model.cpp source/core/Texture.cpp source/core/Combiner.cpp
-  source/core/Stage.cpp source/core/StageGravity.cpp source/core/Mesh.cpp source/core/Etc1.cpp source/core/Kcl.cpp source/core/StageCollision.cpp source/core/StageLight.cpp source/core/Animation.cpp source/core/Actors.cpp source/core/J3DImage.cpp source/core/Dol.cpp source/core/GxCommands.cpp source/core/GxZones.cpp source/core/Bmg.cpp source/core/Kpad.cpp source/core/Layout.cpp source/core/GxDraw.cpp source/core/GxCopy.cpp source/core/Jpa.cpp source/core/WiiDsp.cpp source/core/AudioData.cpp source/core/Thp.cpp source/core/CameraAnim.cpp source/core/Aes.cpp source/core/WiiDisc.cpp source/core/MslPrintf.cpp)
+  source/core/Stage.cpp source/core/StageGravity.cpp source/core/Mesh.cpp source/core/Etc1.cpp source/core/Kcl.cpp source/core/StageCollision.cpp source/core/StageLight.cpp source/core/Animation.cpp source/core/Actors.cpp source/core/J3DImage.cpp source/core/Dol.cpp source/core/GxCommands.cpp source/core/GxZones.cpp source/core/Bmg.cpp source/core/Kpad.cpp source/core/Layout.cpp source/core/GxDraw.cpp source/core/GxFog.cpp source/core/GxCopy.cpp source/core/Jpa.cpp source/core/WiiDsp.cpp source/core/AudioData.cpp source/core/Thp.cpp source/core/CameraAnim.cpp source/core/Aes.cpp source/core/WiiDisc.cpp source/core/MslPrintf.cpp)
 target_include_directories(smg_platform PUBLIC include)
 target_link_libraries(smg_platform PUBLIC petari_scene petari_anim)
 target_compile_options(smg_platform PRIVATE -Wall -Wextra -Werror)
@@ -387,7 +387,7 @@ if(NINTENDO_3DS)
     add_executable(native_validation source/platform/PureVirtual.cpp tests/NativeTests.cpp tests/MathTests.cpp tests/PadTests.cpp tests/BcsvTests.cpp
       tests/ModelTests.cpp tests/CombinerTests.cpp tests/GravityTests.cpp tests/Etc1Tests.cpp tests/GpuTests.cpp
       tests/NameObjTests.cpp tests/SceneTests.cpp tests/CollisionTests.cpp tests/AnimationTests.cpp tests/ActorTests.cpp tests/J3DTransformTests.cpp tests/J3DSkeletonTests.cpp
-      tests/GxCommandTests.cpp tests/BmgTests.cpp tests/ColorTests.cpp tests/LayoutTests.cpp tests/WideTests.cpp tests/GxDrawTests.cpp tests/GxCopyTests.cpp tests/WiiDspTests.cpp tests/AudioDataTests.cpp tests/ThpTests.cpp)
+      tests/GxCommandTests.cpp tests/BmgTests.cpp tests/ColorTests.cpp tests/LayoutTests.cpp tests/WideTests.cpp tests/GxDrawTests.cpp tests/GxFogTests.cpp tests/GxCopyTests.cpp tests/WiiDspTests.cpp tests/AudioDataTests.cpp tests/ThpTests.cpp)
     set_target_properties(native_validation PROPERTIES SUFFIX ".elf")
     smg_no_missing_weak(native_validation)
     target_compile_definitions(native_validation PRIVATE SMG_TEST_RUNNER)
@@ -448,6 +448,10 @@ else()
   target_link_libraries(model_tests PRIVATE smg_native_scene smg_platform)
   target_compile_options(model_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME j3d_models COMMAND model_tests)
+  add_executable(gx_fog_tests tests/GxFogTests.cpp)
+  target_link_libraries(gx_fog_tests PRIVATE smg_platform)
+  target_compile_options(gx_fog_tests PRIVATE -Wall -Wextra -Werror)
+  add_test(NAME gx_fog COMMAND gx_fog_tests)
   add_executable(etc1_tests tests/Etc1Tests.cpp)
   target_link_libraries(etc1_tests PRIVATE smg_native_scene smg_platform)
   target_compile_options(etc1_tests PRIVATE -Wall -Wextra -Werror)

@@ -29,6 +29,7 @@ constexpr int VcdLo = 0x50, VcdHi = 0x60, VatA = 0x70, VatB = 0x80, VatC = 0x90,
 // blend modes, destination alpha, the texture maps' modes, sizes and addresses, TEV stages and colors, alpha test, depth texture, konst selects.
 constexpr bool drawsReadRegister(std::uint32_t address) {
     if (address == 0x00 || address == 0x20 || address == 0x21 || address == 0x40 || address == 0x41 || address == 0x42) return true;
+    if (address == 0xE8 || (address >= 0xEE && address <= 0xF2)) return true;  // fog: read at the state's build, not in its key
     if ((address >= 0x10 && address <= 0x1F) || (address >= 0x28 && address <= 0x2F) || (address >= 0xC0 && address <= 0xE7) ||
         (address >= 0xF3 && address <= 0xFD))
         return true;

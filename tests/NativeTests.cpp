@@ -14,6 +14,7 @@ int runModelTests();
 int runCombinerTests();
 int runGravityTests();
 int runEtc1Tests();
+int runGxFogTests();
 int runGpuTests();
 int runNameObjTests();
 int runSceneTests();
@@ -61,6 +62,7 @@ int main() {
     runLayoutTests();
     runWideTests();
     runEtc1Tests();
+    runGxFogTests();
     runGpuTests();
     std::puts("\nPASS: math, WPad, BCSV, J3D, TEV, gravity, NameObj, scene, collision, animation, actors, J3D transforms, GX commands, draws and copies, Wii DSP, audio data, BMG text, colors, layouts, wide text, ETC1\n\nSTART: exit");
     while (aptMainLoop()) {
