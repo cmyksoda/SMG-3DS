@@ -54,6 +54,7 @@ constexpr std::size_t VertexBytes = 2u << 20, CommandBytes = 1u << 20;
 // Triangles are drawn by 16-bit indices from the buffer's start, so it holds no more vertices than they can number.
 constexpr std::size_t MaxVertices = VertexBytes / sizeof(GxDrawVertex), MaxIndices = GxVertexPipeline::maxIndices(MaxVertices);
 static_assert(MaxVertices <= 0x10000, "vertex numbers are 16 bits");
+static_assert(sizeof(C3D_TexEnv) % 4 == 0 && sizeof(C3D_Tex) % 4 == 0, "compared a word at a time");
 // Room a draw's commands need at most, in words: when less is left, the frame is ended and begun again (see roomFor).
 constexpr u32 DrawCommandWords = 0x800;
 // A mesh group's slot rows (up to forty uniforms, four words each) and its draw, beyond the first group's.
@@ -87,6 +88,7 @@ constexpr u32 DisplayTransferFlags = GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_
 constexpr u32 TargetTileRow = 240 * 8 * 4, ScratchTileRow = 256 * 8 * 4;
 
 bool sCopiesStayOnGpu = false;
+bool sStepTiming = false;  // dev.gx_timing, read when the renderer is made
 
 // GameSystem::frameLoop's phases (smgFramePhase), timed on the game's thread and read by the perf line on the renderer's:
 // drawing, the logic step, animation, waiting for the GPU's draw done (endFrame), the retrace wait.
@@ -142,6 +144,7 @@ GPU_TEXTURE_WRAP_PARAM wrapMode(unsigned gx) { return gx == 1 ? GPU_REPEAT : gx 
 }
 
 struct Renderer {
+    Renderer() { sStepTiming = smgDevGxTiming() != 0; }
     bool ready = false, inFrame = false, clearPending = true;
     u32 clearColor = 0x000000FF, clearDepth = 0;
     C3D_RenderTarget* target = nullptr;
@@ -155,7 +158,9 @@ struct Renderer {
     // The state the pending primitives share, built again only when the BP registers a draw reads change; consecutive
     // primitives under one state are one draw (flushBatch). It lives in the state cache (readState).
     GxDrawState* state_ = nullptr;
-    PicaPixel pixel;
+    // The pixel state to send: the state's own in its cache entry, or ownPixel when this draw changes it (keepDstAlpha).
+    PicaPixel ownPixel;
+    const PicaPixel* pixelNow = &ownPixel;
     int writeMask = 0, scissor[4] = {};
     bool stateValid = false, applied = false, scissorEmpty = false, scissorWhole = true;
     u32 stateBp = 0, stateBesideColors = 0, stateColor1 = 0, stateVersion = 0, appliedVersion = 0;
@@ -200,6 +205,7 @@ struct Renderer {
     int ambientUniform = -1, lightUniform = -1, lightLoopUniform = -1, litUniform = -1, rgbLitUniform = -1, alphaLitUniform = -1, anyLightUniform = -1;
     int slotRowUniform = -1, slotGenUniform[3] = {-1, -1, -1}, ambientRgbUniform = -1, ambientAlphaUniform = -1;
     struct CachedMesh {
+        std::uint64_t hash = 0;  // of its key, where it is in `meshes`
         std::vector<u32> key;
         std::vector<std::pair<std::uint8_t, u32>> depends;  // the CP registers it was decoded under, and their values
         void* block = nullptr;  // vertices, then indices
@@ -220,6 +226,9 @@ struct Renderer {
         std::uintptr_t range[2][2] = {};  // the memory it was made from, [lo, hi): the display list, the array elements
     };
     std::unordered_map<std::uint64_t, CachedMesh> meshes;
+    // The mesh last found or made for each slot of the key hash, looked at before the map (whose lookup divides); dropMesh clears its slot.
+    static constexpr u32 MeshSlots = 1024;
+    CachedMesh* meshIndex[MeshSlots] = {};
     // Lists refused for want of mesh memory, by key hash, with their mesh's size: room is looked for before building again,
     // as building is the cost.
     std::unordered_map<std::uint64_t, std::size_t> budgetRefused;
@@ -452,6 +461,13 @@ struct Renderer {
         const u16 next = value ? u16(bools | BIT(id - 0x68)) : u16(bools & ~BIT(id - 0x68));
         if (next != bools) bools = next, boolsChanged = true;
     }
+    // The bools `mask` names (a bit each from id 0x68) set to `value`'s.
+    void booleans(u16 mask, u16 value) {
+        u16& bools = C3D_BoolUnifs[GPU_VERTEX_SHADER];
+        const u16 next = u16(bools & ~mask | value);
+        if (next != bools) bools = next, boolsChanged = true;
+    }
+    static u16 boolBit(int id) { return u16(1u << (id - 0x68)); }
     void integer(int id, int x, int y, int z, int w) {
         C3D_IVec& now = C3D_IVUnif[GPU_VERTEX_SHADER][id - 0x60];
         if (now != IVec_Pack(x, y, z, w)) now = IVec_Pack(x, y, z, w), intsChanged = true;
@@ -466,10 +482,18 @@ struct Renderer {
             u32* at = gpuCmdBuf + gpuCmdBufOffset;
             for (int word = 0; word < 3; ++word) {
                 while (rowsChanged[word]) {
-                    // A run of changed rows from the first left, as one upload.
+                    // A run of changed rows from the first left, as one upload (a word of the bits at a time).
                     const int id = word * 32 + __builtin_ctz(rowsChanged[word]);
                     int end = id;
-                    while (end < C3D_FVUNIF_COUNT && rowsChanged[end >> 5] >> (end & 31) & 1) rowsChanged[end >> 5] &= ~(1u << (end & 31)), ++end;
+                    while (end < C3D_FVUNIF_COUNT) {
+                        const int shift = end & 31;
+                        const u32 rest = rowsChanged[end >> 5] >> shift;  // the rows from `end` to the word's end
+                        if (!(rest & 1)) break;
+                        const int ones = rest == ~0u ? 32 : __builtin_ctz(~rest);  // how many of them in a row changed
+                        rowsChanged[end >> 5] &= ~((ones == 32 ? ~0u : (1u << ones) - 1) << shift);
+                        end += ones;
+                        if (end & 31) break;
+                    }
                     at = putCommand(at, 0x000F0000 | GPUREG_VSH_FLOATUNIFORM_CONFIG, 0x80000000u | u32(id));
                     at = putCommand(at, 0x000F0000 | GPUREG_VSH_FLOATUNIFORM_DATA, reinterpret_cast<const u32*>(&C3D_FVUnif[GPU_VERTEX_SHADER][id]),
                                     u32(end - id) * 4);
@@ -579,27 +603,36 @@ struct Renderer {
     }
 
     void sendPixel() {
+        const PicaPixel& pixel = *pixelNow;
         const bool all = !sent.pixel;
-        const PicaPixel& was = sent.was;
+        PicaPixel& was = sent.was;  // brought up to `pixel` a part at a time, as it is sent
         for (unsigned i = 0; i < CombinerProgram::MaxStages; ++i)
-            if (all || std::memcmp(&was.env[i], &pixel.env[i], sizeof(C3D_TexEnv)))
-                *C3D_GetTexEnv(int(i)) = pixel.env[i], stagesChanged |= 1u << i, pend(PendingCombiner);
-        if (all || was.bufferColor != pixel.bufferColor) C3D_TexEnvBufColor(pixel.bufferColor), stagesChanged |= 1u << 6, pend(PendingCombiner);
+            if (all || !sameWords(&was.env[i], &pixel.env[i], sizeof(C3D_TexEnv) / 4))
+                *C3D_GetTexEnv(int(i)) = pixel.env[i], was.env[i] = pixel.env[i], stagesChanged |= 1u << i, pend(PendingCombiner);
+        if (all || was.bufferColor != pixel.bufferColor)
+            C3D_TexEnvBufColor(pixel.bufferColor), was.bufferColor = pixel.bufferColor, stagesChanged |= 1u << 6, pend(PendingCombiner);
         if (all || was.bufferUpdate[0] != pixel.bufferUpdate[0] || was.bufferUpdate[1] != pixel.bufferUpdate[1]) {
             C3D_TexEnvBufUpdate(C3D_RGB, pixel.bufferUpdate[0]), C3D_TexEnvBufUpdate(C3D_Alpha, pixel.bufferUpdate[1]);
+            was.bufferUpdate[0] = pixel.bufferUpdate[0], was.bufferUpdate[1] = pixel.bufferUpdate[1];
             stagesChanged |= 1u << 6, pend(PendingCombiner);
         }
-        if (all || was.alphaTest != pixel.alphaTest || was.alphaFunc != pixel.alphaFunc || was.alphaReference != pixel.alphaReference)
+        if (all || was.alphaTest != pixel.alphaTest || was.alphaFunc != pixel.alphaFunc || was.alphaReference != pixel.alphaReference) {
             C3D_AlphaTest(pixel.alphaTest, pixel.alphaFunc, pixel.alphaReference), testsChanged |= 1, pend(PendingFragment);
+            was.alphaTest = pixel.alphaTest, was.alphaFunc = pixel.alphaFunc, was.alphaReference = pixel.alphaReference;
+        }
         if (all || was.equation != pixel.equation || was.alphaEquation != pixel.alphaEquation || was.source != pixel.source ||
             was.destination != pixel.destination || was.alphaSource != pixel.alphaSource || was.alphaDestination != pixel.alphaDestination) {
             C3D_AlphaBlend(pixel.equation, pixel.alphaEquation, pixel.source, pixel.destination, pixel.alphaSource, pixel.alphaDestination);
+            was.equation = pixel.equation, was.alphaEquation = pixel.alphaEquation, was.source = pixel.source, was.destination = pixel.destination;
+            was.alphaSource = pixel.alphaSource, was.alphaDestination = pixel.alphaDestination;
             testsChanged |= 2, pend(PendingFragment);
         }
-        if (all || was.depthTest != pixel.depthTest || was.depthFunc != pixel.depthFunc || sent.writeMask != writeMask)
+        if (all || was.depthTest != pixel.depthTest || was.depthFunc != pixel.depthFunc || sent.writeMask != writeMask) {
             C3D_DepthTest(pixel.depthTest, pixel.depthTest ? pixel.depthFunc : GPU_ALWAYS, static_cast<GPU_WRITEMASK>(writeMask)), testsChanged |= 4,
                 pend(PendingFragment);
-        sent.was = pixel, sent.writeMask = writeMask, sent.pixel = true;
+            was.depthTest = pixel.depthTest, was.depthFunc = pixel.depthFunc;
+        }
+        was.depthWrite = pixel.depthWrite, sent.writeMask = writeMask, sent.pixel = true;
     }
     void sendCull(GPU_CULLMODE mode) {
         if (sent.cull && sent.cullMode == mode) return;
@@ -607,14 +640,14 @@ struct Renderer {
         sent.cull = true, sent.cullMode = mode, pend(PendingCull);
     }
     void sendScissor() {
-        if (sent.scissor && sent.scissorWhole == scissorWhole && (scissorWhole || !std::memcmp(sent.scissorBox, scissor, sizeof scissor))) return;
+        if (sent.scissor && sent.scissorWhole == scissorWhole && (scissorWhole || sameWords(sent.scissorBox, scissor, 4))) return;
         if (scissorWhole) C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
         else C3D_SetScissor(GPU_SCISSOR_NORMAL, scissor[0], scissor[1], scissor[2], scissor[3]);
         sent.scissor = true, sent.scissorWhole = scissorWhole, std::memcpy(sent.scissorBox, scissor, sizeof scissor), pend(PendingScissor);
     }
     // The same texture object with the same registers needs no binding again.
     void sendTexture(unsigned unit, C3D_Tex& texture) {
-        if (sent.texture[unit] && sent.bound[unit] == &texture && !std::memcmp(&sent.boundWas[unit], &texture, sizeof texture)) return;
+        if (sent.texture[unit] && sent.bound[unit] == &texture && sameWords(&sent.boundWas[unit], &texture, sizeof texture / 4)) return;
         C3D_TexBind(int(unit), &texture);
         sent.texture[unit] = true, sent.bound[unit] = &texture, sent.boundWas[unit] = texture, pend(PendingTexture);
         unitsChanged |= 1u << unit, unitsBound |= 1u << unit;
@@ -877,10 +910,15 @@ struct Renderer {
     struct CachedState {
         u32 words[MaxStateWords];
         std::size_t count = 0;
+        u32 hash = 0;  // of the words, the entry's key in `states`
         GxDrawState state;
         u32 colors[4];  // C0 and C1 as read, for a marked key whose state kept them
         PicaPixel pixel;  // preparePixel's, of the state's material and program
         bool pixelReady = false;
+        // The scissor on the target, made for `scissorFrame` (never a real frame until it is made).
+        GxFrame scissorFrame{0, 0, false};
+        bool scissorEmpty = false, scissorWhole = true;
+        int scissor[4] = {};
         std::vector<PicaPixel> passPixels;  // its further passes', their blends made to add
         // CPU path, one map on one unit: a hash of the key without that map's size and address (shared by states that
         // differ only in which texture they sample), the texture, and its place in an atlas.
@@ -893,6 +931,8 @@ struct Renderer {
         u32 atlasGeneration = 0;
     };
     std::unordered_map<u32, CachedState> states;
+    static constexpr u32 StateSlots = 1024;
+    CachedState* stateIndex[StateSlots] = {};
     u32 stateWords[MaxStateWords];
     CachedState* stateEntry = nullptr;  // the entry the last read came from or went into
 
@@ -913,7 +953,12 @@ struct Renderer {
         std::size_t count = gxDrawStateKey(gpu, stateWords, palette, &keyMarkers, &keyMapsAt);
         stateWords[count++] = palette;
         u32 hash = 0x811C9DC5u;
-        for (std::size_t i = 0; i < count; ++i) hash = (hash ^ stateWords[i]) * 0x01000193u;
+        std::size_t i = 0;
+        for (; i + 4 <= count; i += 4) {
+            hash = (hash ^ stateWords[i]) * 0x01000193u, hash = (hash ^ stateWords[i + 1]) * 0x01000193u;
+            hash = (hash ^ stateWords[i + 2]) * 0x01000193u, hash = (hash ^ stateWords[i + 3]) * 0x01000193u;
+        }
+        for (; i < count; ++i) hash = (hash ^ stateWords[i]) * 0x01000193u;
         keyHash = hash, keyCount = count;
         // A marked color holds for every value only if the state rides it; one whose program kept the value (exact only
         // that way) holds for that value.
@@ -921,23 +966,28 @@ struct Renderer {
             return (!(keyMarkers & 1) || c.state.color0InVertex || (c.colors[0] == gpu.tevColor[2] && c.colors[1] == gpu.tevColor[3])) &&
                    (!(keyMarkers & 2) || c.state.color1InTexture || (c.colors[2] == gpu.tevColor[4] && c.colors[3] == gpu.tevColor[5]));
         };
-        const auto found = states.find(hash);
-        if (found == states.end() || found->second.count != count || std::memcmp(found->second.words, stateWords, count * sizeof(u32)) ||
-            !holds(found->second))
-            return nullptr;
+        // The entry recently found by this slot of the hash, before the map's own lookup (a division).
+        CachedState* entry = stateIndex[hash % StateSlots];
+        if (!entry || entry->hash != hash) {
+            const auto found = states.find(hash);
+            entry = found == states.end() ? nullptr : &found->second;
+            if (entry) stateIndex[hash % StateSlots] = entry;
+        }
+        if (!entry || entry->count != count || !sameWords(entry->words, stateWords, count) || !holds(*entry)) return nullptr;
         ++perf.stateHits;
-        return &found->second;
+        return entry;
     }
     // The state for findState's key, read from GX (a key that collides takes its entry over).
     CachedState& makeState(const GxCommandProcessor& gpu, bool palette) {
         ++perf.stateMisses;
-        if (states.size() >= 512) states.clear(), ++perf.stateClears;
+        if (states.size() >= 512) states.clear(), std::fill(std::begin(stateIndex), std::end(stateIndex), nullptr), ++perf.stateClears;
         CachedState& entry = states[keyHash];
+        entry.hash = keyHash, stateIndex[keyHash % StateSlots] = &entry;
         std::memcpy(entry.words, stateWords, keyCount * sizeof(u32)), entry.count = keyCount;
         readGxDrawState(gpu, entry.state, palette);
         std::memcpy(entry.colors, gpu.tevColor + 2, sizeof entry.colors);
         if (!entry.state.program.exact) countApproximation(entry.state.program.approximation);
-        entry.pixelReady = false;
+        entry.pixelReady = false, entry.scissorFrame = GxFrame{0, 0, false};
         describeForAtlas(entry, palette);
         return entry;
     }
@@ -1136,10 +1186,7 @@ struct Renderer {
         ~Step() {
             if (start_) perf_.stepTicks[which_] += svcGetSystemTick() - start_, ++perf_.steps[which_];
         }
-        static bool timing() {
-            static const bool on = smgDevGxTiming();
-            return on;
-        }
+        static bool timing() { return sStepTiming; }
         static constexpr GxZone zones[13] = {ZoneState,   ZoneApply,  ZonePrepare,    ZoneState,    ZoneState, ZoneState,    ZoneCpuVertices,
                                              ZoneFlush,   ZoneMeshLookup, ZoneUniforms, ZoneMeshDraw, ZoneTexture, ZoneMeshBuild};
         Perf& perf_;
@@ -1221,38 +1268,41 @@ struct Renderer {
             std::fprintf(stderr, "The Wii GPU's drawing: fog (type %u) is left out\n", fog);
             fogNoted = true;
         }
-        // GX's scissor in screen pixels, then on the target turned a quarter as the LCD is (citro3d's convention).
-        const int x0 = std::clamp(static_cast<int>(std::lround(state_->scissor[0] * 400.0f / frame.width)), 0, 400);
-        const int x1 = std::clamp(static_cast<int>(std::lround(state_->scissor[2] * 400.0f / frame.width)), 0, 400);
-        const int y0 = std::clamp(static_cast<int>(std::lround(state_->scissor[1] * 240.0f / frame.height)), 0, 240);
-        const int y1 = std::clamp(static_cast<int>(std::lround(state_->scissor[3] * 240.0f / frame.height)), 0, 240);
-        scissorEmpty = x1 <= x0 || y1 <= y0;
-        scissorWhole = x0 == 0 && y0 == 0 && x1 == 400 && y1 == 240;
-        scissor[0] = 240 - y1, scissor[1] = 400 - x1, scissor[2] = 240 - y0, scissor[3] = 400 - x0;
+        // GX's scissor in screen pixels, then on the target turned a quarter as the LCD is (citro3d's convention), kept per entry and frame.
+        if (!(stateEntry->scissorFrame == frame)) {
+            const int x0 = std::clamp(static_cast<int>(std::lround(state_->scissor[0] * 400.0f / frame.width)), 0, 400);
+            const int x1 = std::clamp(static_cast<int>(std::lround(state_->scissor[2] * 400.0f / frame.width)), 0, 400);
+            const int y0 = std::clamp(static_cast<int>(std::lround(state_->scissor[1] * 240.0f / frame.height)), 0, 240);
+            const int y1 = std::clamp(static_cast<int>(std::lround(state_->scissor[3] * 240.0f / frame.height)), 0, 240);
+            stateEntry->scissorFrame = frame;
+            stateEntry->scissorEmpty = x1 <= x0 || y1 <= y0;
+            stateEntry->scissorWhole = x0 == 0 && y0 == 0 && x1 == 400 && y1 == 240;
+            stateEntry->scissor[0] = 240 - y1, stateEntry->scissor[1] = 400 - x1, stateEntry->scissor[2] = 240 - y0, stateEntry->scissor[3] = 400 - x0;
+        }
+        scissorEmpty = stateEntry->scissorEmpty, scissorWhole = stateEntry->scissorWhole;
+        std::memcpy(scissor, stateEntry->scissor, sizeof scissor);
         gpuXf[0] = gpu.xf[0x1009], gpuXf[1] = gpu.xf[0x100E], gpuXf[2] = gpu.xf[0x1010], gpuXf[3] = gpu.xf[0x100C], gpuXf[4] = gpu.xf[0x100A];
         {
             const Step prepare(perf, 5);
-            if (stateEntry->pixelReady) {
-                pixel = stateEntry->pixel;
-            } else {
-                pixel = preparePixel(state_->material, state_->program);
-                stateEntry->pixel = pixel, stateEntry->pixelReady = true;
-            }
+            if (!stateEntry->pixelReady) stateEntry->pixel = preparePixel(state_->material, state_->program), stateEntry->pixelReady = true;
+            pixelNow = &stateEntry->pixel;
         }
         if (state_->dstAlphaEnable && state_->alphaUpdate) keepDstAlpha();
         writeMask = (state_->colorUpdate ? GPU_WRITE_COLOR & ~GPU_WRITE_ALPHA : 0) | (state_->alphaUpdate ? GPU_WRITE_ALPHA : 0) |
-                    (pixel.depthWrite ? GPU_WRITE_DEPTH : 0);
+                    (pixelNow->depthWrite ? GPU_WRITE_DEPTH : 0);
     }
 
     // GXSetDstAlpha: the EFB takes a constant alpha while the TEV's blends and is tested. The PICA blends and tests with
     // the alpha it writes, so that holds exactly only when neither reads the source alpha; then a last stage replaces it.
     void keepDstAlpha() {
         const auto readsSource = [](GPU_BLENDFACTOR f) { return f == GPU_SRC_ALPHA || f == GPU_ONE_MINUS_SRC_ALPHA; };
-        if (readsSource(pixel.source) || readsSource(pixel.destination) || pixel.alphaTest) {
+        if (readsSource(pixelNow->source) || readsSource(pixelNow->destination) || pixelNow->alphaTest) {
             if (!dstAlphaNoted) std::fprintf(stderr, "The Wii GPU's drawing: destination alpha with a blend or test that reads the source alpha keeps the source alpha\n");
             dstAlphaNoted = true;
             return;
         }
+        ownPixel = *pixelNow, pixelNow = &ownPixel;
+        PicaPixel& pixel = ownPixel;
         const unsigned last = std::min(state_->program.stageCount, CombinerProgram::MaxStages - 1);
         C3D_TexEnv& env = pixel.env[last];
         if (last == state_->program.stageCount) {
@@ -1373,6 +1423,7 @@ struct Renderer {
     void dropMesh(std::unordered_map<std::uint64_t, CachedMesh>::iterator it) {
         meshBytes -= it->second.vertexCount * it->second.layout.stride + it->second.indexCount * sizeof(std::uint16_t);
         linearFree(it->second.block);
+        if (CachedMesh*& slot = meshIndex[u32(it->first) % MeshSlots]; slot == &it->second) slot = nullptr;
         meshes.erase(it);
     }
     // Room for `bytes` more, from the meshes least recently drawn: none drawn in this frame or the last, which the GPU
@@ -1612,25 +1663,29 @@ struct Renderer {
         std::memcpy(&key[n], list, 4), std::memcpy(&key[n + 1], list + size - 4, 4), n += 2;
         std::uint64_t hash = 0xCBF29CE484222325ull;
         for (unsigned i = 0; i < n; ++i) hash = (hash ^ key[i]) * 0x100000001B3ull;
-        auto found = meshes.find(hash);
-        bool stale = found != meshes.end() && (found->second.key.size() != n || std::memcmp(found->second.key.data(), key, n * 4));
+        CachedMesh* m = meshIndex[u32(hash) % MeshSlots];
+        if (!m || m->hash != hash) {
+            const auto found = meshes.find(hash);
+            m = found == meshes.end() ? nullptr : &found->second;
+            if (m) meshIndex[u32(hash) % MeshSlots] = m;
+        }
+        bool stale = m && (m->key.size() != n || !sameWords(m->key.data(), key, n));
         if (stale) ++perf.mismatchWhy[0];
         bool moved = false;
-        if (found != meshes.end() && !stale)
-            for (auto& [reg, value] : found->second.depends)
+        if (m && !stale)
+            for (auto& [reg, value] : m->depends)
                 if (gpu.cp[reg] != value && !stale) {
                     if (reg >= 0xA0 && reg < 0xB0) moved = true, value = gpu.cp[reg];  // where its arrays are: decoded again below
                     else stale = true, ++perf.mismatchWhy[reg < 0x70 ? 1 : reg < 0xA0 ? 2 : 4];
                 }
         if (moved && !stale) {
             ++perf.mismatchWhy[3];
-            CachedMesh& m = found->second;
-            m.moving = true, m.range[1][0] = m.range[1][1] = 0;  // its arrays' writes no longer drop it: it is decoded each frame
+            m->moving = true, m->range[1][0] = m->range[1][1] = 0;  // its arrays' writes no longer drop it: it is decoded each frame
         }
-        if (stale) dropMesh(found), found = meshes.end(), ++perf.meshMismatches;
+        if (stale) dropMesh(meshes.find(hash)), m = nullptr, ++perf.meshMismatches;
         stepEnd(8, lookup);
         gxZone = ZoneListCheck;
-        if (found == meshes.end()) {
+        if (!m) {
             if (const auto refused = budgetRefused.find(hash); refused != budgetRefused.end()) {
                 if (!makeRoom(refused->second)) return ++perf.refused[GxVertexPipeline::MeshBudget], GxVertexPipeline::MeshBudget;
                 budgetRefused.erase(refused);
@@ -1660,6 +1715,7 @@ struct Renderer {
             std::memcpy(static_cast<std::uint8_t*>(block) + vertexBytes, mesh.indices.data(), mesh.indices.size() * sizeof(std::uint16_t));
             GSPGPU_FlushDataCache(block, bytes);
             CachedMesh& cached = meshes[hash];
+            cached.hash = hash, meshIndex[u32(hash) % MeshSlots] = &cached;
             cached.key.assign(key, key + n);
             cached.depends.clear();
             for (std::uint8_t reg : {std::uint8_t(0x50), std::uint8_t(0x60)}) cached.depends.emplace_back(reg, gpu.cp[reg]);
@@ -1684,16 +1740,16 @@ struct Renderer {
             if (cached.range[1][1] <= cached.range[1][0]) cached.range[1][0] = cached.range[1][1] = 0;  // all attributes direct
             for (const auto& r : cached.range) markPages(r[0], r[1]);
             meshBytes += bytes, ++perf.meshesMade, perf.meshVerticesMade += u32(mesh.vertexCount());
-            found = meshes.find(hash);
+            m = &cached;
         }
-        found->second.lastFrame = framesShown;
-        if (found->second.moving && (moved || found->second.refreshedFrame != framesShown)) {
+        m->lastFrame = framesShown;
+        if (m->moving && (moved || m->refreshedFrame != framesShown)) {
             gxZone = ZoneMeshRefresh;
-            const bool refreshed = refreshMesh(found->second, list, size);
+            const bool refreshed = refreshMesh(*m, list, size);
             gxZone = ZoneListCheck;
-            if (!refreshed) return dropMesh(found), ++perf.refused[GxVertexPipeline::MeshMoving], GxVertexPipeline::MeshMoving;
+            if (!refreshed) return dropMesh(meshes.find(hash)), ++perf.refused[GxVertexPipeline::MeshMoving], GxVertexPipeline::MeshMoving;
         }
-        drawMesh(found->second);
+        drawMesh(*m);
         return GxVertexPipeline::MeshOk;
     }
 
@@ -1848,8 +1904,8 @@ struct Renderer {
         if (dumping) dumpMesh(mesh, u);
         if (u.reject == 3) return;  // GX culls every triangle
         slotUniforms(u);
-        boolean(litUniform, u.lit);
-        if (u.lit) {
+        if (u.lit && lightingRowsEpoch != pipeline.lightingEpoch()) {  // the lighting's rows are made of nothing else
+            lightingRowsEpoch = pipeline.lightingEpoch();
             for (unsigned l = 0; l < u.lights; ++l)
                 for (int r = 0; r < 6; ++r) {
                     const float* light = u.light[l][r];
@@ -1868,13 +1924,20 @@ struct Renderer {
                 const float* texrow = u.texgen[unit][r];
                 row(texrowUniform + int(unit) * 3 + r, texrow[0], texrow[1], texrow[2], texrow[3]);
             }
-            boolean(projectUniform[unit], u.projective[unit]);
         }
-        for (unsigned unit = 0; unit < 3; ++unit) boolean(slotGenUniform[unit], unit < u.units && u.slotTexgen[unit]);
         if (u.slotTexgen[0] | u.slotTexgen[1] | u.slotTexgen[2]) row(slotRowUniform, u.slotTexgenRow[0], u.slotTexgenRow[1], u.slotTexgenRow[2], 0);
-        boolean(transformUniform, true);
-        boolean(rgbRegUniform, !u.fixedColor && !u.rgbFromVertex);
-        boolean(alphaRegUniform, !u.fixedColor && !u.alphaFromVertex);
+        // The bools every draw sets (lit, each unit's projection, each slot texgen, transform, the colors' registers), in one compare.
+        u16 boolMask = boolBit(litUniform) | boolBit(transformUniform) | boolBit(rgbRegUniform) | boolBit(alphaRegUniform);
+        u16 boolValue = u16((u.lit ? boolBit(litUniform) : 0) | boolBit(transformUniform) | (!u.fixedColor && !u.rgbFromVertex ? boolBit(rgbRegUniform) : 0) |
+                            (!u.fixedColor && !u.alphaFromVertex ? boolBit(alphaRegUniform) : 0));
+        for (unsigned unit = 0; unit < 3; ++unit) {
+            boolMask |= boolBit(slotGenUniform[unit]);
+            if (unit < u.units && u.slotTexgen[unit]) boolValue |= boolBit(slotGenUniform[unit]);
+            if (unit >= u.units) continue;
+            boolMask |= boolBit(projectUniform[unit]);
+            if (u.projective[unit]) boolValue |= boolBit(projectUniform[unit]);
+        }
+        booleans(boolMask, boolValue);
         row(materialUniform, u.color[0] / 255.0f, u.color[1] / 255.0f, u.color[2] / 255.0f, u.color[3] / 255.0f);
         stepEnd(9, uniforms);
         gxZone = ZoneMeshDraw;
@@ -1935,8 +1998,11 @@ struct Renderer {
 
     // Each slot's rows: four of the clip matrix unlit; lit, view to clip in the first four and six (modelview, normal)
     // for each compact slot after them.
+    // The pipeline's epochs when rows 0-3 and the lighting's rows were last set: only slotUniforms and drawMesh write them.
+    u32 toClipRowsEpoch = ~0u, lightingRowsEpoch = ~0u;
     void slotUniforms(const GxMeshUniforms& u) {
         if (!u.lit) {
+            toClipRowsEpoch = ~0u;  // the first slot's clip rows are these rows
             for (unsigned slot = 0; slot < 10; ++slot) {
                 if (!(u.slots >> slot & 1)) continue;
                 for (int r = 0; r < 4; ++r) {
@@ -1946,7 +2012,10 @@ struct Renderer {
             }
             return;
         }
-        for (int r = 0; r < 4; ++r) row(clipUniform + r, u.toClip[r * 4], u.toClip[r * 4 + 1], u.toClip[r * 4 + 2], u.toClip[r * 4 + 3]);
+        if (toClipRowsEpoch != pipeline.toClipEpoch()) {
+            toClipRowsEpoch = pipeline.toClipEpoch();
+            for (int r = 0; r < 4; ++r) row(clipUniform + r, u.toClip[r * 4], u.toClip[r * 4 + 1], u.toClip[r * 4 + 2], u.toClip[r * 4 + 3]);
+        }
         const int paired = (u.slotRows - 6) / 3;
         for (unsigned slot = 0; slot < GxMesh::MaxLitSlots; ++slot) {
             if (!(u.slots >> slot & 1)) continue;
@@ -2014,16 +2083,16 @@ struct Renderer {
     // The passes that sample what the program does, over the triangles just drawn (a batch's, or a mesh group's through
     // `draw`), the EFB's depth kept.
     template <class Draw> void drawSharedPasses(Draw draw) {
-        const PicaPixel own = pixel;
+        const PicaPixel* const own = pixelNow;
         const auto ownMask = writeMask;
         for (std::size_t i = 0; i < state_->passes.size(); ++i) {
             if (!state_->passes[i].sameUnits) continue;
-            pixel = passPixel(i), writeMask = ownMask & ~GPU_WRITE_DEPTH;
+            pixelNow = &passPixel(i), writeMask = ownMask & ~GPU_WRITE_DEPTH;
             sendPixel();
             draw();
             ++perf.passDraws;
         }
-        pixel = own, writeMask = ownMask;
+        pixelNow = own, writeMask = ownMask;
         applied = false;  // the state's own pixel goes back on with its next draw
     }
 
@@ -2055,14 +2124,14 @@ struct Renderer {
         }
     }
     void drawWaitingPasses() {
-        const PicaPixel own = pixel;
+        const PicaPixel* const own = pixelNow;
         const auto ownMask = writeMask;
         for (std::size_t i = 0; i < passIndices.size(); ++i) {
             std::vector<std::uint16_t>& waiting = passIndices[i];
             if (waiting.empty()) continue;
             const GxDrawState::Pass& pass = state_->passes[i];
             std::copy(waiting.begin(), waiting.end(), indices + indexUsed);
-            pixel = passPixel(i), writeMask = ownMask & ~GPU_WRITE_DEPTH;
+            pixelNow = &passPixel(i), writeMask = ownMask & ~GPU_WRITE_DEPTH;
             sendPixel();
             for (unsigned unit = 0; unit < pass.program.unitCount; ++unit) sendTexture(unit, texture(state_->textures[pass.program.units[unit].texture]));
             C3D_DrawElements(GPU_TRIANGLES, static_cast<int>(waiting.size()), C3D_UNSIGNED_SHORT, indices + indexUsed);
@@ -2070,7 +2139,7 @@ struct Renderer {
             ++perf.passDraws;
         }
         passIndicesWaiting = 0;
-        pixel = own, writeMask = ownMask;
+        pixelNow = own, writeMask = ownMask;
         applied = false;  // the state's own textures go back on with the next batch
     }
 

@@ -387,19 +387,65 @@ GxVertex GxCommandProcessor::readVertex(const std::uint8_t* at, std::uint8_t for
     return vertex;
 }
 
-void GxCommandProcessor::loadXf(std::uint32_t address, std::uint32_t count, const std::uint8_t* from, bool native) {
-    bool changed = false, registers = false, lights = false;
-    for (std::uint32_t i = 0; i < count && address + i < sizeof xf / sizeof *xf; ++i) {
-        const std::uint32_t value = word(from + i * 4, native);
-        if (xf[address + i] == value) continue;
-        changed = true;
-        if (address + i < 0x1000) ++xfRowChanges[(address + i) >> 2], lights |= address + i >= 0x600 && address + i < 0x680;
-        else registers = true;
-        xf[address + i] = value;
+namespace {
+// XF words stored from the stream, as flags: 1 any changed, 2 a register's (0x1000 up), 4 a light's (0x600-0x67F). A load that
+// changed a matrix row counts once for it, as xfRowChanges is only compared for equality.
+template <bool Native>
+std::uint32_t storeXf(std::uint32_t* xf, std::uint32_t* rowChanges, std::uint32_t at, std::uint32_t end, const std::uint8_t* from) {
+    std::uint32_t flags = 0;
+    const std::uint32_t matrixEnd = std::min<std::uint32_t>(end, 0x1000);
+    const bool mayLight = at < 0x680 && end > 0x600;
+    const auto rowChanged = [&](std::uint32_t row) { ++rowChanges[row], flags |= mayLight && row - 0x180 < 0x20 ? 5 : 1; };
+    while (at < matrixEnd && (at & 3)) {
+        std::uint32_t differ = 0;
+        const std::uint32_t row = at >> 2;
+        do {
+            const std::uint32_t value = word(from, Native);
+            differ |= xf[at] ^ value, xf[at] = value, from += 4;
+        } while ((++at & 3) && at < matrixEnd);
+        if (differ) rowChanged(row);
     }
-    xfChanges += changed;
-    xfRegisterChanges += registers;
-    xfLightChanges += lights;
+    for (; at + 4 <= matrixEnd; at += 4, from += 16) {
+        const std::uint32_t a = word(from, Native), b = word(from + 4, Native), c = word(from + 8, Native), d = word(from + 12, Native);
+        std::uint32_t* to = xf + at;
+        const std::uint32_t differ = (to[0] ^ a) | (to[1] ^ b) | (to[2] ^ c) | (to[3] ^ d);
+        to[0] = a, to[1] = b, to[2] = c, to[3] = d;
+        if (differ) rowChanged(at >> 2);
+    }
+    if (at < matrixEnd) {
+        std::uint32_t differ = 0;
+        const std::uint32_t row = at >> 2;
+        do {
+            const std::uint32_t value = word(from, Native);
+            differ |= xf[at] ^ value, xf[at] = value, from += 4;
+        } while (++at < matrixEnd);
+        if (differ) rowChanged(row);
+    }
+    for (; at < end; ++at, from += 4) {
+        const std::uint32_t value = word(from, Native);
+        if (xf[at] != value) xf[at] = value, flags |= 3;
+    }
+    return flags;
+}
+} // namespace
+
+// One word, by far the most XF loads (the registers).
+[[gnu::always_inline]] inline void GxCommandProcessor::loadXfWord(std::uint32_t address, std::uint32_t value) {
+    if (address >= sizeof xf / sizeof *xf || xf[address] == value) return;
+    xf[address] = value, ++xfChanges;
+    if (address >= 0x1000) ++xfRegisterChanges;
+    else ++xfRowChanges[address >> 2], xfLightChanges += (address >> 2) - 0x180 < 0x20;
+}
+
+void GxCommandProcessor::loadXf(std::uint32_t address, std::uint32_t count, const std::uint8_t* from, bool native) {
+    if (address >= sizeof xf / sizeof *xf) return;
+    if (count == 1) return loadXfWord(address, word(from, native));
+    const std::uint32_t end = std::min<std::uint32_t>(address + count, sizeof xf / sizeof *xf);
+    const std::uint32_t flags = native ? storeXf<true>(xf, xfRowChanges, address, end, from) : storeXf<false>(xf, xfRowChanges, address, end, from);
+    if (!flags) return;
+    ++xfChanges;
+    xfRegisterChanges += flags >> 1 & 1;
+    xfLightChanges += flags >> 2 & 1;
 }
 
 // A BP load that raises a pixel-engine event (draw done, a token, a copy), the state current for the event's handler.
@@ -417,28 +463,44 @@ void GxCommandProcessor::loadEvent(std::uint32_t value) {
 [[gnu::always_inline]] inline std::uint32_t GxCommandProcessor::command(const std::uint8_t* at, std::uint32_t available) {
     const std::uint8_t opcode = at[0];
     std::uint32_t used;
-    // Most of a stream, read here without execute()'s call: BP runs, then CP and XF loads.
+    // Most of a stream, read here without execute()'s call: runs of BP, CP and XF loads, a run at a time.
     if (opcode == 0x61) {
         used = bpRun(at, available);
     } else if (opcode == 0x08) {  // load a CP register
-        if (available < 6) return 0;
-        const std::uint32_t value = word(at + 2);
-        if (cp[at[1]] != value) cp[at[1]] = value, ++cpChanges;
-        used = 6;
+        const std::uint8_t* const end = at + available;
+        const std::uint8_t* from = at;
+        std::uint32_t changes = 0;
+        for (; end - from >= 6 && from[0] == 0x08; from += 6) {
+            const std::uint32_t value = word(from + 2);
+            if (cp[from[1]] != value) cp[from[1]] = value, ++changes;
+        }
+        cpChanges += changes;
+        used = static_cast<std::uint32_t>(from - at);
     } else if (opcode == 0x10) {  // load XF registers: the count less one, then the first address
-        if (available < 5) return 0;
-        const std::uint32_t header = word(at + 1), count = (header >> 16) + 1;
-        if (available < 5 + count * 4) return 0;
         const GxZoneScope zone(ZoneXf);
-        loadXf(header & 0xFFFF, count, at + 5, false);
-        used = 5 + count * 4;
+        const std::uint8_t* const end = at + available;
+        const std::uint8_t* from = at;
+        while (end - from >= 5 && from[0] == 0x10) {
+            const std::uint32_t header = word(from + 1), count = (header >> 16) + 1;
+            if (static_cast<std::uint32_t>(end - from) < 5 + count * 4) break;
+            if (count == 1) loadXfWord(header & 0xFFFF, word(from + 5));
+            else loadXf(header & 0xFFFF, count, from + 5, false);
+            from += 5 + count * 4;
+            if (countCommands) ++commandCounts[CommandXf];
+        }
+        used = static_cast<std::uint32_t>(from - at);
     } else {
         used = execute(at, available);
     }
     if (!countCommands) return used;
     const unsigned kind = opcode == 0x61 ? CommandBp : opcode == 0x08 ? CommandCp : opcode == 0x10 ? CommandXf : opcode >= 0x20 && opcode < 0x40 ? CommandXfIndexed
                         : opcode == 0x40 ? CommandCall : opcode >= 0x80 ? CommandPrimitive : CommandOther;
-    if (used) commandCounts[kind] += kind == CommandBp ? used / 5 : 1, commandBytes[kind] += used;
+    if (used) {
+        if (kind == CommandBp) commandCounts[kind] += used / 5;
+        else if (kind == CommandCp) commandCounts[kind] += used / 6;
+        else if (kind != CommandXf) ++commandCounts[kind];  // XF loads were counted as they were read
+        commandBytes[kind] += used;
+    }
     return used;
 }
 
@@ -452,6 +514,11 @@ std::uint32_t GxCommandProcessor::bpRun(const std::uint8_t* at, std::uint32_t av
     for (; end - from >= 5 && from[0] == 0x61; from += 5) {
         const std::uint32_t value = word(from + 1), address = value >> 24;
         const std::uint8_t kind = bpKinds[address];
+        if (!((kind & (BpMask | BpEvent | BpColor)) | (mask ^ 0xFFFFFF))) {  // a plain load, nearly all of them
+            const std::uint32_t old = bp[address], data = value & 0xFFFFFF;
+            if (old != data) bp[address] = data, changes += kind & BpDrawn, beside += kind & BpDrawn;
+            continue;
+        }
         if (kind & BpMask) {  // the mask for the next load only
             mask = value & 0xFFFFFF;
             continue;

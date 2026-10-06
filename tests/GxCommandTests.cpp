@@ -283,6 +283,74 @@ void vertexDecoders() {
     check(cases == 45, "all 45 decoders were read");
     delete gpu;
 }
+
+// CP and XF loads in a row are taken a run at a time, and XF's matrix memory a row at a time: the same registers and counts however
+// the stream is cut (here whole, a byte at a time, and as a called list), and a row counts as changed once however many of its words were.
+void runsOfLoads() {
+    std::vector<std::uint8_t> stream;
+    const auto cp = [&](unsigned address, std::uint32_t value) { stream.push_back(0x08), stream.push_back(static_cast<std::uint8_t>(address)), put32(stream, value); };
+    const auto xf = [&](unsigned address, std::initializer_list<std::uint32_t> words) {
+        stream.push_back(0x10), put32(stream, static_cast<std::uint32_t>(words.size() - 1) << 16 | address);
+        for (std::uint32_t word : words) put32(stream, word);
+    };
+    cp(0x50, 1), cp(0x51, 0), cp(0x52, 2), cp(0x50, 1), cp(0x60, 3);  // three of the five change something
+    xf(0x1009, {5}), xf(0x1009, {5});                                  // a register, then as it was
+    xf(2, {1, 2, 3, 4, 5, 6}), xf(2, {1, 2, 3, 4, 5, 6});              // rows 0 and 1 from their middle, then as they were
+    xf(0x0FFE, {7, 8, 9, 10});                                         // the last matrix row meeting the registers
+    xf(0x10FE, {1, 1, 1, 1});                                          // the last registers, two words past XF's end
+    xf(0x1100, {9}), xf(0xFFFF, {9});                                  // and a word past it, which counts for nothing
+    xf(0x602, {1, 2, 3});                                              // light 0's words, two rows
+    xf(0x400, {1, 2, 3, 4, 5, 6, 7, 8, 9});                            // a normal matrix: rows 0x100 to 0x102
+    stream.push_back(0x00), cp(0x53, 9), xf(0x1010, {0});             // NOP, then a CP load and a register load already zero
+    const auto changedRows = [](const smg::GxCommandProcessor& gpu) {
+        std::vector<unsigned> rows;
+        for (unsigned row = 0; row < 0x400; ++row)
+            if (gpu.xfRowChanges[row]) rows.push_back(row);
+        return rows;
+    };
+    auto* whole = new smg::GxCommandProcessor(host());
+    whole->put(stream.data(), static_cast<std::uint32_t>(stream.size()));
+    check(whole->cpChanges == 4 && whole->cp[0x50] == 1 && whole->cp[0x52] == 2 && whole->cp[0x60] == 3 && whole->cp[0x53] == 9, "a run of CP loads counts the ones that changed");
+    check(whole->xfChanges == 6 && whole->xfRegisterChanges == 3 && whole->xfLightChanges == 1, "XF loads count by what changed: any, a register, a light");
+    check(whole->bp[0] == 0 && whole->bp[1] == 0 && whole->bp[0xFF] == 0, "the words past XF's end land nowhere");
+    check(whole->xf[0xFFE] == 7 && whole->xf[0x1000] == 9 && whole->xf[0x1001] == 10 && whole->xf[0x10FE] == 1 && whole->xf[0x10FF] == 1,
+          "a load keeps the words that fit in XF and drops the rest");
+    check(changedRows(*whole) == std::vector<unsigned>({0, 1, 0x100, 0x101, 0x102, 0x180, 0x181, 0x3FF}), "the rows a load changed are marked, others are not");
+    check(whole->xfRowChanges[0] == 1 && whole->xfRowChanges[1] == 1, "once however many words, and not again for the same words");
+    check(whole->pending() == 0 && unsupported.empty(), "every command taken");
+    auto* bytes = new smg::GxCommandProcessor(host());
+    for (std::uint8_t byte : stream) bytes->put(&byte, 1);
+    check(!std::memcmp(bytes->cp, whole->cp, sizeof whole->cp) && !std::memcmp(bytes->xf, whole->xf, sizeof whole->xf) &&
+              bytes->cpChanges == whole->cpChanges && bytes->xfChanges == whole->xfChanges && bytes->xfRegisterChanges == whole->xfRegisterChanges &&
+              bytes->xfLightChanges == whole->xfLightChanges && changedRows(*bytes) == changedRows(*whole),
+          "a byte at a time gives the same");
+    displayList.assign(0x400, 0);
+    std::memcpy(&displayList[0x100], stream.data(), stream.size());
+    auto* listed = new smg::GxCommandProcessor(host());
+    std::vector<std::uint8_t> call{0x40};
+    put32(call, 0x100), put32(call, static_cast<std::uint32_t>(stream.size()));
+    listed->put(call.data(), static_cast<std::uint32_t>(call.size()));
+    check(!std::memcmp(listed->cp, whole->cp, sizeof whole->cp) && !std::memcmp(listed->xf, whole->xf, sizeof whole->xf) && listed->cpChanges == whole->cpChanges &&
+              listed->xfChanges == whole->xfChanges && changedRows(*listed) == changedRows(*whole),
+          "and so does a called list");
+    // Counted as read: every kind of command, a run of loads by its commands.
+    whole->countCommands = true;
+    whole->put(stream.data(), static_cast<std::uint32_t>(stream.size()));
+    check(whole->commandCounts[smg::GxCommandProcessor::CommandCp] == 6 && whole->commandCounts[smg::GxCommandProcessor::CommandXf] == 11 &&
+              whole->commandBytes[smg::GxCommandProcessor::CommandCp] == 36,
+          "a run of loads counts as the commands it holds");
+    bool compares = true;  // every length to nine words, one word differing in every place in turn
+    for (unsigned n = 0; n <= 9; ++n)
+        for (unsigned i = 0; i < 9; ++i) {
+            std::uint32_t a[9], b[9];
+            for (unsigned k = 0; k < 9; ++k) a[k] = b[k] = 0x01010101u * (k + 1);
+            const bool same = smg::sameWords(a, b, n);
+            b[i] ^= 0x80;
+            compares &= same && smg::sameWords(a, b, n) == (i >= n);
+        }
+    check(compares, "sameWords compares whole words");
+    delete whole, delete bytes, delete listed;
+}
 } // namespace
 
 int runGxCommandTests() {
@@ -295,6 +363,7 @@ int runGxCommandTests() {
     vertices();
     vertexDecoders();
     copyMode();
+    runsOfLoads();
     std::printf("%u GX command processor checks passed\n", checks);
     return 0;
 }

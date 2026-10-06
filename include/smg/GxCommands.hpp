@@ -12,6 +12,17 @@ struct GxVertex {
 
 class GxCommandProcessor;
 
+// Whether `words` 32-bit words match; the library's memcmp goes a byte at a time.
+inline bool sameWords(const void* a, const void* b, std::size_t words) {
+    const auto* x = static_cast<const std::uint32_t*>(a);
+    const auto* y = static_cast<const std::uint32_t*>(b);
+    for (; words >= 4; words -= 4, x += 4, y += 4)
+        if ((x[0] ^ y[0]) | (x[1] ^ y[1]) | (x[2] ^ y[2]) | (x[3] ^ y[3])) return false;
+    for (; words; --words, ++x, ++y)
+        if (*x != *y) return false;
+    return true;
+}
+
 // A vertex format's layout, read once from the CP's descriptor (VCD), attribute table (VAT) and array registers: what
 // each vertex of a primitive is read by. It stays right while the processor's cpChanges stays the same.
 class GxVertexLayout {
@@ -156,6 +167,7 @@ private:
     std::uint32_t bpRun(const std::uint8_t* at, std::uint32_t available);
     void loadEvent(std::uint32_t value);
     void loadXf(std::uint32_t address, std::uint32_t count, const std::uint8_t* from, bool native);
+    void loadXfWord(std::uint32_t address, std::uint32_t value);
 
     Host host_;
     mutable GxVertexLayout layouts_[8];

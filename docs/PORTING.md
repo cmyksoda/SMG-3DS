@@ -1138,6 +1138,23 @@ a frame without it at the Comet Observatory, 33.8 with). The GDB sampler still g
 follows one thread (`rsp_sample.py`'s `TRACK=NAME`, the thread whose stack shows NAME), read as functions rather than
 instructions: the stub halts at block boundaries, so a tiny function called constantly takes its neighbors' samples.
 
+**Per-draw work, counted.** The zones say where the render thread's time goes; instruction counts say why. GxRender.cpp and
+the command processor were built as the 3DS build builds them, with stand-ins for citro3d and libctru, and a J3D-like frame
+(450 materials, 740 mesh draws, 270 particles, about 300 KB of stream) was replayed on an emulated ARM11 that counts each
+function's and zone's instructions and hashes every call the PICA would get, so a change has to leave the hash as it was.
+The frame took 9.05 million instructions and the biggest costs were small ones paid per command and per word: newlib's
+`memcmp` goes a byte at a time (state keys, combiner stages, mesh keys: 7%), a word of XF matrix memory took 24
+instructions, each CP load went through the command dispatch alone, and a state build hashed and compared its 50-word key
+in two passes. Now a run of CP or XF loads is one loop and matrix memory goes a row at a time (`xfRowChanges` counts the
+rows a load changed, not its words; everything compares it for equality), `sameWords` replaces `memcmp`, plain BP loads
+skip the mask and color checks, the state cache and the mesh cache have a direct-mapped index in front of their maps (a hit
+no longer divides), a state entry keeps its scissor, the pixel state a draw sends is the entry's own (copied only when
+`keepDstAlpha` changes it, and `sent.was` brought up a part at a time), the lighting's rows are packed when it is read, not
+at each draw, and a mesh draw finds them (`lightingEpoch`) and the view-to-clip rows (`toClipEpoch`) already set when
+nothing they are made of changed. The frame is 7.12 million instructions: the state zone 37% less, parse 49%, apply 36%,
+XF 23%, uniforms 20%, mesh draws 16%. What is left is mostly the stream itself (BP loads 9%, XF 12%) and a draw's
+rows: unchanged BP loads cost about 21 instructions each and matrix rows change with every shape.
+
 **The Comet Observatory at 30.** At the session 8 build the Observatory ran 26 to 29 frames a second with the render
 thread busy 34.2 ms a frame. In order, each measured on the same standing-still route: the commonest commands are read
 without a call (`GxCommandProcessor::command` takes BP runs, CP and XF loads itself; BP runs keep the mask and change

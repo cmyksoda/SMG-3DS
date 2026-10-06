@@ -294,6 +294,10 @@ public:
     // Another group of the same mesh: only its slots' rows.
     void meshSlotUniforms(const GxMesh::Group& group, GxMeshUniforms& out);
     bool meshLit() const { return lit_; }
+    // What the lighting rows and the view-to-clip rows of a mesh's uniforms are made from changes only when these do: a draw
+    // that finds them as its last one's has those rows set already.
+    std::uint32_t lightingEpoch() const { return lightingEpoch_; }
+    std::uint32_t toClipEpoch() const { return toClipEpoch_; }
     // The texgens' sources as a mesh's vertices hold them (row and input form per unit), for a mesh's key.
     std::uint32_t meshSources() const;
     // How this state's meshes pack their vertices (determined by the mesh's key and whether it has per-vertex matrices).
@@ -320,6 +324,8 @@ private:
         // dual transform folded together (the input's fourth component is always one).
         bool folded = false, planar = false;  // planar: two inputs, two outputs, nothing to divide by
         float fold[3][4] = {};
+        const void* foldOf = nullptr;  // the Fold (and its version) that `fold` was copied from, with `planar` made of it
+        std::uint32_t foldAt = 0;
         // Normalized by the dual transform, with one matrix for the primitive: its matrices are read as floats (in folds_).
         bool cached = false;
         std::uint16_t input = 0;  // where its source vector sits in a GxVertex
@@ -330,6 +336,7 @@ private:
         std::uint32_t source_[32] = {}, sourceWords = 0, foldXf = ~0u;
         std::uint32_t rowChanges[6] = {};  // its matrix rows', then its post matrix rows' change counts (xfRowChanges)
         float fold[3][4] = {};
+        std::uint32_t version = 0;  // changes with `fold`
         float matrix_[3][4] = {}, post_[3][4] = {};
         bool postIdentity = false;
         std::uint32_t matricesXf = ~0u;  // the XF change count the matrices were read at
@@ -341,9 +348,11 @@ private:
     void loadMatrices(Fold& f, const TexGen& t) const;
     // Lighting read again only when an XF register or a light changed (matrix loads leave it as it was).
     void readLighting(const GxCommandProcessor& gpu) {
-        lighting_.read(gpu), ++lightingReads;
+        lighting_.read(gpu), ++lightingReads, ++lightingEpoch_, packLights();
         lightingRegisters_ = gpu.xfRegisterChanges, lightingLights_ = gpu.xfLightChanges;
     }
+    // The light entries of what was read (lightEntries' count: five when more than four are lit) and their rows for the shader.
+    void packLights();
     void vertex(const GxVertex& v, GxDrawVertex& d, const float* fixedClip);
     std::size_t triangles(GxDrawVertex* vertices, std::uint16_t count, std::uint16_t first, std::uint16_t* indices) const;
     // Lines and points from their vertices, transformed into the last `count` of maxVertices, as quads from the first.
@@ -383,6 +392,9 @@ private:
     std::uint64_t clipReady_ = 0;
     GxLighting lighting_;
     std::uint32_t lightingRegisters_ = ~0u, lightingLights_ = ~0u;  // the XF register and light changes it was read at
+    unsigned lightCount_ = 0;
+    float lightRows_[4][6][4] = {}, ambientRow_[4] = {};
+    std::uint32_t lightingEpoch_ = 0, toClipEpoch_ = 0;
 };
 
 // gx.v.pica's transform path in C++, for checking meshes against the CPU path: one vertex under a draw's uniforms, its

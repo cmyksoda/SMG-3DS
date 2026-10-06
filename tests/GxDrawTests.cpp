@@ -1529,6 +1529,72 @@ void layoutMaterial() {
 
 // The draw-state key holds what a state reads and nothing it doesn't: an unused stage or texture map changes nothing,
 // and the same key means the same state.
+// What a mesh draw's lighting rows and view-to-clip rows are made of changes their epochs and nothing else does: another position
+// matrix leaves them, a light or the view moves them, and the lights' rows hold what the light words say.
+void uniformEpochs() {
+    auto owned = std::make_unique<smg::GxCommandProcessor>(host());
+    smg::GxCommandProcessor& gpu = *owned;
+    Stream s;
+    clearState(s);
+    s.cp(0x50, 1 << 9 | 1 << 11), s.cp(0x60, 0), s.cp(0x70, 1 | 4 << 1 | 4 << 10);  // position xyz and normal, f32
+    s.xff(0x400, {1, 0, 0, 0, 1, 0, 0, 0, 1});
+    s.xf(0x103F, {0}), s.xf(0x1009, {1});
+    s.bp(0x00000010), s.bp(0x28000000), s.bp(0xC008FFFA), s.bp(0xC108FFD0);  // one channel; RASC, RASA
+    s.xf(0x100C, {0xFFFFFFFF}), s.xf(0x100A, {0x10203040});
+    s.xf(0x100E, {1 << 1 | 1 << 2 | 2 << 7}), s.xf(0x1010, {1 << 1 | 1 << 2 | 2 << 7});
+    s.xf(0x600 + 3, {0x80604020});
+    s.xff(0x600 + 4, {1, 0, 0, 1, 0, 0, 300, 100, 200, 0, 0, 0});
+    gpu.put(s.bytes.data(), static_cast<std::uint32_t>(s.bytes.size()));
+    Stream list;
+    list.u8(0x90), list.u16(3);
+    const float vertices[3][6] = {{100, 100, -0.5f, 0, 0, 1}, {500, 100, -0.5f, 0.3f, 0.4f, 0.866f}, {300, 400, -0.5f, -0.6f, 0, 0.8f}};
+    for (const auto& v : vertices)
+        for (float f : v) list.f32(f);
+    while (list.bytes.size() % 32) list.u8(0);
+    smg::GxDrawState state;
+    smg::readGxDrawState(gpu, state);
+    smg::GxVertexPipeline pipeline;
+    smg::GxMesh mesh;
+    check(pipeline.prepare(gpu, state, {}, 0x90, 0) && pipeline.meshEligible() == smg::GxVertexPipeline::MeshOk &&
+              pipeline.buildMesh(list.bytes.data(), static_cast<std::uint32_t>(list.bytes.size()), mesh) == smg::GxVertexPipeline::MeshOk,
+          "a lit list builds");
+    const auto prepare = [&](smg::GxFrame frame = {}) { return pipeline.prepare(gpu, state, frame, 0x90, 0) && pipeline.meshEligible() == smg::GxVertexPipeline::MeshOk; };
+    const auto put = [&](Stream& w) { gpu.put(w.bytes.data(), static_cast<std::uint32_t>(w.bytes.size())); };
+    std::uint32_t lights = pipeline.lightingEpoch(), view = pipeline.toClipEpoch();
+    check(lights && view, "reading the lighting and the view is what gives them an epoch");
+    Stream matrices;
+    matrices.xff(0, {1, 0, 0, 5, 0, 1, 0, 6, 0, 0, 1, 7}), matrices.xff(0x400, {2, 0, 0, 0, 2, 0, 0, 0, 2});
+    put(matrices);
+    check(prepare() && pipeline.lightingEpoch() == lights && pipeline.toClipEpoch() == view, "new matrices leave both");
+    Stream light;
+    light.xff(0x600 + 10, {-300, 100, 200});
+    put(light);
+    check(prepare() && pipeline.lightingEpoch() != lights && pipeline.toClipEpoch() == view, "a light moves the lighting's");
+    lights = pipeline.lightingEpoch();
+    smg::GxMeshUniforms u;
+    pipeline.meshUniforms(mesh.layout, mesh.slots, mesh.groups[0], u);
+    check(u.lit && u.lights == 1 && near(u.light[0][1][0], -300) && near(u.light[0][1][1], 100) && near(u.light[0][1][2], 200), "whose rows say where the light is now");
+    Stream control;
+    control.xf(0x100E, {1 << 1 | 3 << 2 | 2 << 7});  // lights 0 and 1 light the color
+    put(control);
+    check(prepare() && pipeline.lightingEpoch() != lights && pipeline.toClipEpoch() == view, "and so does what is lit by which");
+    lights = pipeline.lightingEpoch();
+    Stream projection;
+    projection.xff(0x1020, {2.0f / 640, -1, 2.0f / -480, 1, -2, -1});
+    put(projection);
+    check(prepare() && pipeline.toClipEpoch() != view, "a projection moves the view's");
+    view = pipeline.toClipEpoch();
+    lights = pipeline.lightingEpoch();
+    check(prepare() && pipeline.toClipEpoch() == view && pipeline.lightingEpoch() == lights, "and nothing moves either again");
+    pipeline.meshUniforms(mesh.layout, mesh.slots, mesh.groups[0], u);
+    float toClip[16];
+    std::memcpy(toClip, u.toClip, sizeof toClip);
+    check(u.lights == 2, "two lights are two entries");
+    check(prepare({320, 240, false}) && pipeline.toClipEpoch() != view, "the frame's size moves the view's too");
+    pipeline.meshUniforms(mesh.layout, mesh.slots, mesh.groups[0], u);
+    check(std::memcmp(toClip, u.toClip, sizeof toClip) != 0, "and the rows it gives");
+}
+
 void drawStateKey() {
     auto owned = std::make_unique<smg::GxCommandProcessor>(host());
     smg::GxCommandProcessor& gpu = *owned;
@@ -1623,6 +1689,7 @@ int runGxDrawTests() {
     meshRefreshMatchesRebuild();
     passReuse();
     drawStateKey();
+    uniformEpochs();
     std::printf("%u GX draw checks passed\n", checks);
     return 0;
 }
