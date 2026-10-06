@@ -1172,6 +1172,26 @@ nothing they are made of changed. The frame is 7.12 million instructions: the st
 XF 23%, uniforms 20%, mesh draws 16%. What is left is mostly the stream itself (BP loads 9%, XF 12%) and a draw's
 rows: unchanged BP loads cost about 21 instructions each and matrix rows change with every shape.
 
+**The CPU vertex path, counted.** The same ARM11 counting, over `GxVertexPipeline` alone on streams like the game's: a JPA
+quad, lit strips with an environment map, `OceanSphere`'s direct float strips (Drip Drop's water), an indexed skinned
+mesh. Most of a particle's 592 instructions a vertex were not vertex work: `run` zeroed a 1,728-byte chunk of sixteen
+vertices for each four it read (218 a vertex), built its read plan again (41), and read a color the channel never takes.
+Now the chunk is left as it is and only what the plan doesn't write (an attribute the format lacks, a narrow one's last
+components) is zeroed; the plan is kept while the CP registers stay; the color is read only where a channel part takes its
+material or a lit part its ambient from the vertex. Vertices are then worked out a stage at a time over the chunk, each
+stage's constants in locals (built with `-fno-strict-aliasing`, every float stored into a vertex made the compiler load the
+matrix and the texgen's coefficients again): position, color, then each texgen as one loop. A folded texgen whose third row is (0, 0, 0, 1), or
+(0, 0, 1, 0) over a third input of one (the ocean's identity 3x4), never divides, so its q isn't worked out at all. An
+unlit channel with its material in registers copies four constant bytes; a lit vertex's position and normal matrices are
+read once per matrix rather than once per element, and lighting walks a list of each part's lights instead of testing
+eight mask bits. Instructions a vertex, from the data and from decoded vertices: particles 592 and 257 to 302 and 217,
+lit strips 939 and 622 to 515 and 400, the ocean 371 and 277 to 155 and 102 (its second pass, `runPass`, 280 to 111),
+indexed skinned strips 352 and 231 to 204 and 123. Every `GxDrawVertex` byte is as it was: 300,000 random scenes (every
+attribute's type, format, count and shift, matrix indexes, texgen source, form, projection and matrix, dual transform,
+lighting, primitive kind, VAT and array changes between draws, NaNs and infinities) through `run`, `runDecoded` and
+`runPass` hash the same as the old code on x86, and 3,000 on the ARM11 build, except for which NaN's sign a sum keeps,
+which the compiler chooses.
+
 **The Comet Observatory at 30.** At the session 8 build the Observatory ran 26 to 29 frames a second with the render
 thread busy 34.2 ms a frame. In order, each measured on the same standing-still route: the commonest commands are read
 without a call (`GxCommandProcessor::command` takes BP runs, CP and XF loads itself; BP runs keep the mask and change

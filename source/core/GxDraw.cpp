@@ -204,6 +204,9 @@ void GxLighting::read(const GxCommandProcessor& gpu) {
         part.diffuse = static_cast<std::uint8_t>(XF_COLOR0CNTRL_F_GET_DIFFUSEATTEN(w));  // GXDiffuseFn: none, sign, clamp
         part.attenuated = XF_COLOR0CNTRL_F_GET_ATTENENABLE(w), part.spot = XF_COLOR0CNTRL_F_GET_ATTENSELECT(w);
         if (part.lit) used |= part.mask;
+        lightCount[i] = 0;
+        for (int n = 0; n < 8; ++n)
+            if (part.mask >> n & 1) lightsOf[i][lightCount[i]++] = static_cast<std::uint8_t>(n);
     }
     shared = parts[0].lit && parts[1].lit && parts[0].mask == parts[1].mask && parts[0].diffuse == parts[1].diffuse &&
              parts[0].attenuated == parts[1].attenuated && parts[0].spot == parts[1].spot;
@@ -219,16 +222,18 @@ void GxLighting::read(const GxCommandProcessor& gpu) {
 
 void GxLighting::apply(const float view[3], const float normal[3], const std::uint8_t vertex[4], std::uint8_t out[4]) const {
     float sums[2][4];
-    for (int i = 0; i < 2; ++i)
-        for (int c = 0; c < 4; ++c) sums[i][c] = parts[i].ambientFromVertex ? vertex[c] : ambient[c];
+    for (int i = 0; i < 2; ++i) {
+        if (parts[i].ambientFromVertex)
+            for (int c = 0; c < 4; ++c) sums[i][c] = vertex[c];
+        else
+            for (int c = 0; c < 4; ++c) sums[i][c] = ambient[c];
+    }
     if (shared) {
-        for (int n = 0; n < 8; ++n)
-            if (parts[0].mask >> n & 1) addLight(lights[n], parts[0], view, normal, sums[0], 0, 3, &sums[1][3]);
+        for (unsigned k = 0; k < lightCount[0]; ++k) addLight(lights[lightsOf[0][k]], parts[0], view, normal, sums[0], 0, 3, &sums[1][3]);
     } else {
         for (int i = 0; i < 2; ++i)
             if (parts[i].lit)
-                for (int n = 0; n < 8; ++n)
-                    if (parts[i].mask >> n & 1) addLight(lights[n], parts[i], view, normal, sums[i], i ? 3 : 0, i ? 4 : 3, nullptr);
+                for (unsigned k = 0; k < lightCount[i]; ++k) addLight(lights[lightsOf[i][k]], parts[i], view, normal, sums[i], i ? 3 : 0, i ? 4 : 3, nullptr);
     }
     for (int i = 0; i < 2; ++i) {
         // Part 0 is the color (RGB), part 1 the alpha.
@@ -646,12 +651,13 @@ bool GxVertexPipeline::prepare(const GxCommandProcessor& gpu, const GxDrawState&
             for (unsigned u = 0; u < units_; ++u)
                 if (!texgens_[u].palette) refold(texgens_[u]);
             if (channel_ && lightingLights_ != gpu.xfLightChanges) readLighting(gpu);
-            preparedXf_ = xfSeen_ = gpu.xfChanges, clipReady_ = 0;
+            preparedXf_ = xfSeen_ = gpu.xfChanges, clipReady_[0] = clipReady_[1] = 0;
         }
         kind_ = kind, preparedFormat_ = format;
         return true;
     }
     prepared_ = false, ++fullPrepares;
+    readPlans_[0].layout = readPlans_[1].layout = nullptr;
     if (foldsFor_ != &gpu) {
         for (Fold& f : folds_) f = Fold{};
         for (TexGen& t : texgens_) t.foldOf = nullptr;
@@ -676,7 +682,10 @@ bool GxVertexPipeline::prepare(const GxCommandProcessor& gpu, const GxDrawState&
     for (unsigned u = 0; u < units_; ++u) {
         TexGen& t = texgens_[u];
         t.palette = state.program.units[u].texture == CombinerProgram::Palette;
-        if (t.palette) continue;
+        if (t.palette) {
+            t.kind = TexGen::Palette;
+            continue;
+        }
         const std::uint8_t coord = state.program.units[u].texCoord;
         const std::uint32_t ctrl = gpu.xf[XfTexGen + coord];
         const std::uint32_t row = XF_TEX_GET_SOURCE_ROW(ctrl);
@@ -703,14 +712,19 @@ bool GxVertexPipeline::prepare(const GxCommandProcessor& gpu, const GxDrawState&
         const TexGen& t = texgens_[u];
         if (!t.palette) sourceMask_ = static_cast<std::uint16_t>(sourceMask_ | (t.source == 0 ? GxVertexLayout::ReadPosition : t.source == 1 ? GxVertexLayout::ReadNormal : 1u << (4 + t.source - 5)));
     }
-    readMask_ = static_cast<std::uint16_t>(GxVertexLayout::ReadPosition | sourceMask_ | (lit_ ? GxVertexLayout::ReadNormal : 0) |
-                                           (channel_ && !color0InVertex_ ? GxVertexLayout::ReadColor0 : 0));
     if (channel_ && (lightingRegisters_ != gpu.xfRegisterChanges || lightingLights_ != gpu.xfLightChanges)) readLighting(gpu);
+    const GxLighting::Part* const parts = lighting_.parts;
+    // The vertex's color, when the channel takes a material from it, or a lit part its ambient.
+    const bool vertexColor = channel_ && !color0InVertex_ &&
+                             (parts[0].materialFromVertex || parts[1].materialFromVertex ||
+                              (lit_ && ((parts[0].lit && parts[0].ambientFromVertex) || (parts[1].lit && parts[1].ambientFromVertex))));
+    readMask_ = static_cast<std::uint16_t>(GxVertexLayout::ReadPosition | sourceMask_ | (lit_ ? GxVertexLayout::ReadNormal : 0) |
+                                           (vertexColor ? GxVertexLayout::ReadColor0 : 0));
     prepared_ = true, preparedFormat_ = format, preparedFrame_ = frame, preparedDescriptor_ = gpu.cp[0x50];
     preparedBp_ = gpu.bpChanges, preparedXf_ = gpu.xfChanges;
     preparedBeside_ = gpu.bpChangesBesideColors, preparedXfRegisters_ = gpu.xfRegisterChanges;
     if (gpu.xfChanges == xfSeen_ && frame == frameSeen_) return true;
-    xfSeen_ = gpu.xfChanges, clipReady_ = 0;
+    xfSeen_ = gpu.xfChanges, clipReady_[0] = clipReady_[1] = 0;
     // Most XF loads are matrices; the projection and viewport change far less often.
     if (!(frame == frameSeen_) || !sameWords(gpu.xf + XfViewport, viewSeen_, 13)) {
         frameSeen_ = frame, ++toClipEpoch_;
@@ -794,8 +808,13 @@ void GxVertexPipeline::refold(TexGen& t) const {
         t.foldOf = &f, t.foldAt = f.version;
     }
     // A texcoord source, or the AB11 form, gives a third input of one; with q fixed at one there's nothing to divide.
-    t.planar = t.folded && (t.source >= 5 || !t.threeInputs) && t.fold[2][0] == 0 && t.fold[2][1] == 0 && t.fold[2][2] == 0 && t.fold[2][3] == 1;
+    const bool thirdIsOne = t.source >= 5 || !t.threeInputs;
+    const bool planar = t.folded && thirdIsOne && t.fold[2][0] == 0 && t.fold[2][1] == 0 && t.fold[2][2] == 0 && t.fold[2][3] == 1;
+    // A third row of (0, 0, 0, 1), or (0, 0, 1, 0) over a third input of one, leaves q at one (NaN from an infinite input): never divided.
+    const bool flat = t.folded && t.fold[2][0] == 0 && t.fold[2][1] == 0 &&
+                      ((t.fold[2][2] == 0 && t.fold[2][3] == 1) || (thirdIsOne && t.fold[2][2] == 1 && t.fold[2][3] == 0));
     t.cached = !t.folded && !t.perVertexMatrix;
+    t.kind = t.cached ? TexGen::Normalized : !t.folded ? TexGen::Unfolded : planar ? TexGen::Planar : flat ? TexGen::Affine : TexGen::Folded;
     if (t.cached && f.matricesXf != gpu_->xfChanges) loadMatrices(f, t);
 }
 
@@ -826,28 +845,15 @@ const float* GxVertexPipeline::makeClipMatrix(std::uint32_t index) {
             for (int k = 0; k < 3; ++k) sum += toClipFloat_[r][k] * m[k][c];
             out[r * 4 + c] = sum;
         }
-    if (index < 64) clipReady_ |= std::uint64_t(1) << index;
+    if (index < 64) clipReady_[index >> 5] |= 1u << (index & 31);
     return out;
 }
 
-// One texture coordinate set: the texgen's input through its matrix, then the dual transform when it is on.
+// One texture coordinate set, for a texgen that takes its matrix per vertex or normalizes (texcoords() does the others): the
+// texgen's input through its matrix, then the dual transform when it is on.
 void GxVertexPipeline::texgen(const TexGen& t, const GxVertex& v, float st[2]) const {
     if (t.cached) return texgenNormalized(t, v, st);
-    if (t.planar) {
-        const float* in = reinterpret_cast<const float*>(reinterpret_cast<const std::uint8_t*>(&v) + t.input);
-        st[0] = t.fold[0][0] * in[0] + t.fold[0][1] * in[1] + (t.fold[0][2] + t.fold[0][3]);
-        st[1] = t.fold[1][0] * in[0] + t.fold[1][1] * in[1] + (t.fold[1][2] + t.fold[1][3]);
-        return;
-    }
     float c[3];
-    if (t.folded) {
-        const float* source = reinterpret_cast<const float*>(reinterpret_cast<const std::uint8_t*>(&v) + t.input);
-        const float z = t.threeInputs && t.source <= 1 ? source[2] : 1.0f;
-        for (int r = 0; r < 3; ++r) c[r] = t.fold[r][0] * source[0] + t.fold[r][1] * source[1] + t.fold[r][2] * z + t.fold[r][3];
-        if (std::fabs(c[2] - 1) > 1e-5f && c[2] != 0) st[0] = c[0] / c[2], st[1] = c[1] / c[2];
-        else st[0] = c[0], st[1] = c[1];
-        return;
-    }
     float in[4] = {0, 0, 1, 1};
     if (t.source == 0) std::memcpy(in, v.position, sizeof v.position);
     else if (t.source == 1) std::memcpy(in, v.normal, sizeof v.normal);
@@ -902,17 +908,40 @@ void GxVertexPipeline::texgenNormalized(const TexGen& t, const GxVertex& v, floa
     else st[0] = q0, st[1] = q1;
 }
 
+const GxVertexPipeline::ReadPlan& GxVertexPipeline::readPlan(unsigned slot, const GxVertexLayout& layout, std::uint16_t mask) {
+    ReadPlan& p = readPlans_[slot];
+    if (p.layout == &layout && p.gpu == gpu_ && p.cpChanges == gpu_->cpChanges && p.mask == mask) return p;
+    p.gpu = gpu_, p.layout = &layout, p.cpChanges = gpu_->cpChanges, p.mask = mask, p.zeros = 0;
+    p.plan = layout.plan(mask);
+    // Per attribute (the mask's bits): its components (a color counts as one) and where it starts in a GxVertex.
+    constexpr std::uint8_t Components[12] = {3, 3, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2};
+    for (unsigned a = 0; a < 12; ++a) {
+        if (!(mask >> a & 1) || p.plan.width[a] >= Components[a]) continue;
+        const std::size_t start = a == 0   ? offsetof(GxVertex, position)
+                                  : a == 1 ? offsetof(GxVertex, normal)
+                                  : a < 4  ? offsetof(GxVertex, color) + 4 * (a - 2)
+                                           : offsetof(GxVertex, texcoord) + 8 * (a - 4);
+        p.zero[p.zeros++] = {static_cast<std::uint16_t>(start + 4 * p.plan.width[a]), static_cast<std::uint8_t>(4 * (Components[a] - p.plan.width[a]))};
+    }
+    return p;
+}
+
 std::size_t GxVertexPipeline::run(const std::uint8_t* data, std::uint16_t count, GxDrawVertex* vertices, std::uint16_t first, std::uint16_t* indices) {
     const GxVertexLayout& layout = gpu_->layout(preparedFormat_);  // a mesh's draw never needs it, so prepare leaves it
     const std::uint32_t size = layout.size;
-    const GxVertexLayout::Plan plan = layout.plan(readMask_);
+    const ReadPlan& read = readPlan(0, layout, readMask_);
     const float* const fixedClip = perVertexMatrix_ ? nullptr : clipMatrix(defaultMatrix_);
-    GxVertex chunk[ReadChunk];  // attributes the format lacks, or the primitive doesn't read, stay zero for every vertex
+    // The plan writes what it reads: only what it leaves out (an absent attribute) is zeroed, in the vertices there are.
+    alignas(GxVertex) std::uint8_t storage[ReadChunk * sizeof(GxVertex)];
+    GxVertex* const chunk = reinterpret_cast<GxVertex*>(storage);
+    for (unsigned k = 0; k < read.zeros; ++k)
+        for (unsigned j = 0; j < std::min<unsigned>(ReadChunk, count); ++j)
+            std::memset(storage + j * sizeof(GxVertex) + read.zero[k].at, 0, read.zero[k].bytes);
     GxDrawVertex* const into = kind_ >= 0xA8 ? vertices + 3 * count : vertices;
     for (unsigned i = 0; i < count; i += ReadChunk) {
         const unsigned n = std::min<unsigned>(ReadChunk, count - i);
-        layout.read(data + i * size, chunk, n, plan);
-        for (unsigned j = 0; j < n; ++j) vertex(chunk[j], into[i + j], fixedClip);
+        layout.read(data + i * size, chunk, n, read.plan);
+        this->vertices(chunk, n, into + i, fixedClip);
     }
     if (kind_ >= 0xA8) return widen(vertices, count, first, indices);
     verticesWritten = count;
@@ -922,7 +951,7 @@ std::size_t GxVertexPipeline::run(const std::uint8_t* data, std::uint16_t count,
 std::size_t GxVertexPipeline::runDecoded(const GxVertex* decoded, std::uint16_t count, GxDrawVertex* vertices, std::uint16_t first, std::uint16_t* indices) {
     GxDrawVertex* const into = kind_ >= 0xA8 ? vertices + 3 * count : vertices;
     const float* const fixedClip = perVertexMatrix_ ? nullptr : clipMatrix(defaultMatrix_);
-    for (std::uint16_t i = 0; i < count; ++i) vertex(decoded[i], into[i], fixedClip);
+    for (unsigned i = 0; i < count; i += ReadChunk) this->vertices(decoded + i, std::min<unsigned>(ReadChunk, count - i), into + i, fixedClip);
     if (kind_ >= 0xA8) return widen(vertices, count, first, indices);
     verticesWritten = count;
     return triangles(vertices, count, first, indices);
@@ -932,20 +961,20 @@ bool GxVertexPipeline::runPass(const std::uint8_t* data, const GxVertex* decoded
                                 GxDrawVertex* vertices, std::uint16_t first, std::uint16_t* indices, std::size_t& written) {
     if (kind_ >= 0xA8 || atlasUnit_ >= 0) return false;
     const GxVertexLayout& layout = gpu_->layout(preparedFormat_);
-    const GxVertexLayout::Plan plan = layout.plan(sourceMask_);  // only what its own texgens read
-    GxVertex chunk[ReadChunk];
+    const ReadPlan& read = readPlan(1, layout, sourceMask_);  // only what its own texgens read
+    alignas(GxVertex) std::uint8_t storage[ReadChunk * sizeof(GxVertex)];
+    GxVertex* const chunk = reinterpret_cast<GxVertex*>(storage);
+    for (unsigned k = 0; k < read.zeros && !decoded; ++k)
+        for (unsigned j = 0; j < std::min<unsigned>(ReadChunk, count); ++j)
+            std::memset(storage + j * sizeof(GxVertex) + read.zero[k].at, 0, read.zero[k].bytes);
     for (unsigned i0 = 0; i0 < count; i0 += ReadChunk) {
         const unsigned n = std::min<unsigned>(ReadChunk, count - i0);
-        if (!decoded) layout.read(data + i0 * layout.size, chunk, n, plan);
+        if (!decoded) layout.read(data + i0 * layout.size, chunk, n, read.plan);
         for (unsigned j = 0; j < n; ++j) {
-            const GxVertex& v = decoded ? decoded[i0 + j] : chunk[j];
             GxDrawVertex& d = vertices[i0 + j];
             std::memcpy(d.position, program[i0 + j].position, sizeof d.position), std::memcpy(d.color, program[i0 + j].color, sizeof d.color);
-            for (unsigned u = 0; u < units_; ++u) {
-                if (texgens_[u].palette) d.texcoord[u][0] = palette_[0], d.texcoord[u][1] = palette_[1];
-                else texgen(texgens_[u], v, d.texcoord[u]);
-            }
         }
+        texcoords(decoded ? decoded + i0 : chunk, n, vertices + i0);
     }
     verticesWritten = count;
     written = triangles(vertices, count, first, indices);
@@ -1017,48 +1046,119 @@ std::size_t GxVertexPipeline::widen(GxDrawVertex* vertices, std::uint16_t count,
     return n;
 }
 
-inline void GxVertexPipeline::vertex(const GxVertex& v, GxDrawVertex& d, const float* fixedClip) {
-    const GxCommandProcessor& gpu = *gpu_;
-    const std::uint32_t index = fixedClip ? defaultMatrix_ : v.matrixIndex;
-    const float* m = fixedClip ? fixedClip : clipMatrix(index);
-    for (int r = 0; r < 4; ++r) d.position[r] = m[r * 4] * v.position[0] + m[r * 4 + 1] * v.position[1] + m[r * 4 + 2] * v.position[2] + m[r * 4 + 3];
-    if (fixedDepth_) d.position[2] = (depth01_ - 1) * d.position[3];
+void GxVertexPipeline::vertices(const GxVertex* v, unsigned n, GxDrawVertex* d, const float* fixedClip) {
+    // The position through a clip matrix: a primitive's, or each vertex's own. The position is read first, as the stores may alias it.
+    const auto transform = [](const float* m, const float* p, float* out) {
+        const float x = p[0], y = p[1], z = p[2];
+        for (int r = 0; r < 4; ++r) out[r] = m[r * 4] * x + m[r * 4 + 1] * y + m[r * 4 + 2] * z + m[r * 4 + 3];
+    };
+    if (fixedClip) {
+        float m[16];
+        std::memcpy(m, fixedClip, sizeof m);
+        for (unsigned j = 0; j < n; ++j) transform(m, v[j].position, d[j].position);
+    } else {
+        for (unsigned j = 0; j < n; ++j) transform(clipMatrix(v[j].matrixIndex), v[j].position, d[j].position);
+    }
+    if (fixedDepth_) {
+        const float depth = depth01_ - 1;
+        for (unsigned j = 0; j < n; ++j) d[j].position[2] = depth * d[j].position[3];
+    }
     if (color0InVertex_) {
-        std::memcpy(d.color, color0_, 4);
+        for (unsigned j = 0; j < n; ++j) std::memcpy(d[j].color, color0_, 4);
     } else if (!channel_) {
-        std::memset(d.color, 0, 4);
+        for (unsigned j = 0; j < n; ++j) std::memset(d[j].color, 0, 4);
     } else if (!lit_) {
         // Nothing lit: each component is the vertex's color or the material register.
         const GxLighting::Part* parts = lighting_.parts;
         if (parts[0].materialFromVertex && parts[1].materialFromVertex) {
-            std::memcpy(d.color, v.color[0], 4);
+            for (unsigned j = 0; j < n; ++j) std::memcpy(d[j].color, v[j].color[0], 4);
+        } else if (!parts[0].materialFromVertex && !parts[1].materialFromVertex) {
+            for (unsigned j = 0; j < n; ++j) std::memcpy(d[j].color, lighting_.material, 4);
         } else {
-            for (int c = 0; c < 4; ++c) d.color[c] = parts[c < 3 ? 0 : 1].materialFromVertex ? v.color[0][c] : lighting_.material[c];
+            for (unsigned j = 0; j < n; ++j)
+                for (int c = 0; c < 4; ++c) d[j].color[c] = parts[c < 3 ? 0 : 1].materialFromVertex ? v[j].color[0][c] : lighting_.material[c];
         }
     } else {
-        float view[3] = {0, 0, 0}, normal[3] = {0, 0, 0};
-        if (lit_) {
-            for (int r = 0; r < 3; ++r)
-                view[r] = matrix(index + r, 0) * v.position[0] + matrix(index + r, 1) * v.position[1] + matrix(index + r, 2) * v.position[2] + matrix(index + r, 3);
-            // Normal matrices: three rows of three from XF 0x400, at the position matrix's row.
-            const std::uint32_t base = 0x400 + (index & 31) * 3;
-            for (int r = 0; r < 3; ++r)
-                normal[r] = asFloat(gpu.xf[base + r * 3]) * v.normal[0] + asFloat(gpu.xf[base + r * 3 + 1]) * v.normal[1] +
-                            asFloat(gpu.xf[base + r * 3 + 2]) * v.normal[2];
+        // The vertex's position matrix and its normal matrix, read again only when the vertex names another one.
+        float modelView[12] = {}, normalMatrix[9] = {};
+        std::uint32_t loaded = ~0u;
+        for (unsigned j = 0; j < n; ++j) {
+            const std::uint32_t index = fixedClip ? defaultMatrix_ : v[j].matrixIndex;
+            if (index != loaded) {
+                copyRows(modelView, gpu_->xf, index, 3);
+                // Normal matrices: three rows of three from XF 0x400, at the position matrix's row.
+                const std::uint32_t base = 0x400 + (index & 31) * 3;
+                for (int k = 0; k < 9; ++k) normalMatrix[k] = asFloat(gpu_->xf[base + k]);
+                loaded = index;
+            }
+            const float x = v[j].position[0], y = v[j].position[1], z = v[j].position[2];
+            const float nx = v[j].normal[0], ny = v[j].normal[1], nz = v[j].normal[2];
+            float view[3], normal[3];
+            for (int r = 0; r < 3; ++r) view[r] = modelView[r * 4] * x + modelView[r * 4 + 1] * y + modelView[r * 4 + 2] * z + modelView[r * 4 + 3];
+            for (int r = 0; r < 3; ++r) normal[r] = normalMatrix[r * 3] * nx + normalMatrix[r * 3 + 1] * ny + normalMatrix[r * 3 + 2] * nz;
             normalize(normal);
+            lighting_.apply(view, normal, v[j].color[0], d[j].color);
         }
-        lighting_.apply(view, normal, v.color[0], d.color);
     }
-    for (unsigned u = 0; u < units_; ++u) {
-        if (texgens_[u].palette) d.texcoord[u][0] = palette_[0], d.texcoord[u][1] = palette_[1];
-        else texgen(texgens_[u], v, d.texcoord[u]);
-    }
+    texcoords(v, n, d);
     if (atlasUnit_ >= 0) {
-        float* st = d.texcoord[atlasUnit_];
         constexpr float slack = 1.0f / 4096;
-        atlasOutside_ |= st[0] < -slack || st[0] > 1 + slack || st[1] < -slack || st[1] > 1 + slack;
-        st[0] = st[0] * atlasPlace_[0] + atlasPlace_[2], st[1] = st[1] * atlasPlace_[1] + atlasPlace_[3];
+        for (unsigned j = 0; j < n; ++j) {
+            float* st = d[j].texcoord[atlasUnit_];
+            atlasOutside_ |= st[0] < -slack || st[0] > 1 + slack || st[1] < -slack || st[1] > 1 + slack;
+            st[0] = st[0] * atlasPlace_[0] + atlasPlace_[2], st[1] = st[1] * atlasPlace_[1] + atlasPlace_[3];
+        }
     }
+}
+
+void GxVertexPipeline::texcoords(const GxVertex* v, unsigned n, GxDrawVertex* d) const {
+    bool perVertex = false;
+    for (unsigned u = 0; u < units_; ++u) {
+        const TexGen& t = texgens_[u];
+        const auto input = [&](unsigned j) { return reinterpret_cast<const float*>(reinterpret_cast<const std::uint8_t*>(&v[j]) + t.input); };
+        switch (t.kind) {
+        case TexGen::Palette:
+            for (unsigned j = 0; j < n; ++j) d[j].texcoord[u][0] = palette_[0], d[j].texcoord[u][1] = palette_[1];
+            break;
+        case TexGen::Planar: {
+            const float a0 = t.fold[0][0], b0 = t.fold[0][1], k0 = t.fold[0][2] + t.fold[0][3];
+            const float a1 = t.fold[1][0], b1 = t.fold[1][1], k1 = t.fold[1][2] + t.fold[1][3];
+            for (unsigned j = 0; j < n; ++j) {
+                const float s = input(j)[0], r = input(j)[1];
+                d[j].texcoord[u][0] = a0 * s + b0 * r + k0;
+                d[j].texcoord[u][1] = a1 * s + b1 * r + k1;
+            }
+            break;
+        }
+        case TexGen::Affine: case TexGen::Folded: {
+            const bool third = t.threeInputs && t.source <= 1;  // else the third input is one
+            const float f00 = t.fold[0][0], f01 = t.fold[0][1], f02 = t.fold[0][2], f03 = t.fold[0][3];
+            const float f10 = t.fold[1][0], f11 = t.fold[1][1], f12 = t.fold[1][2], f13 = t.fold[1][3];
+            const float f20 = t.fold[2][0], f21 = t.fold[2][1], f22 = t.fold[2][2], f23 = t.fold[2][3];
+            const bool divides = t.kind == TexGen::Folded;
+            for (unsigned j = 0; j < n; ++j) {
+                const float* in = input(j);
+                const float s = in[0], r = in[1], z = third ? in[2] : 1.0f;
+                const float c0 = f00 * s + f01 * r + f02 * z + f03, c1 = f10 * s + f11 * r + f12 * z + f13;
+                if (divides) {
+                    const float c2 = f20 * s + f21 * r + f22 * z + f23;
+                    if (std::fabs(c2 - 1) > 1e-5f && c2 != 0) d[j].texcoord[u][0] = c0 / c2, d[j].texcoord[u][1] = c1 / c2;
+                    else d[j].texcoord[u][0] = c0, d[j].texcoord[u][1] = c1;
+                } else {
+                    d[j].texcoord[u][0] = c0, d[j].texcoord[u][1] = c1;
+                }
+            }
+            break;
+        }
+        default:
+            perVertex = true;
+        }
+    }
+    // Texgens that take a matrix per vertex (or normalize) count what they do in vertex order, so they run in it.
+    if (!perVertex) return;
+    for (unsigned j = 0; j < n; ++j)
+        for (unsigned u = 0; u < units_; ++u)
+            if (texgens_[u].kind == TexGen::Unfolded || texgens_[u].kind == TexGen::Normalized) texgen(texgens_[u], v[j], d[j].texcoord[u]);
 }
 
 std::size_t GxVertexPipeline::triangles(GxDrawVertex* vertices, std::uint16_t count, std::uint16_t first, std::uint16_t* indices) const {

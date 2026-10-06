@@ -888,6 +888,125 @@ void meshRefreshMatchesRebuild() {
           "a mesh of fewer vertices takes the list's first ones and leaves the rest of the output");
 }
 
+// A texgen that folds into one map gives what its matrix and GX's divide by q give, over every source, input form,
+// projection and shape of third row (a planar map adds its offset first, as it always has), whether the vertices are read
+// from their bytes or decoded whole.
+void foldedTexgens() {
+    struct Matrix {
+        const char* what;
+        float rows[12];
+    };
+    const Matrix matrices[] = {{"the identity", {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0}},
+                               {"an environment map's scale and offset", {0.5f, 0, 0, 0.5f, 0, 0.5f, 0, 0.5f, 0, 0, 0, 1}},
+                               {"a shear", {0.8f, 0.3f, 0.1f, 0.2f, -0.4f, 0.9f, 0.2f, -0.1f, 0, 0, 0, 1}},
+                               {"a projective third row", {1, 0, 0, 0, 0, 1, 0, 0, 0.1f, 0.2f, 0.7f, 0.5f}},
+                               {"a third row of zeros", {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0}},
+                               {"a third row that adds to one", {0.3f, 0.2f, 0.1f, 0.4f, 0.1f, 0.6f, 0.2f, 0.3f, 0, 0, 0, 1}}};
+    Random random{4242};
+    unsigned compared = 0;
+    for (unsigned source : {5u, 0u, 1u}) {
+        for (bool three : {false, true}) {
+            for (bool projective : {false, true}) {
+                for (const Matrix& matrix : matrices) {
+                    auto owned = std::make_unique<smg::GxCommandProcessor>(host());
+                    smg::GxCommandProcessor& gpu = *owned;
+                    Stream s;
+                    clearState(s);
+                    s.bp(0xC008FFF8);  // color (0, 0, 0, TEXC): texture 0 takes a unit
+                    s.cp(0x50, 1 << 9 | 1 << 11), s.cp(0x60, 1), s.cp(0x70, 1 | 4 << 1 | 4 << 10 | 1 << 21 | 4 << 22);  // float position, normal and ST, direct
+                    s.xff(30 * 4, std::initializer_list<float>{matrix.rows[0], matrix.rows[1], matrix.rows[2], matrix.rows[3], matrix.rows[4], matrix.rows[5], matrix.rows[6],
+                                                                  matrix.rows[7], matrix.rows[8], matrix.rows[9], matrix.rows[10], matrix.rows[11]});
+                    s.xf(0x1018, {30 << 6}), s.xf(0x1040, {source << 7 | unsigned(three) << 2 | unsigned(projective) << 1});
+                    gpu.put(s.bytes.data(), static_cast<std::uint32_t>(s.bytes.size()));
+                    smg::GxDrawState state;
+                    smg::readGxDrawState(gpu, state);
+                    smg::GxVertexPipeline pipeline;
+                    check(pipeline.prepare(gpu, state, {}, 0x90, 0), "the texgen's state prepares");
+                    std::vector<std::uint8_t> bytes;
+                    Stream vertices;
+                    float in[8][8];
+                    for (auto& v : in)
+                        for (float& f : v) f = static_cast<float>(random.below(2000)) / 100 - 10;
+                    for (auto& v : in)
+                        for (float f : v) vertices.f32(f);
+                    smg::GxDrawVertex fromBytes[8] = {}, fromDecoded[8] = {};
+                    std::uint16_t indices[24];
+                    pipeline.run(vertices.bytes.data(), 8, fromBytes, 0, indices);
+                    smg::GxVertex decoded[8];
+                    for (int i = 0; i < 8; ++i) decoded[i] = gpu.readVertex(vertices.bytes.data() + i * 32, 0);
+                    pipeline.runDecoded(decoded, 8, fromDecoded, 0, indices);
+                    check(!std::memcmp(fromBytes, fromDecoded, sizeof fromBytes), matrix.what);
+                    const unsigned rows = projective ? 3 : 2;
+                    float m[3][4] = {{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 1}};
+                    for (unsigned r = 0; r < rows; ++r)
+                        for (unsigned c = 0; c < 4; ++c) m[r][c] = matrix.rows[4 * r + c];
+                    const bool thirdIsOne = source >= 5 || !three;
+                    const bool planar = thirdIsOne && m[2][0] == 0 && m[2][1] == 0 && m[2][2] == 0 && m[2][3] == 1;
+                    for (int i = 0; i < 8; ++i) {
+                        // The vertex's position, normal and ST; the source is one of them.
+                        const float* input = source == 0 ? in[i] : source == 1 ? in[i] + 3 : in[i] + 6;
+                        const float z = three && source <= 1 ? input[2] : 1.0f;
+                        float expected[2];
+                        if (planar) {
+                            expected[0] = m[0][0] * input[0] + m[0][1] * input[1] + (m[0][2] + m[0][3]);
+                            expected[1] = m[1][0] * input[0] + m[1][1] * input[1] + (m[1][2] + m[1][3]);
+                        } else {
+                            float c[3];
+                            for (int r = 0; r < 3; ++r) c[r] = m[r][0] * input[0] + m[r][1] * input[1] + m[r][2] * z + m[r][3];
+                            if (std::fabs(c[2] - 1) > 1e-5f && c[2] != 0) expected[0] = c[0] / c[2], expected[1] = c[1] / c[2];
+                            else expected[0] = c[0], expected[1] = c[1];
+                        }
+                        check(!std::memcmp(fromBytes[i].texcoord[0], expected, sizeof expected), matrix.what);
+                        ++compared;
+                    }
+                }
+            }
+        }
+    }
+    check(compared == 3 * 2 * 2 * 6 * 8, "every combination was compared");
+}
+
+// A primitive read attribute by attribute (only what its state uses; what its format lacks zero) draws as the same primitive
+// decoded whole does, over random formats, texgens and lighting, with the arrays moved between draws.
+void readsAgreeWithDecoding() {
+    Random random{777};
+    unsigned primitives = 0;
+    for (unsigned i = 0; i < 150; ++i) {
+        RefreshFixture f;
+        f.build(randomRefreshCase(random, "a random list"), random.next());
+        for (unsigned round = 0; round < 3; ++round) {
+            if (round) f.moveArrays();
+            // The channel's color and alpha, each from the vertex or a register, lit or not, its ambient from either.
+            const auto control = [&] { return random.below(2) | (random.below(2) ? 1u << 1 | 1u << 2 | 2u << 7 : 0u) | random.below(2) << 6; };
+            Stream channel;
+            channel.xf(0x1009, {random.below(4) ? 1u : 0u}), channel.xf(0x100E, {control()}), channel.xf(0x1010, {control()});
+            f.gpu->put(channel.bytes.data(), static_cast<std::uint32_t>(channel.bytes.size()));
+            for (std::uint32_t at = 0; at < f.size();) {
+                const std::uint8_t op = f.list[at];
+                if (!op) {
+                    ++at;
+                    continue;
+                }
+                const std::uint16_t count = static_cast<std::uint16_t>(f.list[at + 1] << 8 | f.list[at + 2]);
+                const std::uint8_t* vertices = f.list.data() + at + 3;
+                const unsigned size = f.gpu->layout(op & 7).size;
+                at += 3 + std::uint32_t(count) * size;
+                if (!f.pipeline.prepare(*f.gpu, f.state, {}, op & 0xF8, op & 7)) continue;
+                std::vector<smg::GxVertex> decoded(count);
+                for (unsigned v = 0; v < count; ++v) decoded[v] = f.gpu->readVertex(vertices + v * size, op & 7);
+                std::vector<smg::GxDrawVertex> a(smg::GxVertexPipeline::maxVertices(op & 0xF8, count)), b(a.size());
+                std::vector<std::uint16_t> ia(smg::GxVertexPipeline::maxIndices(op & 0xF8, count), 0xA5A5), ib(ia);
+                std::memset(a.data(), 0xA5, a.size() * sizeof a[0]), std::memset(b.data(), 0xA5, b.size() * sizeof b[0]);
+                const std::size_t n = f.pipeline.run(vertices, count, a.data(), 0, ia.data());
+                const std::size_t m = f.pipeline.runDecoded(decoded.data(), count, b.data(), 0, ib.data());
+                check(n == m && ia == ib && !std::memcmp(a.data(), b.data(), a.size() * sizeof a[0]), "a primitive read by attribute draws as one decoded whole");
+                ++primitives;
+            }
+        }
+    }
+    check(primitives > 500, "enough random primitives to mean something");
+}
+
 // A pass over the primitive the program just ran takes the program's positions and colors and works out only its own
 // coordinates: over the same state, exactly the program's vertices and triangles again.
 void passReuse() {
@@ -1687,6 +1806,8 @@ int runGxDrawTests() {
     linesAndPoints();
     meshRefresh();
     meshRefreshMatchesRebuild();
+    foldedTexgens();
+    readsAgreeWithDecoding();
     passReuse();
     drawStateKey();
     uniformEpochs();

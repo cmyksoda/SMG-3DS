@@ -113,6 +113,7 @@ struct GxLighting {
     bool shared = false;  // both lit by the same lights the same way: each light's attenuation worked out once
     std::uint8_t material[4] = {}, ambient[4] = {};
     Light lights[8] = {};
+    std::uint8_t lightsOf[2][8] = {}, lightCount[2] = {};  // each part's lights (its mask's bits), in order
     void read(const GxCommandProcessor& gpu);
     void apply(const float view[3], const float normal[3], const std::uint8_t vertex[4], std::uint8_t out[4]) const;
 };
@@ -322,13 +323,17 @@ private:
         std::uint32_t ctrl = 0, postCtrl = 0;  // its XF texgen and post-texgen registers
         // With one matrix for the whole primitive and no normalizing, the texgen is one affine map: the matrix and the
         // dual transform folded together (the input's fourth component is always one).
-        bool folded = false, planar = false;  // planar: two inputs, two outputs, nothing to divide by
+        bool folded = false;
         float fold[3][4] = {};
-        const void* foldOf = nullptr;  // the Fold (and its version) that `fold` was copied from, with `planar` made of it
+        const void* foldOf = nullptr;  // the Fold (and its version) that `fold` was copied from, with `kind` made of it
         std::uint32_t foldAt = 0;
         // Normalized by the dual transform, with one matrix for the primitive: its matrices are read as floats (in folds_).
         bool cached = false;
         std::uint16_t input = 0;  // where its source vector sits in a GxVertex
+        // How a primitive's vertices take it (refold decides): Planar (two inputs, two outputs), Affine (q never divides) and
+        // Folded are one map from the input; Normalized and Unfolded go through texgen() a vertex at a time.
+        enum Kind : std::uint8_t { Unfolded, Normalized, Planar, Affine, Folded, Palette };
+        Kind kind = Unfolded;
     };
     // What a coordinate's fold was made from (and, normalized, its float matrices; post: exactly the identity). By coordinate:
     // a program's units and its remade pass's take turns on the same slots, which would fold again at every prepare.
@@ -341,7 +346,7 @@ private:
         bool postIdentity = false;
         std::uint32_t matricesXf = ~0u;  // the XF change count the matrices were read at
     };
-    const float* clipMatrix(std::uint32_t index) { return index < 64 && clipReady_ >> index & 1 ? clip_[index] : makeClipMatrix(index); }
+    const float* clipMatrix(std::uint32_t index) { return index < 64 && clipReady_[index >> 5] >> (index & 31) & 1 ? clip_[index] : makeClipMatrix(index); }
     const float* makeClipMatrix(std::uint32_t index);
     bool foldStillHolds(Fold& f, const TexGen& t, std::uint32_t ctrl, std::uint32_t post) const;
     void refold(TexGen& t) const;
@@ -353,7 +358,10 @@ private:
     }
     // The light entries of what was read (lightEntries' count: five when more than four are lit) and their rows for the shader.
     void packLights();
-    void vertex(const GxVertex& v, GxDrawVertex& d, const float* fixedClip);
+    // `n` vertices (at most ReadChunk) as the PICA takes them: positions, colors and texture coordinates, a stage at a time
+    // so each stage's constants stay in registers across them.
+    void vertices(const GxVertex* v, unsigned n, GxDrawVertex* d, const float* fixedClip);
+    void texcoords(const GxVertex* v, unsigned n, GxDrawVertex* d) const;
     std::size_t triangles(GxDrawVertex* vertices, std::uint16_t count, std::uint16_t first, std::uint16_t* indices) const;
     // Lines and points from their vertices, transformed into the last `count` of maxVertices, as quads from the first.
     std::size_t widen(GxDrawVertex* vertices, std::uint16_t count, std::uint16_t first, std::uint16_t* indices);
@@ -371,6 +379,22 @@ private:
     std::uint8_t kind_ = 0, reject_ = 0, units_ = 0;
     // The attributes a vertex is read for (GxVertexLayout::Read...): what run() needs, and what a pass's texgens need.
     static constexpr unsigned ReadChunk = 16;  // vertices decoded together, an attribute at a time
+    // A layout's plan for a mask, kept while the CP registers it was made from stay (run and runPass each keep one), with what
+    // the plan leaves unwritten in a vertex that asks for it (an absent attribute, a narrow one's last components): zeroed.
+    struct ReadPlan {
+        const GxCommandProcessor* gpu = nullptr;
+        const GxVertexLayout* layout = nullptr;
+        std::uint32_t cpChanges = 0;
+        std::uint16_t mask = 0;
+        GxVertexLayout::Plan plan;
+        struct Zero {
+            std::uint16_t at;
+            std::uint8_t bytes;
+        } zero[12];
+        std::uint8_t zeros = 0;
+    };
+    const ReadPlan& readPlan(unsigned slot, const GxVertexLayout& layout, std::uint16_t mask);
+    ReadPlan readPlans_[2];
     std::uint16_t readMask_ = GxVertexLayout::ReadAll, sourceMask_ = GxVertexLayout::ReadAll;
     bool perVertexMatrix_ = false, channel_ = false, lit_ = false, fixedDepth_ = false, color0InVertex_ = false;
     std::uint8_t color0_[4] = {};
@@ -389,7 +413,7 @@ private:
     double toClip_[4][4] = {};
     float toClipFloat_[4][4] = {};  // for the CPU path's clip matrices, in the precision the shader's are
     float clip_[64][16] = {}, clipScratch_[16] = {};
-    std::uint64_t clipReady_ = 0;
+    std::uint32_t clipReady_[2] = {};  // a bit for each clip_ matrix made since XF last changed
     GxLighting lighting_;
     std::uint32_t lightingRegisters_ = ~0u, lightingLights_ = ~0u;  // the XF register and light changes it was read at
     unsigned lightCount_ = 0;
