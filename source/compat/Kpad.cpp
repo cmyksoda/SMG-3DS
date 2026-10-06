@@ -16,6 +16,7 @@ Params sPos[WPAD_MAX_CONTROLLERS], sHori[WPAD_MAX_CONTROLLERS], sDist[WPAD_MAX_C
 f32 sSensorHeight[WPAD_MAX_CONTROLLERS];
 smg::KpadRepeat sRepeat[WPAD_MAX_CONTROLLERS];
 u64 sLastRead = 0;
+smg::WiiInput sLatest;
 
 // The player's pointer mode and button layout, as the native app saves them.
 smg::Input& input() {
@@ -106,6 +107,10 @@ int smgRenderInterval() { return input().settings().devDrawEvery ? 1 : 2; }
 // In stylus mode the pointer is on the screen only while the stylus touches it (adapted StarPointerGuidance asks).
 BOOL smgPointerIsStylus() { return input().settings().pointer == smg::PointerMode::Stylus; }
 
+// The 3DS has no remote to shake: the spin buttons are its swing (adapted WPadHVSwing::update asks).
+BOOL smgSpinHeld() { return sLatest.swing; }
+BOOL smgSpinPressed() { return sLatest.swingTrigger; }
+
 // One sample per read, newest first as KPAD returns them; the count read, 0 for a channel with no controller.
 s32 KPADRead(s32 channel, KPADStatus* statuses, u32 count) {
     if (channel != 0 || count == 0) return 0;
@@ -116,6 +121,7 @@ s32 KPADRead(s32 channel, KPADStatus* statuses, u32 count) {
     smg::RawInput raw = smg::readHidInput();
     sMotion.read(raw);
     const smg::WiiInput sample = smg::toWiiInput(input().update(raw, static_cast<float>(seconds)));
+    sLatest = sample;
     smg::writeKpadStatus(sample, statuses[0]);
     if (sRepeat[channel].update(sample.held, seconds)) statuses[0].hold |= KPAD_BUTTON_RPT;
     return 1;

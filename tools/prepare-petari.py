@@ -1976,6 +1976,14 @@ adapt("src/Game/System/WPadPointer.cpp", "Game/System/WPadPointer.cpp", [
     ("    static const s32 sIsValidInScreenTime = 5;", "    static const s32 sIsValidInScreenTime = 0;", 1),
     ("    static const s32 sIsInValidOutScreenTime = 10;", "    static const s32 sIsInValidOutScreenTime = 0;", 1),
 ])
+# The 3DS has no remote to shake: the remote's swing is also on while a spin button is held, and starts when one is pressed.
+adapt("src/Game/System/WPadHVSwing.cpp", "Game/System/WPadHVSwing.cpp", [
+    ('#include "Game/System/WPadHVSwing.hpp"\n',
+     '#include "Game/System/WPadHVSwing.hpp"\n\nextern "C" BOOL smgSpinHeld();  // source/compat/Kpad.cpp\nextern "C" BOOL smgSpinPressed();\n', 1),
+    ("            mIsTriggerSwing = true;\n        }\n    }\n}",
+     "            mIsTriggerSwing = true;\n        }\n    }\n\n    if (mChannel == WPAD_DEV_CORE && pPad->mChannel == 0) {\n"
+     "        mIsSwing = mIsSwing || smgSpinHeld();\n        mIsTriggerSwing = mIsTriggerSwing || smgSpinPressed();\n    }\n}", 1),
+])
 # Eight of these run each logic step (a remote and a Nunchuk on each of four channels, three with nothing there), each
 # averaging and turning over its last 128 samples. Those read nothing else, so while the 128 are one value (no
 # controller, or a remote held still) they're kept as they were: the same results without the loops.
