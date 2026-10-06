@@ -5,6 +5,7 @@
 #include <citro3d.h>
 #include <GxShader.hpp>
 #include <private/pe_reg.h>
+#include <private/tev_reg.h>
 #include <smg/FreeStore.hpp>
 #include <smg/GxFifoWrite.h>
 #include <smg/GxCopy.hpp>
@@ -189,7 +190,7 @@ struct Renderer {
     bool y2rTried = false, y2rOpen = false;
     Handle y2rDone = 0;
     GxFrame frame{640, 480, true};
-    bool indirectNoted = false, dstAlphaNoted = false;
+    bool indirectNoted = false, dstAlphaNoted = false, fogNoted = false;
     // dev.gx_dump: one frame's draws, copies and states listed in the log every minute of the game's clock.
     const GxCommandProcessor* lastGpu = nullptr;
     // The GPU path (gx.v.pica with `transform` on): display lists of primitives kept as meshes in linear memory,
@@ -1215,6 +1216,10 @@ struct Renderer {
         if (state_->indirectDropped && !indirectNoted) {
             std::fprintf(stderr, "The Wii GPU's drawing: indirect texture offsets are left out (the PICA has no dependent reads)\n");
             indirectNoted = true;
+        }
+        if (const unsigned fog = TEV_FOG_PARAM_3_GET_FSEL(gpu.bp[0xF1]); fog && !fogNoted) {
+            std::fprintf(stderr, "The Wii GPU's drawing: fog (type %u) is left out\n", fog);
+            fogNoted = true;
         }
         // GX's scissor in screen pixels, then on the target turned a quarter as the LCD is (citro3d's convention).
         const int x0 = std::clamp(static_cast<int>(std::lround(state_->scissor[0] * 400.0f / frame.width)), 0, 400);
