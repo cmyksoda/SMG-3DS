@@ -289,6 +289,10 @@ adapt("libs/JSystem/include/JSystem/JSupport/JSUList.hpp", "include/JSystem/JSup
     ("#include <revolution.h>", "#include <revolution/types.h>\n#include <cstddef>", 1),
 ])
 
+# The base's velocity bound a reference to a temporary, which GCC returns as null (no galaxy builds the base alone).
+adapt("include/Game/MapObj/FloaterFloatingForce.hpp", "include/Game/MapObj/FloaterFloatingForce.hpp", [
+    ("        return TVec3f(0.0f, 0.0f, 0.0f);", "        static const TVec3f sZero(0.0f, 0.0f, 0.0f);\n        return sZero;", 1),
+])
 adapt("include/Game/Util/MathUtil.hpp", "include/Game/Util/MathUtil.hpp", [
     ("        return __fabsf(x);", "        return std::fabs(x);", 1),
     ("        return __abs(x);", "        return x < 0 ? -x : x;", 1),
@@ -1292,6 +1296,10 @@ adapt("src/Game/Ride/Tamakoro.cpp", "Game/Ride/Tamakoro.cpp", [
     ("            TVec3f tmpVec(-mGravity);\n", "            tmpVec = -mGravity;\n", 1),
 ])
 # MSL's headers declared the narrow string functions along with the rest; the standard <cstring> does.
+# The placeholder holds 8 characters (main.dol's too), so ending it at 9 wrote past it; the text shown is the same.
+adapt("src/Game/Screen/LayoutCoreUtil.cpp", "Game/Screen/LayoutCoreUtil.cpp", [
+    ("            s32 end = maxNumChars <= 9 ? maxNumChars : 9;", "            s32 end = maxNumChars <= 8 ? maxNumChars : 8;", 1),
+])
 adapt("src/Game/Util/StringUtil.cpp", "Game/Util/StringUtil.cpp", [
     ("#include <cstdio>\n#include <wstring.h>", "#include <cstdio>\n#include <cstring>\n#include <wstring.h>", 1),
     # A message's sound names are native UTF-16 here (smg::nativeBmg): a character's high byte is no longer its first.
@@ -1672,6 +1680,10 @@ adapt("libs/JSystem/include/JSystem/JAudio2/JASResArcLoader.hpp", "include/JSyst
     ("typedef void (*LoadCallback)(u32, u32);", "typedef void (*LoadCallback)(u32, uintptr_t);", 1),
     ("/* 0x14 */ u32 mCallbackArg;", "/* 0x14 */ uintptr_t mCallbackArg;", 1),
     ("int loadResourceAsync(JKRArchive*, u16, u8*, u32, void (*)(u32, u32), u32);", "int loadResourceAsync(JKRArchive*, u16, u8*, u32, LoadCallback, uintptr_t);", 1),
+])
+# A heap inserted last names no next heap: the tree's null, without a member access through a null pointer.
+adapt("src/JSystem/JAudio2/JASHeapCtrl.cpp", "JSystem/JAudio2/JASHeapCtrl.cpp", [
+    ("    mTree.insertChild(&pNext->mTree, &pHeap->mTree);", "    mTree.insertChild(pNext ? &pNext->mTree : nullptr, &pHeap->mTree);", 1),
 ])
 adapt("src/JSystem/JAudio2/JASResArcLoader.cpp", "JSystem/JAudio2/JASResArcLoader.cpp", [
     ("LoadCallback callback, u32 callbackArg)", "LoadCallback callback, uintptr_t callbackArg)", 1),
