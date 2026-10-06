@@ -1138,6 +1138,23 @@ a frame without it at the Comet Observatory, 33.8 with). The GDB sampler still g
 follows one thread (`rsp_sample.py`'s `TRACK=NAME`, the thread whose stack shows NAME), read as functions rather than
 instructions: the stub halts at block boundaries, so a tiny function called constantly takes its neighbors' samples.
 
+**Fog.** SMG's fog is GX's linear fog on 268 materials (a scan that reads the second byte of J3D's fog info as a switch
+finds none: that byte is `mAdjEnable`, the range adjustment, and the type alone says fog), mostly a faint white haze
+from 0 to 200000, a few enemies that fade to white within 5000 units and `PlanetDisk`'s blue; and code sets it: Mario's
+damage, star piece and dash flashes (`MarioActor::updateLightDL`, `calcFogStartEnd` centers the ramp on his own depth so
+his whole model takes one share), the power-up (`J3DModelX`), fur and water plants. The renderer reads BP 0xE8 and 0xEE
+to 0xF2 at each state's build (they rebuild the state but are not in its key, as Mario's flash changes them every frame)
+and sends them to the PICA's fog unit when they change: `smg::picaFogTable` (`GxFog.cpp`) samples Dolphin's software fog
+(`Tev.cpp`: `ze = A / (B - (Zs >> shift))`, less C, clamped, then the exponential curves) at 128 steps of screen depth,
+which the fog unit indexes directly with its z flipped, because the port's PICA depth is `1 - Zs / (2^24 - 1)`
+(`GxVertexPipeline`'s clip rows). A step is a straight line and most of a scene lies past depth 0.99, inside the last
+step, where far fog climbs steeply: the plain chord fogged a far object at depth 0.999 by 42% where GX gives 4%. So each
+step runs to the next value unless it would fog more than GX by over 6/256 somewhere, and then only as steeply as stays
+within that; too little far fog is the error left. citro3d sends fog (a change makes the next draw citro3d's, which
+writes the table), the raw `TEXENV_UPDATE_BUFFER` write keeps the fog bits citro3d set, and the port's own copy and
+movie draws and the frame's end turn it off. With fog forced on every draw, near ground stays clear and the castle goes
+white, as it should.
+
 **Per-draw work, counted.** The zones say where the render thread's time goes; instruction counts say why. GxRender.cpp and
 the command processor were built as the 3DS build builds them, with stand-ins for citro3d and libctru, and a J3D-like frame
 (450 materials, 740 mesh draws, 270 particles, about 300 KB of stream) was replayed on an emulated ARM11 that counts each
