@@ -455,8 +455,17 @@ struct Renderer {
             const GxMeshLayout::Unit& input = layout.unit[unit];
             if (input.input == GxMeshLayout::Unused) AttrInfo_AddFixed(attributes, 2 + unit);
             else if (input.input == GxMeshLayout::Stored) load(2 + unit, GPU_FLOAT, input.floats);
-            else m.buffers[m.bufferCount++] = {u64(AttrInfo_AddLoader(attributes, 2 + unit, GPU_FLOAT, input.floats)),
-                                               input.input == GxMeshLayout::OfPosition ? 0u : layout.normal, 1};
+            else {
+                // Padded out to the stride: the PICA freezes on a loader whose attributes don't add up to it.
+                MeshLoaders::Buffer& again = m.buffers[m.bufferCount++];
+                again = {u64(AttrInfo_AddLoader(attributes, 2 + unit, GPU_FLOAT, input.floats)),
+                         input.input == GxMeshLayout::OfPosition ? 0u : layout.normal, 1};
+                for (unsigned left = layout.stride - 4u * input.floats; left;) {
+                    const unsigned pad = std::min(left, 16u);
+                    again.permutation |= u64(0xB + pad / 4) << (4 * again.components++);
+                    left -= pad;
+                }
+            }
         }
         if (layout.lit) {
             load(6, GPU_FLOAT, 3);
