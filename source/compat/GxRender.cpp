@@ -418,7 +418,15 @@ struct Renderer {
                                      1u << PendingFixed | 1u << PendingMeshLayout | 1u << PendingCpuBuffers;
     u32 stagesChanged = 0;  // combiner stages, and bit 6 the buffer's updates and color
     std::uint32_t fogWords[6] = {};  // the state's fog registers (GxFogRegisters), all zero with fog off
-    C3D_FogLut fogLut;
+    // Fog tables made, by their registers: a scene may switch between a few for every draw, and each takes 4,224 samples
+    // of GX's curve.
+    struct MadeFog {
+        std::uint32_t words[6];
+        C3D_FogLut lut;
+    };
+    static constexpr unsigned FogTables = 4;
+    MadeFog fogTables[FogTables];
+    unsigned fogTablesMade = 0;
     u32 fogBits = 0;  // fog's mode and z flip, which share GPUREG_TEXENV_UPDATE_BUFFER with the buffer's updates
     u32 testsChanged = 0;   // 1 the alpha test, 2 the blend, 4 the depth test and write mask
     u32 unitsChanged = 0, fixedChanged = 0;
@@ -679,12 +687,19 @@ struct Renderer {
         std::memcpy(sent.fogWords, fogWords, sizeof fogWords), sent.fog = true;
         const GxFog fog = readGxFog(fogWords);
         if (fog.type) {
-            float table[256];
-            picaFogTable(fog, table);
-            FogLut_FromArray(&fogLut, table);
+            MadeFog* made = nullptr;
+            for (unsigned i = 0; i < std::min(fogTablesMade, FogTables) && !made; ++i)
+                if (sameWords(fogTables[i].words, fogWords, 6)) made = &fogTables[i];
+            if (!made) {
+                made = &fogTables[fogTablesMade++ % FogTables];
+                std::memcpy(made->words, fogWords, sizeof fogWords);
+                float table[256];
+                picaFogTable(fog, table);
+                FogLut_FromArray(&made->lut, table);
+            }
             C3D_FogGasMode(GPU_FOG, GPU_PLAIN_DENSITY, true);
             C3D_FogColor(u32(fog.color[0]) | u32(fog.color[1]) << 8 | u32(fog.color[2]) << 16);
-            C3D_FogLutBind(&fogLut);
+            C3D_FogLutBind(&made->lut);
             fogBits = GPU_FOG | BIT(16);
         } else {
             C3D_FogGasMode(GPU_NO_FOG, GPU_PLAIN_DENSITY, false);
