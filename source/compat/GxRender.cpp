@@ -2116,7 +2116,9 @@ struct Renderer {
                     for (unsigned why = 0; why <= PendingList; ++why) perf.pendingWhy[why] += pendingWhy >> why & 1;
                     sentAll(), ++perf.citroDraws;
                 } else {
-                    writeMeshDraw(mesh, mesh.groups[g], g == 0);
+                    // Aimed again for each group, as citro3d's draws do: a real 3DS drew a skinned Mario's groups wrong
+                    // on the raw path alone, and their registers otherwise match citro3d's draw for draw.
+                    writeMeshDraw(mesh, mesh.groups[g], true);
                 }
             }
         };
