@@ -1998,6 +1998,30 @@ adapt("src/Game/NPC/DemoRabbit.cpp", "Game/NPC/DemoRabbit.cpp", [
      "    TVec3f normal;\n    if (!MR::getFirstPolyNormalOnLineToMap(&normal, mPosition, mGravity * 10.0f, nullptr, nullptr)) {\n"
      "        normal = -mGravity;\n    }\n", 1),
 ])
+# Mario's raster scrolls copy the screen in strips of four rows, each read before the lines redraw it: one whole-screen
+# copy is the same picture, kept on the GPU (as CPU strips, Freezeflame 5 took 700 ms a frame).
+adapt("src/Game/Player/MarioActorSpecialDraw.cpp", "Game/Player/MarioActorSpecialDraw.cpp", [
+    ('#include "Game/LiveActor/HitSensor.hpp"\n',
+     '#include "Game/LiveActor/HitSensor.hpp"\n#include <smg/GxRender.hpp>\n\nalignas(32) static u8 smgRasterScreen[640 * 528 * 2];\n', 1),
+    ("    u32 next;\n    u32 stripHeight = 4;\n    GXTexObj textures[2];\n", "", 2),
+    ("    u16 current = 0;\n", "", 2),
+    ("    GXInitTexObj(&textures[0], _1D8, width, 4, GX_TF_RGB565, GX_CLAMP, GX_CLAMP, GX_FALSE);\n"
+     "    GXInitTexObj(&textures[1], _1DC, width, 4, GX_TF_RGB565, GX_CLAMP, GX_CLAMP, GX_FALSE);\n"
+     "    GXSetLineWidth(6, GX_TO_ZERO);\n    GXSetTexCopyDst(width, 4, GX_TF_RGB565, GX_FALSE);\n"
+     "    GXSetTexCopySrc(0, 0, width, 4);\n    GXCopyTex(_1D8, GX_FALSE);\n"
+     "    f32 textureStep = 1.0f / static_cast< f32 >(stripHeight);\n",
+     "    const u16 height = MR::getScreenHeight();\n    GXTexObj screen;\n"
+     "    GXInitTexObj(&screen, smgRasterScreen, width, height, GX_TF_RGB565, GX_CLAMP, GX_CLAMP, GX_FALSE);\n"
+     "    GXSetLineWidth(6, GX_TO_ZERO);\n    GXSetTexCopyDst(width, height, GX_TF_RGB565, GX_FALSE);\n"
+     "    GXSetTexCopySrc(0, 0, width, height);\n    smg::gxRenderCopiesStayOnGpu(true);\n    GXCopyTex(smgRasterScreen, GX_FALSE);\n"
+     "    smg::gxRenderCopiesStayOnGpu(false);\n    GXLoadTexObj(&screen, GX_TEXMAP0);\n"
+     "    f32 textureStep = 1.0f / static_cast< f32 >(height);\n", 2),
+    ("        GXTexModeSync();\n        GXPixModeSync();\n        GXSetTexCopySrc(0, y + 4, width, 4);\n        next = 1 - current;\n"
+     "        GXCopyTex(mRasterBuffers[next], GX_FALSE);\n        GXLoadTexObj(&textures[current], GX_TEXMAP0);\n        f32 v = 0.0f;\n",
+     "        f32 v = static_cast< f32 >(y) / height;\n", 2),
+    ("        }\n\n        current = next;\n    }\n\n    GXDrawDone();\n}", "        }\n    }\n\n    GXDrawDone();\n}", 2),
+])
+
 # The 3DS has no remote to shake: the remote's swing is also on while a spin button is held, and starts when one is pressed.
 adapt("src/Game/System/WPadHVSwing.cpp", "Game/System/WPadHVSwing.cpp", [
     ('#include "Game/System/WPadHVSwing.hpp"\n',
