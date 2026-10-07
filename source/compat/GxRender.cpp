@@ -2864,23 +2864,41 @@ struct Renderer {
         if (!depthTile) depthTile = static_cast<u32*>(linearAlloc(256));
         if (!depthTile) stop("reading a depth tile back with no memory to read it into");
         const unsigned tile = (row / 8) * 30 + column / 8;
+        if (!inFrame)
+            for (WantedTile& wanted : peeksBetweenFrames)
+                if (wanted.tile == tile || wanted.tile == ~0u || framesShown - wanted.asked > 3) {
+                    wanted = {tile, framesShown};
+                    break;
+                }
         if (fresh[2] && tile == freshTile) return depthTile[morton(column & 7, row & 7)];  // nothing drawn since
-        if (inFrame) {
-            const PeekTile* done = nullptr;
-            bool queued = false;
-            for (const PeekTile& p : peekTiles) {
-                if (p.tile != tile) continue;
-                if (p.begun < framesBegun && framesShown - p.frame <= 1 && (!done || p.begun > done->begun)) done = &p;
-                queued |= p.begun == framesBegun;
+        // The tile as the GPU copied it up to three frames before, or the nearest copied texel when the peek moved (the
+        // star pointer, a balloon's anchor), from either thread: waiting for the GPU instead costs a real 3DS ~40 ms.
+        const PeekTile *done = nullptr, *near = nullptr;
+        unsigned nearDistance = 4;  // in tiles; a peek that far from every copied tile waits
+        bool queued = false;
+        for (const PeekTile& p : peekTiles) {
+            const bool copied = p.begun < framesBegun && framesShown - p.frame <= 3;
+            if (p.tile != tile) {
+                const unsigned distance = std::max(std::max(p.tile / 30, tile / 30) - std::min(p.tile / 30, tile / 30),
+                                                   std::max(p.tile % 30, tile % 30) - std::min(p.tile % 30, tile % 30));
+                if (copied && (distance < nearDistance || (distance == nearDistance && near && p.begun > near->begun))) near = &p, nearDistance = distance;
+                continue;
             }
-            if (!queued) queuePeekTile(tile);
-            if (done) {
-                GSPGPU_InvalidateDataCache(done->texels, 256);
-                ++perf.peeksDeferred;
-                return done->texels[morton(column & 7, row & 7)];
-            }
-            pause();
+            if (copied && (!done || p.begun > done->begun)) done = &p;
+            queued |= p.begun == framesBegun;
         }
+        if (inFrame && !queued) queuePeekTile(tile);
+        if (!done && near) {
+            done = near;
+            row = std::clamp(row, near->tile / 30 * 8, near->tile / 30 * 8 + 7);
+            column = std::clamp(column, near->tile % 30 * 8, near->tile % 30 * 8 + 7);
+        }
+        if (done) {
+            GSPGPU_InvalidateDataCache(done->texels, 256);
+            ++perf.peeksDeferred;
+            return done->texels[morton(column & 7, row & 7)];
+        }
+        if (inFrame) pause();
         C3D_SyncTextureCopy(static_cast<u32*>(target->frameBuf.depthBuf) + tile * 64, GX_BUFFER_DIM(256 / 16, 0), depthTile, GX_BUFFER_DIM(256 / 16, 0), 256,
                             GX_TRANSFER_RAW_COPY(1));
         GSPGPU_InvalidateDataCache(depthTile, 256);
@@ -2898,9 +2916,15 @@ struct Renderer {
         unsigned tile = ~0u;
         u32 begun = 0, frame = 0;  // framesBegun and framesShown when it was queued
     };
-    static constexpr unsigned PeekTiles = 8;
+    static constexpr unsigned PeekTiles = 16;
     PeekTile peekTiles[PeekTiles];
     unsigned nextPeekTile = 0;
+    // Tiles peeks between frames read, copied at each frame's end (where they read) while they keep asking.
+    struct WantedTile {
+        unsigned tile = ~0u;
+        u32 asked = 0;  // framesShown then
+    };
+    WantedTile peeksBetweenFrames[2];
     u32 framesBegun = 0;
     void queuePeekTile(unsigned tile) {
         PeekTile& p = peekTiles[nextPeekTile++ % PeekTiles];
@@ -2930,6 +2954,12 @@ struct Renderer {
         const std::uint32_t size = gpu.bp[0x4A];
         frame.width = static_cast<float>((size & 0x3FF) + 1), frame.height = static_cast<float>((size >> 10 & 0x3FF) + 1);
         if (!inFrame) begin();
+        for (WantedTile& wanted : peeksBetweenFrames) {
+            if (wanted.tile == ~0u) continue;
+            if (framesShown - wanted.asked > 3) wanted.tile = ~0u;
+            else if (std::none_of(std::begin(peekTiles), std::end(peekTiles), [&](const PeekTile& p) { return p.tile == wanted.tile && p.begun == framesBegun; }))
+                queuePeekTile(wanted.tile);
+        }
         flushBatch();
         if (dumping) std::fprintf(stderr, "gx dump: frame ends after %u draws\n", dumpIndex), dumping = false;
         flushVertices();
