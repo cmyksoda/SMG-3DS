@@ -2475,10 +2475,13 @@ adapt("src/Game/MapObj/Swinger.cpp", "Game/MapObj/Swinger.cpp", [
      "_3C(a2[0][0], a2[1][0], a2[2][0]),\n      _48(a2[0][1], a2[1][1], a2[2][1]), _54(a2[0][2], a2[1][2], a2[2][2])", 1),
 ])
 # The projection copies sixteen floats from the 3x4 table; on the Wii the last four came from the next object in
-# .data (a vtable and a string), which a zero row stands in for.
+# .data (a vtable and a string), which a zero row stands in for. Only a pointer on the screen is peeked: one off it
+# keeps its last place (the second player's, never there, the corner), and a real 3DS waits ~40 ms for such a peek.
 adapt("src/Game/Screen/StarPointerDirector.cpp", "Game/Screen/StarPointerDirector.cpp", [
     ("    static f32 mtx_identity[3][4] = {{1.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f, 0.0f}};",
      "    static f32 mtx_identity[4][4] = {{1.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f, 0.0f}, {}};", 1),
+    ("        if (MR::isInRange(mInfos[channel]->mPos.x, 0.0f, MR::getScreenWidth() - 1) &&",
+     "        if (mInfos[channel]->mInScreen && MR::isInRange(mInfos[channel]->mPos.x, 0.0f, MR::getScreenWidth() - 1) &&", 1),
 ])
 
 # Last: everything above may adapt a file these build on.
