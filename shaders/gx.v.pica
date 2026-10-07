@@ -53,7 +53,10 @@
         mov r2.w, material.w
     .end
     ifu transform
+        ; A real PICA froze on the first mesh until each mova had two NOPs after it (Azahar never minds)
         mova a0.x, inslot.x
+        nop
+        nop
         ifu lit
             ; r3 the view-space position, from the slot's modelview; then the shared rows to clip space
             dp4 r3.x, clip[a0.x], inpos
@@ -74,6 +77,8 @@
         ifu slotgen0
             add r6.y, slotrow.x, inslot.x
             mova a0.y, r6.y
+            nop
+            nop
             dp4 r9.x, clip[a0.y], intc0
             dp4 r9.y, clip[a0.y+1], intc0
             dp4 r9.z, clip[a0.y+2], intc0
@@ -91,6 +96,8 @@
         ifu slotgen1
             add r6.y, slotrow.y, inslot.x
             mova a0.y, r6.y
+            nop
+            nop
             dp4 r9.x, clip[a0.y], intc1
             dp4 r9.y, clip[a0.y+1], intc1
             dp4 r9.z, clip[a0.y+2], intc1
@@ -108,6 +115,8 @@
         ifu slotgen2
             add r6.y, slotrow.z, inslot.x
             mova a0.y, r6.y
+            nop
+            nop
             dp4 r9.x, clip[a0.y], intc2
             dp4 r9.y, clip[a0.y+1], intc2
             dp4 r9.z, clip[a0.y+2], intc2
