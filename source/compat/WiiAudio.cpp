@@ -127,7 +127,14 @@ void noteFirstSound(const s16* samples, u32 count) {
     std::fprintf(stderr, "The game's audio: first sound in DMA block %lu (peak %d of 32767)\n", static_cast<unsigned long>(blocks), peak);
 }
 
-// Copies the buffer the game handed over into the next wave, as the DMA took it, and tells the game it began.
+// Copies the buffer the game handed over into the next wave and tells the game it began. The Wii's AI takes each stereo
+// pair right first (JASDriver::readDspBuffer interleaves so), NDSP left first. The game arms the next of its three
+// buffers at each block's start, so the same buffer twice means it ran late: the block fades out to silence instead of
+// the last 17.5 ms repeating (a buzz while the game stalls), and fresh sound fades back in.
+constexpr u32 FadeFrames = 64;
+s16 sLastFrame[2] = {};
+u32 sLastStart = 0, sLateBlocks = 0, sBlocks = 0;
+bool sSilent = false;
 std::atomic<bool> sClickPending{false};  // dev.av_sync: the next block handed to NDSP starts with a click
 std::atomic<u64> sMarkTick{0};          // when the last mark was made
 ndspWaveBuf* sClickWave = nullptr;      // the block that carries it, until NDSP plays it
@@ -137,12 +144,29 @@ void startBlock(ndspWaveBuf* wave) {
     if (sDmaStart && length) noteFirstSound(reinterpret_cast<const s16*>(static_cast<uintptr_t>(sDmaStart)), length / 2);
     if (wave) {
         s16* samples = const_cast<s16*>(wave->data_pcm16);
-        if (sDmaStart && length) std::memcpy(samples, reinterpret_cast<const void*>(static_cast<uintptr_t>(sDmaStart)), length);
+        const u32 frames = length / 4;
+        if (sDmaStart && length && sDmaStart != sLastStart) {
+            const u32* from = reinterpret_cast<const u32*>(static_cast<uintptr_t>(sDmaStart));
+            u32* to = reinterpret_cast<u32*>(samples);
+            for (u32 i = 0; i < frames; ++i) to[i] = from[i] << 16 | from[i] >> 16;
+            for (u32 i = 0; sSilent && i < std::min(frames, FadeFrames); ++i)
+                for (int c = 0; c < 2; ++c) samples[2 * i + c] = static_cast<s16>(samples[2 * i + c] * int(i) / int(FadeFrames));
+            sSilent = false;
+        } else {
+            for (u32 i = 0; i < frames; ++i)
+                for (int c = 0; c < 2; ++c)
+                    samples[2 * i + c] = sSilent || i >= FadeFrames ? 0 : static_cast<s16>(sLastFrame[c] * int(FadeFrames - i) / int(FadeFrames));
+            sSilent = true, ++sLateBlocks;
+        }
+        sLastStart = sDmaStart;
+        if (frames) sLastFrame[0] = samples[2 * frames - 2], sLastFrame[1] = samples[2 * frames - 1];
+        if (++sBlocks % 512 == 0 && sLateBlocks)
+            std::fprintf(stderr, "The game's audio: %lu of the last 512 blocks came late (silence for them)\n", static_cast<unsigned long>(sLateBlocks)), sLateBlocks = 0;
         if (sClickPending.exchange(false)) {
             for (u32 i = 0; i < std::min<u32>(length / 2, 320); ++i) samples[i] = i / 16 % 2 ? -24000 : 24000;
             sClickWave = wave;
         }
-        wave->nsamples = length / 4;
+        wave->nsamples = frames;
         DSP_FlushDataCache(samples, length);
         ndspChnWaveBufAdd(0, wave);
     }
