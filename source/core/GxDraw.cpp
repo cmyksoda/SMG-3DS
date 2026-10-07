@@ -1246,7 +1246,8 @@ std::size_t GxVertexPipeline::triangles(GxDrawVertex* vertices, std::uint16_t co
     std::size_t corners = count;  // where a cut triangle's corners go
     const auto emit = [&](int a, int b, int c) {
         const float* pa = vertices[a].position, *pb = vertices[b].position, *pc = vertices[c].position;
-        if (outside && (behindNear(pa) || behindNear(pb) || behindNear(pc)) && corners + 8 <= room) {
+        const bool perspective = pa[3] != pb[3] || pb[3] != pc[3];  // a 2D draw's cut stays within its own corners
+        if (outside && perspective && (behindNear(pa) || behindNear(pb) || behindNear(pc)) && corners + 8 <= room) {
             GxDrawVertex cut[8];
             const unsigned m = clipToGuardBand(vertices[a], vertices[b], vertices[c], cut);
             ++trianglesCut;
