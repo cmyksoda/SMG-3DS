@@ -1449,6 +1449,32 @@ components' count, offset and (keyed) type words, then a byte count and the valu
 mount (`.canm`, `smg::nativeCameraAnimation`); before that, the Star Festival's opening camera crashed reading them.
 All 190 on the disc (101 in stage archives, 89 in object archives) pass the converter's bounds.
 
+**On a real 3DS.** Azahar forgives what the hardware does not. The first runs on a New 3DS (October 2026) froze the GPU
+until these held:
+- Every attribute loader's components add up to its stride (3dbrew, GPU/Pitfalls: "or the PICA will freeze"). A mesh's
+  texgen buffers that read the position's or normal's bytes again load 12 bytes at a 16 to 44 byte stride, so they are
+  padded out with padding components (ids 0xC to 0xF, 4 to 16 bytes each).
+- Each `mova` in `gx.v.pica` has two NOPs after it. Without them the title's first mesh froze the PICA (`mova a0.x`
+  straight into an `ifu`); picasso pads blocks that end together, not this.
+- A frame split flushes its part of the command list. libctru's `GX_ProcessCommandList` flushes only with
+  `GX_CMDLIST_FLUSH`, `C3D_SyncTextureCopy` splits with 0 inside a frame, and the frame's end flushes only its last part
+  (and, given `GX_CMDLIST_FLUSH`, skips `C3D_FrameEnd(0)`'s whole-heap flush). Every part ahead of an EFB copy could reach
+  the GPU still in the CPU's cache: freezes at random, run to run. EFB copies split with the flag themselves, as the depth
+  peek already did.
+- No transfer moves zero bytes (Azahar's own note: a real 3DS freezes). EFB copies move only the target's tile rows they
+  sample (8 screen columns each, a column either side for the filter), never none.
+- The app ends without libctru's `exit`, which unmaps the heaps while the game's threads and the GPU still use them (HOME's
+  close waited for good). A close request ends the app at once: the save lock first, so a save file being written
+  finishes, then `ndspExit`, `aptExit` (the farewell HOME waits for) and `svcExitProcess`. The game's own power-off
+  is not waited for, as it needs the GPU, which HOME holds.
+
+Timing there (being worked on; the castle, render thread on core 2): the renderer's CPU work matches Azahar's model or
+beats it, stage by stage, but the frame is 160 to 200 ms. About 50 ms of it is the GPU, which the castle's twelve EFB
+copies a frame (a split, a transfer and a pass each) keep busy; the rest is waiting, with the emulated CPU's interrupt
+lock (`sCpu`) contended across threads (88 ms a frame of waits among the threads besides the game's). Builds reach the
+console over ftpd (`curl -T` to `/3ds/`; test builds sit outside `/3ds/SMG-3DS/`, as the Homebrew Launcher shows only a
+folder's own .3dsx), and test builds send stderr to the bottom screen and a log file on the SD card.
+
 ## The native scene boundary
 
 `smg::NativeScene` (`compat/smg/Scene.hpp`, `source/compat/Scene.cpp`) holds what
