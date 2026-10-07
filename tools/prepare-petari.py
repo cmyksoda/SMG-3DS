@@ -2022,6 +2022,15 @@ adapt("src/Game/Player/MarioActorSpecialDraw.cpp", "Game/Player/MarioActorSpecia
     ("        }\n\n        current = next;\n    }\n\n    GXDrawDone();\n}", "        }\n    }\n\n    GXDrawDone();\n}", 2),
 ])
 
+# A pointer's 1P/2P tag shows only with two remotes. Hidden, it set its pose again every frame, unbinding its layout's
+# animations pane by pane (5% of Buoy Base's game thread); now only as it hides, its own state otherwise unread.
+adapt("src/Game/Screen/StarPointerLayout.cpp", "Game/Screen/StarPointerLayout.cpp", [
+    ("void StarPointerNumber::control() {\n", "static const AnimType HiddenPose = static_cast< AnimType >(-2);\n\nvoid StarPointerNumber::control() {\n", 1),
+    ("    if (!mIsAppear || isOffState()) {\n        startAnimPosition(0);\n        mAnimType = AnimType_NULL;\n",
+     "    if (!mIsAppear || isOffState()) {\n        if (mAnimType != HiddenPose) {\n            startAnimPosition(0);\n        }\n"
+     "        mAnimType = HiddenPose;\n", 1),
+])
+
 # The 3DS has no remote to shake: the remote's swing is also on while a spin button is held, and starts when one is pressed.
 adapt("src/Game/System/WPadHVSwing.cpp", "Game/System/WPadHVSwing.cpp", [
     ('#include "Game/System/WPadHVSwing.hpp"\n',
