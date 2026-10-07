@@ -43,6 +43,7 @@ extern "C" int smgDevGxNull();
 extern "C" int smgDevGxTiming();
 extern "C" int smgDevGxCheck();
 extern "C" int smgDevGxNoRaw();
+extern "C" int smgDevGxMips();
 extern "C" int smgDevGxZones();
 extern "C" void (*smgGpuMemoryChanged)(const void* start, u32 size);  // source/compat/Os.cpp
 extern std::atomic<u32> smgDspTicks;                                  // source/compat/WiiAudio.cpp
@@ -871,9 +872,11 @@ struct Renderer {
         return texture;
     }
 
-    // Levels for the PICA when the game samples between them (the min filter's low bits), else the first alone.
+    // Levels for the PICA when the game samples between them (the min filter's low bits) and dev.gx_mips asks for
+    // them, else the first alone.
     static unsigned mipLevels(const Key& key) {
-        return std::get<6>(key) & 3 ? picaMipLevels(std::get<1>(key), std::get<2>(key), std::get<8>(key)) : 1;
+        static const bool mips = smgDevGxMips();
+        return mips && (std::get<6>(key) & 3) ? picaMipLevels(std::get<1>(key), std::get<2>(key), std::get<8>(key)) : 1;
     }
 
     // Depth from a texture: the clear's constant Z texture is the one case the PICA can follow, by vertex depth.

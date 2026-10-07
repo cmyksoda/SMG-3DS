@@ -1492,14 +1492,20 @@ until these held:
 - The app ends without libctru's `exit`, which unmaps the heaps while the game's threads and the GPU still use them (HOME's
   close waited for good). A close request ends the app at once: the save lock first, so a save file being written
   finishes, then `ndspExit`, `aptExit` (the farewell HOME waits for) and `svcExitProcess`. The game's own power-off
-  is not waited for, as it needs the GPU, which HOME holds.
+  is not waited for, as it needs the GPU, which HOME holds. (Still open: the app's steps all finish within ~45 ms, yet
+  the system then reports an error or hangs, from HOME and from the power menu alike.)
+- The game's mip levels stay off (`dev.gx_mips=1` turns them on). Azahar never samples a texture's smaller levels (each
+  level tinted a flat shade shows nowhere, near or far), while a real 3DS does and showed them wrong: stray polygons in
+  Peach's letter and glitches on the file select, gone with the first level alone, and a chessboard on the title's floor,
+  whose snapshot came out right that way.
 
-Timing there (being worked on; the castle, render thread on core 2): the renderer's CPU work matches Azahar's model or
-beats it, stage by stage, but the frame is 160 to 200 ms. About 50 ms of it is the GPU, which the castle's twelve EFB
-copies a frame (a split, a transfer and a pass each) keep busy; the rest is waiting, with the emulated CPU's interrupt
-lock (`sCpu`) contended across threads (88 ms a frame of waits among the threads besides the game's). Builds reach the
-console over ftpd (`curl -T` to `/3ds/`; test builds sit outside `/3ds/SMG-3DS/`, as the Homebrew Launcher shows only a
-folder's own .3dsx), and test builds send stderr to the bottom screen and a log file on the SD card.
+Timing there (being worked on; the castle, render thread on core 2): about 70 ms a frame. The renderer's CPU work
+matches Azahar's model or beats it, stage by stage; the GPU takes 50 to 60 ms (the castle's twelve EFB copies a frame,
+a split, a transfer and a pass each, among it). Earlier test builds measured 160 to 230 ms: their own logging, every
+line flushed to the SD card from the render thread (seconds a window on a real card), and depth peeks that waited
+out the GPU while holding the emulated CPU's interrupt lock, which took 33 to 88 ms a frame from the other threads.
+Builds reach the console over ftpd (`curl -T` to `/3ds/`; test builds sit outside `/3ds/SMG-3DS/`, as the Homebrew
+Launcher shows only a folder's own .3dsx), and test builds send stderr to the bottom screen and a log file on the SD card.
 
 ## The native scene boundary
 

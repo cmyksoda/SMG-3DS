@@ -314,7 +314,7 @@ void settingsFiles() {
     settings.previewScenario = 2;
     check(smg::parseSettings(smg::formatSettings(settings)) == settings, "settings round trip");
     smg::Settings developer;
-    developer.devSkipStory = developer.devGxDump = developer.devGxNull = developer.devGxTiming = developer.devGxCheck = developer.devGxInline = developer.devDrawEvery = developer.devGxNoRaw = developer.devGxZones = true;
+    developer.devSkipStory = developer.devGxDump = developer.devGxNull = developer.devGxTiming = developer.devGxCheck = developer.devGxInline = developer.devDrawEvery = developer.devGxNoRaw = developer.devGxMips = developer.devGxZones = true;
     developer.devStartGalaxy = "PeachCastleGardenGalaxy", developer.devStartMario = 1;
     developer.devGalaxy = "AstroGalaxy", developer.devGalaxyScenario = 2;
     developer.devWarp = true, developer.devWarpTo[0] = -7000.5f, developer.devWarpTo[1] = 100, developer.devWarpTo[2] = -8900, developer.devWarpSeconds = 9;

@@ -49,6 +49,9 @@ struct Settings {
     bool devDrawEvery = false;
     // For development only (dev.gx_noraw=1): every draw goes through citro3d, none written into the command list directly.
     bool devGxNoRaw = false;
+    // For development only (dev.gx_mips=1): textures keep the game's mip levels. Azahar never samples them, and a real
+    // 3DS shows them wrong (a chessboard on the title's floor), so each texture is its first level alone otherwise.
+    bool devGxMips = false;
     // For development only (dev.gx_zones=1): the perf line shares out the render thread's time by what it was doing,
     // sampled from another core (smg/GxZones.hpp).
     bool devGxZones = false;
