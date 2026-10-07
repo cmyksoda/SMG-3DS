@@ -252,9 +252,15 @@ public:
     // gave them, only the texture coordinates worked out. False where that doesn't hold (lines, points, an atlas).
     bool runPass(const std::uint8_t* data, const GxVertex* decoded, std::uint16_t count, const GxDrawVertex* program, GxDrawVertex* vertices,
                  std::uint16_t first, std::uint16_t* indices, std::size_t& written);
+    // Triangles reaching more than GuardBand screens past the screen's center are cut there first, as a real PICA garbles
+    // corners that land far off it: a primitive's cut corners (up to seven a triangle, ClipRoom in all) follow its own.
+    static constexpr float GuardBand = 4;
+    static constexpr std::size_t ClipRoom = 1024;
     static constexpr std::size_t maxIndices(std::size_t count) { return 3 * count; }
-    static constexpr std::size_t maxVertices(std::uint8_t kind, std::size_t count) { return kind >= 0xA8 ? 4 * count : count; }
-    static constexpr std::size_t maxIndices(std::uint8_t kind, std::size_t count) { return kind >= 0xA8 ? 6 * count : 3 * count; }
+    static constexpr std::size_t maxVertices(std::uint8_t kind, std::size_t count) {
+        return kind >= 0xA8 ? 4 * count : count + (7 * count < ClipRoom ? 7 * count : ClipRoom);
+    }
+    static constexpr std::size_t maxIndices(std::uint8_t kind, std::size_t count) { return kind >= 0xA8 ? 6 * count : 3 * maxVertices(kind, count); }
     std::uint16_t verticesWritten = 0;
     // The state passed to prepare was read again: the next prepare reads everything.
     void stateChanged() { prepared_ = false; }
@@ -307,8 +313,8 @@ public:
     // Whether this state's color comes from each vertex (otherwise GxMeshUniforms' fixed color): part of a mesh's key.
     bool meshColorFromVertex() const;
     const char* unsupported = nullptr;
-    // Prepares that read the state whole, folds made, and lighting read (for the perf line).
-    std::uint32_t fullPrepares = 0, lightingReads = 0;
+    // Prepares that read the state whole, folds made, lighting read and triangles cut to the guard band (for the perf line).
+    std::uint32_t fullPrepares = 0, lightingReads = 0, trianglesCut = 0;
     mutable std::uint32_t foldsMade = 0;
     // Unfolded texgens' vertices (for the perf line): a per-vertex matrix that is the position's, the texture slot paired
     // with it (30 rows on), another, or the previous vertex's again; normalized.
@@ -364,7 +370,7 @@ private:
     // so each stage's constants stay in registers across them.
     void vertices(const GxVertex* v, unsigned n, GxDrawVertex* d, const float* fixedClip);
     void texcoords(const GxVertex* v, unsigned n, GxDrawVertex* d) const;
-    std::size_t triangles(GxDrawVertex* vertices, std::uint16_t count, std::uint16_t first, std::uint16_t* indices) const;
+    std::size_t triangles(GxDrawVertex* vertices, std::uint16_t count, std::uint16_t first, std::uint16_t* indices);
     // Lines and points from their vertices, transformed into the last `count` of maxVertices, as quads from the first.
     std::size_t widen(GxDrawVertex* vertices, std::uint16_t count, std::uint16_t first, std::uint16_t* indices);
     void texgen(const TexGen& t, const GxVertex& v, float st[2]) const;

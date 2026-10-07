@@ -1189,19 +1189,80 @@ void GxVertexPipeline::texcoords(const GxVertex* v, unsigned n, GxDrawVertex* d)
             if (texgens_[u].kind == TexGen::Unfolded || texgens_[u].kind == TexGen::Normalized) texgen(texgens_[u], v[j], d[j].texcoord[u]);
 }
 
-std::size_t GxVertexPipeline::triangles(GxDrawVertex* vertices, std::uint16_t count, std::uint16_t first, std::uint16_t* indices) const {
+namespace {
+bool inGuardBand(const float* p) {
+    const float g = GxVertexPipeline::GuardBand * p[3];
+    return p[0] <= g && -p[0] <= g && p[1] <= g && -p[1] <= g;
+}
+
+// The four planes of the guard band, each as distance = GuardBand * w + sign * (x or y), kept where it isn't negative.
+float guardDistance(const float* p, int plane) {
+    return GxVertexPipeline::GuardBand * p[3] + (plane & 1 ? p[plane >> 1] : -p[plane >> 1]);
+}
+
+GxDrawVertex between(const GxDrawVertex& a, const GxDrawVertex& b, float t) {
+    GxDrawVertex v;
+    for (int c = 0; c < 4; ++c) v.position[c] = a.position[c] + (b.position[c] - a.position[c]) * t;
+    for (int c = 0; c < 4; ++c) v.color[c] = static_cast<std::uint8_t>(std::lround(a.color[c] + (int(b.color[c]) - int(a.color[c])) * t));
+    for (unsigned u = 0; u < CombinerProgram::MaxUnits; ++u)
+        for (int c = 0; c < 2; ++c) v.texcoord[u][c] = a.texcoord[u][c] + (b.texcoord[u][c] - a.texcoord[u][c]) * t;
+    return v;
+}
+
+// A triangle cut to the guard band (Sutherland-Hodgman, in clip space, so the PICA's perspective-correct interpolation
+// of each attribute is unchanged): up to seven corners, a convex polygon.
+unsigned clipToGuardBand(const GxDrawVertex& a, const GxDrawVertex& b, const GxDrawVertex& c, GxDrawVertex (&out)[7]) {
+    GxDrawVertex buffers[2][7] = {{a, b, c}};
+    unsigned n = 3;
+    for (int plane = 0; plane < 4; ++plane) {
+        const GxDrawVertex* from = buffers[plane & 1];
+        GxDrawVertex* to = buffers[~plane & 1];
+        unsigned m = 0;
+        for (unsigned i = 0; i < n; ++i) {
+            const GxDrawVertex& p = from[i], &q = from[(i + 1) % n];
+            const float dp = guardDistance(p.position, plane), dq = guardDistance(q.position, plane);
+            if (dp >= 0) to[m++] = p;
+            if ((dp >= 0) != (dq >= 0)) to[m++] = between(p, q, dp / (dp - dq));
+        }
+        if ((n = m) < 3) return 0;
+    }
+    std::copy(buffers[0], buffers[0] + n, out);
+    return n;
+}
+} // namespace
+
+std::size_t GxVertexPipeline::triangles(GxDrawVertex* vertices, std::uint16_t count, std::uint16_t first, std::uint16_t* indices) {
     // Culling in EFB space, by the sign of each triangle's area there: with every w positive that is the sign of the
     // determinant of its (x, y, w) rows, negated (the EFB's y runs down); the screen's quarter turn keeps it.
     std::size_t n = 0;
+    const auto culled = [&](const float* pa, const float* pb, const float* pc) {
+        if (!reject_ || pa[3] <= 0 || pb[3] <= 0 || pc[3] <= 0) return false;
+        const float det = pa[0] * (pb[1] * pc[3] - pc[1] * pb[3]) - pb[0] * (pa[1] * pc[3] - pc[1] * pa[3]) + pc[0] * (pa[1] * pb[3] - pb[1] * pa[3]);
+        return reject_ == 3 || (reject_ == 1 && det > 0) || (reject_ == 2 && det < 0);
+    };
+    bool outside = false;
+    for (std::uint16_t i = 0; i < count && !outside; ++i) outside = !inGuardBand(vertices[i].position);
+    const std::size_t room = maxVertices(kind_, count);
+    std::size_t corners = count;  // where a cut triangle's corners go
     const auto emit = [&](int a, int b, int c) {
         const float* pa = vertices[a].position, *pb = vertices[b].position, *pc = vertices[c].position;
-        if (reject_ && pa[3] > 0 && pb[3] > 0 && pc[3] > 0) {
-            const float det = pa[0] * (pb[1] * pc[3] - pc[1] * pb[3]) - pb[0] * (pa[1] * pc[3] - pc[1] * pa[3]) + pc[0] * (pa[1] * pb[3] - pb[1] * pa[3]);
-            if (reject_ == 3 || (reject_ == 1 && det > 0) || (reject_ == 2 && det < 0)) return;
+        if (outside && !(inGuardBand(pa) && inGuardBand(pb) && inGuardBand(pc)) && corners + 7 <= room) {
+            GxDrawVertex cut[7];
+            const unsigned m = clipToGuardBand(vertices[a], vertices[b], vertices[c], cut);
+            ++trianglesCut;
+            const std::size_t at = corners;
+            for (unsigned k = 0; k < m; ++k) vertices[corners++] = cut[k];
+            for (unsigned k = 1; k + 1 < m; ++k) {
+                if (culled(cut[0].position, cut[k].position, cut[k + 1].position)) continue;
+                indices[n++] = static_cast<std::uint16_t>(first + at), indices[n++] = static_cast<std::uint16_t>(first + at + k);
+                indices[n++] = static_cast<std::uint16_t>(first + at + k + 1);
+            }
+            return;
         }
+        if (culled(pa, pb, pc)) return;
         indices[n++] = static_cast<std::uint16_t>(first + a), indices[n++] = static_cast<std::uint16_t>(first + b), indices[n++] = static_cast<std::uint16_t>(first + c);
     };
-    if (!reject_ && kind_ == 0x98) {  // a strip with nothing culled, two triangles a step
+    if (!outside && !reject_ && kind_ == 0x98) {  // a strip with nothing culled, two triangles a step
         std::uint16_t* out = indices;
         std::uint16_t a = first;
         int i = 0;
@@ -1213,7 +1274,7 @@ std::size_t GxVertexPipeline::triangles(GxDrawVertex* vertices, std::uint16_t co
         if (i + 2 < count) out[0] = a, out[1] = static_cast<std::uint16_t>(a + 1), out[2] = static_cast<std::uint16_t>(a + 2), out += 3;
         return static_cast<std::size_t>(out - indices);
     }
-    if (!reject_ && (kind_ == 0x80 || kind_ == 0x88)) {  // quads with nothing culled, two triangles each
+    if (!outside && !reject_ && (kind_ == 0x80 || kind_ == 0x88)) {  // quads with nothing culled, two triangles each
         std::uint16_t* out = indices;
         for (int i = 0; i + 3 < count; i += 4, out += 6) {
             out[0] = out[3] = static_cast<std::uint16_t>(first + i), out[1] = static_cast<std::uint16_t>(first + i + 1);
@@ -1235,6 +1296,7 @@ std::size_t GxVertexPipeline::triangles(GxDrawVertex* vertices, std::uint16_t co
         for (int i = 1; i + 1 < count; ++i) emit(0, i, i + 1);
         break;
     }
+    verticesWritten = static_cast<std::uint16_t>(corners);
     return n;
 }
 

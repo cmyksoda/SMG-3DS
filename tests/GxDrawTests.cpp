@@ -1864,6 +1864,44 @@ void drawStateKey() {
     check(!(markers & 1) && (after != before || std::memcmp(key, base, after * 4)), "and one that can't changes it");
 }
 
+// A quad reaching twenty screens to the right is cut at the guard band: every corner within it, the screen covered as
+// before, and the texture coordinate at the cut where the quad had it.
+void guardBand() {
+    auto owned = std::make_unique<smg::GxCommandProcessor>(host());
+    smg::GxCommandProcessor& gpu = *owned;
+    Stream s;
+    clearState(s);
+    s.bp(0xC008FFF8);  // color (0, 0, 0, TEXC)
+    s.u8(0x80), s.u16(4);
+    for (unsigned c : {0u, 1u, 3u, 2u}) s.u16(c & 1 ? 6400 : 0), s.u16(c & 2 ? 480 : 0), s.u8(c & 1), s.u8(c >> 1);
+    drawn.clear();
+    gpu.put(s.bytes.data(), static_cast<std::uint32_t>(s.bytes.size()));
+    smg::GxDraw d;
+    smg::buildGxDraw(gpu, drawn[0].kind, drawn[0].format, drawn[0].count, drawn[0].data.data(), {}, d);
+    const float g = smg::GxVertexPipeline::GuardBand;
+    bool within = !d.triangles.empty(), cutAtTheBand = false;
+    for (const smg::GxDrawVertex& v : d.triangles) {
+        const float* p = v.position;
+        within &= std::fabs(p[0]) <= g * p[3] * 1.0001f && std::fabs(p[1]) <= g * p[3] * 1.0001f;
+        if (near(p[0] / p[3], g)) cutAtTheBand = true, within &= std::fabs(v.texcoord[0][0] - (g + 1) / 20) < 1e-3f;
+    }
+    check(within && cutAtTheBand, "a quad far past the screen is cut at the guard band, its texture coordinates with it");
+    // Every point of the screen is covered by one of the cut triangles, as by the quad.
+    const auto covered = [&](float x, float y) {
+        for (std::size_t t = 0; t + 2 < d.triangles.size(); t += 3) {
+            const float* a = d.triangles[t].position, *b = d.triangles[t + 1].position, *c = d.triangles[t + 2].position;
+            const auto side = [&](const float* p, const float* q) { return (q[0] / q[3] - p[0] / p[3]) * (y - p[1] / p[3]) - (q[1] / q[3] - p[1] / p[3]) * (x - p[0] / p[3]); };
+            const float s0 = side(a, b), s1 = side(b, c), s2 = side(c, a);
+            if ((s0 >= -1e-5f && s1 >= -1e-5f && s2 >= -1e-5f) || (s0 <= 1e-5f && s1 <= 1e-5f && s2 <= 1e-5f)) return true;
+        }
+        return false;
+    };
+    bool all = true;
+    for (float x = -0.95f; x < 1; x += 0.1f)
+        for (float y = -0.95f; y < 1; y += 0.1f) all &= covered(x, y);
+    check(all, "and the screen stays covered");
+}
+
 int runGxDrawTests() {
     tevOpTables();
     clearQuad();
@@ -1875,6 +1913,7 @@ int runGxDrawTests() {
     perspective();
     channels();
     pipelineAcrossPrimitives();
+    guardBand();
     dualTexgen();
     atlasPlace();
     color0Rides();

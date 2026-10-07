@@ -1941,8 +1941,9 @@ struct Renderer {
             }
             const std::uint16_t count = static_cast<std::uint16_t>(list[at + 1] << 8 | list[at + 2]);
             if (!pipeline.prepare(gpu, *state_, frame, op & 0xF8, op & 7)) return void(std::fprintf(stderr, "gx check: the CPU path refuses a mesh's primitive\n"));
-            drawn.resize(count), indices.resize(GxVertexPipeline::maxIndices(count));
+            drawn.resize(GxVertexPipeline::maxVertices(op & 0xF8, count)), indices.resize(GxVertexPipeline::maxIndices(op & 0xF8, count));
             pipeline.run(list + at + 3, count, drawn.data(), 0, indices.data());
+            drawn.resize(count);  // the list's own vertices, without corners the guard band cut
             const u32 first = u32(cpu.size());
             const auto triangle = [&](u32 a, u32 b, u32 c) { corners.insert(corners.end(), {first + a, first + b, first + c}); };
             switch (op & 0xF8) {
@@ -2408,13 +2409,14 @@ struct Renderer {
             std::fprintf(stderr, "gx perf: mesh draws through citro3d after a change of: combiner %.0f, fragment ops %.0f, cull %.0f, scissor %.0f, "
                          "textures %.0f, fixed attributes %.0f, CPU-path buffers %.0f, mesh layout %.0f, fog %.0f, command list %.0f\n", why[0] / n,
                          why[1] / n, why[2] / n, why[3] / n, why[4] / n, why[5] / n, why[6] / n, why[7] / n, why[8] / n, why[9] / n);
-            std::fprintf(stderr, "gx perf: pipeline per frame: %.0f prepares read whole, %.0f folds made, %.0f lighting reads; vertex layouts %.0f read, "
+            std::fprintf(stderr, "gx perf: pipeline per frame: %.0f prepares read whole, %.0f folds made, %.0f lighting reads, %.1f triangles cut to the "
+                         "guard band; vertex layouts %.0f read, "
                          "%.0f reused; unfolded texgen vertices: matrix the position's %.0f, its pair %.0f, another %.0f, the last again %.0f, normalized %.0f\n",
-                         pipeline.fullPrepares / n, pipeline.foldsMade / n, pipeline.lightingReads / n, lastGpu->layoutsRead / n,
+                         pipeline.fullPrepares / n, pipeline.foldsMade / n, pipeline.lightingReads / n, pipeline.trianglesCut / n, lastGpu->layoutsRead / n,
                          lastGpu->layoutsReused / n, pipeline.texMatrixShared / n, pipeline.texMatrixPaired / n, pipeline.texMatrixOwn / n,
                          pipeline.texMatrixRepeated / n, pipeline.texgensNormalized / n);
         }
-        pipeline.fullPrepares = pipeline.foldsMade = pipeline.lightingReads = 0;
+        pipeline.fullPrepares = pipeline.foldsMade = pipeline.lightingReads = pipeline.trianglesCut = 0;
         pipeline.texMatrixShared = pipeline.texMatrixPaired = pipeline.texMatrixOwn = pipeline.texMatrixRepeated = pipeline.texgensNormalized = 0;
         lastGpu->layoutsRead = lastGpu->layoutsReused = 0;
         std::fill(std::begin(lastGpu->commandCounts), std::end(lastGpu->commandCounts), 0u);
