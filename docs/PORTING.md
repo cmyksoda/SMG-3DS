@@ -919,13 +919,13 @@ models (Honeyhive's swaying flowers and grass) draw from vertices written into o
 instances of one model share a list, each with its own deformed arrays. Such a mesh keeps its triangles and is decoded
 again (`GxVertexPipeline::refreshMesh`: each vertex taken from the list by the mesh's origin map, keeping its slot)
 whenever its arrays move and once a frame, into an arena owned by the frame's parity (1 MB each, outside the mesh
-budget, reused from the start two frames later). A refresh reads the list's vertices 32 at a time, one attribute at a
-time (a `GxVertexLayout::Plan` of fetchers made for each attribute's kind, format and components) and packs them as the
-build does, writing every byte the build writes: an earlier refresh left untouched the bytes a build leaves zero (an
+budget, reused from the start two frames later). A refresh reads the list's vertices 128 at a time, one attribute at a
+time (a `GxVertexLayout::Plan` of fetchers made for each attribute's kind, format and components), each fetched to where the
+mesh's layout holds it, and writes every byte the build writes: an earlier refresh left untouched the bytes a build leaves zero (an
 unused color, a unit past the material's), so over a reused arena 3,264 of 3,312 refreshes differed from their
-rebuilds. An unlit mesh's vertices keep the list's order and are packed straight into place; a lit one's groups gather
+rebuilds. An unlit mesh's vertices keep the list's order and are made straight into place; a lit one's groups gather
 them; and a command list's refreshes flush the cache once, with its vertices, not once each. At Honeyhive's start
-that is 69 refreshes a frame (6,378 vertices), about 280 to 154 ARM instructions a vertex, and the vertices its moving
+that is 69 refreshes a frame (6,378 vertices), about 280 to 154 ARM instructions a vertex (about half that after "Refreshes, counted"), and the vertices its moving
 lists sent to the CPU path stay on the GPU. `dev.gx_check=1` checks every refresh bit for bit against the mesh built
 anew (59,383 at Honeyhive, none differing) and every new mesh against the CPU path.
 
@@ -1208,6 +1208,32 @@ third of them loading one 4.62 to 3.96; the texture matrix's refold (about 600 a
 is given is as it was: a hash of every call, uniform row, command-list word, vertex and index byte through 24 J3D-like frames
 and 16 particle frames is equal, as are 600 random particle streams on the ARM11 build (kinds of event between particles,
 lists rewritten or colliding in the index, 1,100 lists past the table's 1,024) and 8,000 vertex pipeline scenes on x86.
+
+**Refreshes, counted.** The same ARM11 counting over `refreshMesh` alone: eight sets of twelve moving meshes of about 160 vertices
+(J3D-like strips of three to thirty), in the layouts deformed models take: lit with f32 positions and s16 normals and
+coordinates (the color indexed but ignored), the same all f32, with a vertex color, with a second texgen that is an
+environment map or a second stored coordinate set, skinned (gathered through the origin map), unlit with f32 or s16
+positions. A refreshed vertex took 195 instructions (lit 168, with a color 200, two coordinate sets 241, skinned 285, unlit
+152 to 161): the packer 88 (`GxMeshPacker::pack`: a loop over the layout's copies, each by a `memcpy` of a size known
+only at run time), the refresh's own bookkeeping 38, the fetchers about 60. The bookkeeping was mostly the gather's copy
+(44 of a skinned vertex's 285: a byte-wise word loop that read the `thread_local` scratch through `__aeabi_read_tp` for
+each vertex). Now the fetchers write each attribute where the packed vertex holds it (`MeshFetch`: the plan's ops with the
+layout's place as their destination and the stride as their step) and no decoded vertex is made between; what a fetch
+leaves is a short list of patches run over the chunk (zeros for the components a narrow format lacks and for attributes it
+lacks, a second place of an attribute two fields hold, the one that ends a two-input texgen's vector), which the usual
+layouts need none of. A gathered vertex is copied by an `ldm` and `stm` for each of the strides that occur, and the
+renderer passes no origin map for a mesh that keeps the list's order (`CachedMesh::inOrder`, found when it is made), so
+the scan for that is skipped. 195 to 89 instructions a vertex (lit 83, with a color 93, two coordinate sets 113, skinned 114,
+unlit 68 to 76); the fetchers are 60 of those, five instructions a s16 component and three more a vertex for its index.
+Every byte is as it was: the refreshed bytes of every scene hash the same on the ARM11 build and equal their rebuilds,
+`meshRefreshFillsEveryLayout` checks 200 random lists against every layout `GxMeshLayout::make` can give (a texgen input
+from the position, normal or a coordinate set, two fields from one attribute, a third input, absent attributes) as
+`GxMeshPacker` packs the vertices read whole, and 300,000 random lists, formats, layouts, origin maps and cut-short lists
+refresh to the same bytes (or the same refusal) as the old code on x86. `dev.gx_check` also counts the refreshes whose
+vertices equal the mesh's last ones ("repeating the last") and those of a list from arrays it was already refreshed from
+that frame ("from arrays already refreshed this frame": an instance drawn twice), to say how many could be skipped. On
+Azahar, Gusty Garden's daredevil run (CosmosGardenGalaxy 4, 136 refreshes a frame, standing still): the refresh zone
+21.1 to 12.1 ms a frame, the render thread 44.0 to 34.7.
 
 **The Comet Observatory at 30.** At the session 8 build the Observatory ran 26 to 29 frames a second with the render
 thread busy 34.2 ms a frame. In order, each measured on the same standing-still route: the commonest commands are read

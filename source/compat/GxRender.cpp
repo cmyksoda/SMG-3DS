@@ -235,6 +235,7 @@ struct Renderer {
         bool moving = false;
         u32 refreshedFrame = ~0u;
         std::vector<std::uint32_t> origin;
+        bool inOrder = false;  // origin is each vertex's own number
         GxMeshLayout layout;
         int loaders = 0;  // its place in meshLoaders
         u32 vertexCount = 0, indexCount = 0;
@@ -280,7 +281,7 @@ struct Renderer {
         u32 peeks = 0, peeksDeferred = 0;
         u32 atlasJoins = 0, atlasesBuilt = 0, atlasTurns = 0;
         u64 peekTicks = 0;  // depth peeks: the frame paused, the GPU waited for, one tile read back
-        u32 meshesChecked = 0, meshesDiffering = 0, refreshesChecked = 0, refreshesDiffering = 0;  // dev.gx_check
+        u32 meshesChecked = 0, meshesDiffering = 0, refreshesChecked = 0, refreshesDiffering = 0, refreshesRepeated = 0, refreshesAgain = 0;  // dev.gx_check
         std::pair<const char*, u32> approximated[8] = {};  // new draw states whose combiner program is approximated, by reason
         u32 listVertices = 0;
         u32 refused[GxVertexPipeline::MeshRefusals] = {}, refusedOpcode[0x100] = {};
@@ -1806,6 +1807,8 @@ struct Renderer {
             cached.block = cached.vertices = block, cached.vertexCount = u32(mesh.vertexCount()), cached.indexCount = u32(mesh.indices.size());
             cached.layout = mesh.layout, cached.loaders = loadersFor(mesh.layout);
             cached.origin = std::move(mesh.origin);
+            cached.inOrder = true;
+            for (std::size_t i = 0; i < cached.origin.size(); ++i) cached.inOrder &= cached.origin[i] == i;
             cached.vertexPhysical = osConvertVirtToPhys(block), cached.indexPhysical = osConvertVirtToPhys(static_cast<std::uint8_t*>(block) + vertexBytes);
             cached.slots = mesh.slots;
             cached.groups = std::move(mesh.groups);
@@ -1842,6 +1845,7 @@ struct Renderer {
     std::size_t refreshUsed[2] = {};
     u32 refreshFrame[2] = {~0u, ~0u};
     std::uintptr_t refreshLo = UINTPTR_MAX, refreshHi = 0;  // refreshed since the last command list, flushed with it
+    std::unordered_map<std::uint64_t, u32> refreshedWith;  // dev.gx_check: a list and its arrays' registers, to the frame it was last refreshed in
     bool refreshMesh(CachedMesh& m, const std::uint8_t* list, std::uint32_t size) {
         const std::size_t bytes = (m.vertexCount * m.layout.stride + 15) & ~std::size_t(15);
         const unsigned k = framesShown & 1;
@@ -1850,9 +1854,20 @@ struct Renderer {
         if (refreshUsed[k] + bytes > RefreshArena) return false;
         std::uint8_t* into = refreshArena[k] + refreshUsed[k];
         refreshUsed[k] += bytes;
-        if (!pipeline.refreshMesh(list, size, m.layout, m.origin.data(), static_cast<const std::uint8_t*>(m.block), into, m.vertexCount)) return false;
+        if (!pipeline.refreshMesh(list, size, m.layout, m.inOrder ? nullptr : m.origin.data(), static_cast<const std::uint8_t*>(m.block), into, m.vertexCount)) return false;
         static const bool checking = smgDevGxCheck();
-        if (checking) checkRefresh(list, size, m, into);
+        if (checking) {
+            checkRefresh(list, size, m, into);
+            // The last frame's vertices of this mesh (or its build's) are still in memory: how many refreshes only repeat them.
+            if ((m.vertices == m.block || framesShown - m.refreshedFrame <= 1) && !std::memcmp(m.vertices, into, m.vertexCount * m.layout.stride)) ++perf.refreshesRepeated;
+            // And the list refreshed again from the same arrays (an instance drawn twice, between others') in one frame.
+            std::uint64_t arrays = m.hash;
+            for (const auto& [reg, value] : m.depends)
+                if (reg >= 0xA0) arrays = (arrays ^ value) * 0x100000001B3ull;
+            if (refreshedWith.size() > 4096) refreshedWith.clear();
+            u32& seen = refreshedWith.try_emplace(arrays, ~0u).first->second;
+            perf.refreshesAgain += seen == framesShown, seen = framesShown;
+        }
         refreshLo = std::min(refreshLo, reinterpret_cast<std::uintptr_t>(into));
         refreshHi = std::max(refreshHi, reinterpret_cast<std::uintptr_t>(into) + bytes);
         m.vertices = into, m.vertexPhysical = osConvertVirtToPhys(into), m.refreshedFrame = framesShown;
@@ -2393,9 +2408,9 @@ struct Renderer {
             if (perf.refusedVertices[why]) listed += " " + std::to_string(why) + ":" + std::to_string(unsigned(perf.refusedVertices[why] / n));
         std::fprintf(stderr, "gx perf: CPU-path vertices in lists refused by reason (per frame):%s\n", listed.c_str());
         if (perf.meshesChecked || perf.refreshesChecked)
-            std::fprintf(stderr, "gx perf: meshes checked %lu, differing %lu; refreshes checked %lu, differing %lu\n", static_cast<unsigned long>(perf.meshesChecked),
-                         static_cast<unsigned long>(perf.meshesDiffering), static_cast<unsigned long>(perf.refreshesChecked),
-                         static_cast<unsigned long>(perf.refreshesDiffering));
+            std::fprintf(stderr, "gx perf: meshes checked %lu, differing %lu; refreshes checked %lu, differing %lu, repeating the last %lu, from arrays already refreshed this frame %lu\n",
+                         static_cast<unsigned long>(perf.meshesChecked), static_cast<unsigned long>(perf.meshesDiffering), static_cast<unsigned long>(perf.refreshesChecked),
+                         static_cast<unsigned long>(perf.refreshesDiffering), static_cast<unsigned long>(perf.refreshesRepeated), static_cast<unsigned long>(perf.refreshesAgain));
         std::fprintf(stderr, "gx perf: display lists refused by reason (per frame):%s; meshes invalidated %.1f, overflows %.1f, over budget %.1f, "
                      "evicted %.1f, drops for room %lu, key mismatches %.1f, refreshed %.1f (%.0f vertices), primitives left out %.1f, pass draws %.1f, flushes queued %.1f; GX FIFO writes %.0f per frame; textures %zu, %lu invalidated\n", refusals.c_str(),
                      perf.meshInvalidated / n, perf.meshOverflows / n, perf.meshBudgetDrops / n, perf.meshesEvicted / n, static_cast<unsigned long>(perf.meshesDroppedForRoom), perf.meshMismatches / n, perf.meshesRefreshed / n,

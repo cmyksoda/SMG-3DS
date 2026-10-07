@@ -284,7 +284,8 @@ public:
     unsigned meshEligible() const;
     unsigned buildMesh(const std::uint8_t* list, std::uint32_t size, GxMesh& mesh) const;
     // A built mesh's vertices decoded again from the list's arrays as they are now (where they moved), packed as `layout`
-    // into `out` by its origin, each keeping its built slot: false if the list no longer gives that many vertices.
+    // into `out` (word aligned) by its origin (null where the vertices keep the list's order), each keeping its built slot:
+    // false if the list no longer gives that many vertices.
     bool refreshMesh(const std::uint8_t* list, std::uint32_t size, const GxMeshLayout& layout, const std::uint32_t* origin, const std::uint8_t* built,
                      std::uint8_t* out, std::size_t count) const;
     // The array memory a list's primitives index, [lo, hi), without decoding them: false for a list buildMesh refuses

@@ -920,6 +920,59 @@ void meshRefreshMatchesRebuild() {
           "a mesh of fewer vertices takes the list's first ones and leaves the rest of the output");
 }
 
+// A refresh packs each format's vertices into any layout GxMeshLayout makes (a texgen input from the position, normal or a
+// coordinate set, second places of one attribute, attributes and components the format lacks), as GxMeshPacker packs each
+// vertex decoded whole.
+smg::GxMeshLayout randomMeshLayout(Random& random) {
+    static const std::uint8_t sources[] = {0, 1, 5, 6, 7, 8, 9, 10, 11, 12};
+    smg::GxMeshLayout::Texgen texgens[smg::CombinerProgram::MaxUnits] = {};
+    const unsigned units = 1 + random.below(smg::CombinerProgram::MaxUnits);
+    for (unsigned u = 0; u < units; ++u) texgens[u] = {sources[random.below(sizeof sources)], bool(random.below(2)), bool(random.below(2))};
+    return smg::GxMeshLayout::make(random.below(2), random.below(2), random.below(2), units, texgens);
+}
+
+void meshRefreshFillsEveryLayout() {
+    Random random{4242};
+    unsigned gathered = 0, stored = 0, slotted = 0;
+    char what[64];
+    for (unsigned i = 0; i < 200; ++i) {
+        RefreshFixture f;
+        f.build(randomRefreshCase(random, "a list for a layout"), random.next());  // whether it makes a mesh does not matter here
+        const smg::GxMeshLayout layout = randomMeshLayout(random);
+        std::vector<smg::GxVertex> decoded;
+        for (std::uint32_t at = 0; at < f.size();) {
+            const std::uint8_t op = f.list[at];
+            if (!op) {
+                ++at;
+                continue;
+            }
+            const std::uint16_t count = static_cast<std::uint16_t>(f.list[at + 1] << 8 | f.list[at + 2]);
+            const std::uint32_t size = f.gpu->vertexSize(op & 7);
+            for (unsigned k = 0; k < count; ++k) decoded.push_back(f.gpu->readVertex(f.list.data() + at + 3 + k * size, op & 7));
+            at += 3 + count * size;
+        }
+        // In the list's order, or gathered with some vertices twice and some left out, as a lit mesh's groups copy them.
+        const bool gather = random.below(2);
+        std::vector<std::uint32_t> origin(decoded.size());
+        for (std::uint32_t k = 0; k < origin.size(); ++k) origin[k] = gather ? random.below(static_cast<unsigned>(decoded.size())) : k;
+        const std::size_t stride = layout.stride, count = origin.size();
+        std::vector<std::uint8_t> built(count * stride), expected(count * stride), out(count * stride, 0xA5);
+        for (std::uint8_t& b : built) b = static_cast<std::uint8_t>(random.next());
+        const smg::GxMeshPacker packer(layout);
+        for (std::size_t k = 0; k < count; ++k) {
+            packer.pack(&decoded[origin[k]], 1, expected.data() + k * stride);
+            if (layout.slot != smg::GxMeshLayout::Absent) std::memcpy(&expected[k * stride + layout.slot], &built[k * stride + layout.slot], 4);
+        }
+        std::snprintf(what, sizeof what, "layout %u (stride %u) refreshes as its vertices pack", i, unsigned(layout.stride));
+        dirtyStack();
+        const bool ok = f.pipeline.refreshMesh(f.list.data(), f.size(), layout, gather ? origin.data() : nullptr, built.data(), out.data(), count);
+        check(ok && out == expected, what);
+        gathered += gather, slotted += layout.slot != smg::GxMeshLayout::Absent;
+        for (const smg::GxMeshLayout::Unit& u : layout.unit) stored += u.input == smg::GxMeshLayout::Stored && u.floats == 3;
+    }
+    check(gathered > 50 && slotted > 50 && stored > 50, "enough of the layouts gather, take a slot and store a third input to mean something");
+}
+
 // A texgen that folds into one map gives what its matrix and GX's divide by q give, over every source, input form,
 // projection and shape of third row (a planar map adds its offset first, as it always has), whether the vertices are read
 // from their bytes or decoded whole.
@@ -1839,6 +1892,7 @@ int runGxDrawTests() {
     linesAndPoints();
     meshRefresh();
     meshRefreshMatchesRebuild();
+    meshRefreshFillsEveryLayout();
     foldedTexgens();
     readsAgreeWithDecoding();
     passReuse();

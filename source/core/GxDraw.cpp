@@ -1468,51 +1468,119 @@ std::uint16_t meshReads(const GxMeshLayout& layout) {
         else if (unit.input == GxMeshLayout::Stored && unit.source == 1) mask |= GxVertexLayout::ReadNormal;
     return mask;
 }
+
+// A format's vertices made into a layout's packed ones with no decoded vertex between: each attribute is fetched to its
+// first place, then patches zero what the format lacks (a build's vertex starts zero), copy second places, and set the one.
+struct MeshFetch {
+    struct Fetch {
+        GxVertexLayout::Plan::Op::Run run;
+        const void* attribute;
+        std::uint8_t offset, to;  // where in the list's vertex, and in the packed one
+    };
+    struct Patch {
+        enum Kind : std::uint8_t { Zero, Copy, One };
+        Kind kind;
+        std::uint8_t to, from, words;
+    };
+    Fetch fetches[12];
+    Patch patches[16];  // at most a zero or copy for each of six places, a zero for each of six attributes, a one for each of three units
+    unsigned fetched, patched;
+
+    void make(const GxVertexLayout& layout, const GxMeshLayout& packing, std::uint16_t mask) {
+        const GxVertexLayout::Plan plan = layout.plan(mask);
+        const GxVertexLayout::Plan::Op* planned[12] = {};
+        for (const GxVertexLayout::Plan::Op* op = plan.ops; op != plan.ops + plan.count; ++op) {
+            const unsigned to = op->to;
+            planned[to == offsetof(GxVertex, position) ? 0 : to == offsetof(GxVertex, normal) ? 1 : to == offsetof(GxVertex, color) ? 2 : 4 + (to - offsetof(GxVertex, texcoord)) / 8] = op;
+        }
+        fetched = patched = 0;
+        for (unsigned a = 0; a < 12; ++a) {
+            if (!(mask >> a & 1)) continue;
+            // Where the packed vertex holds attribute a, and how many words of it (a unit's input is two components, then maybe a one).
+            struct Place { std::uint8_t to, words; bool one; } places[4];
+            unsigned n = 0;
+            if (a == 0) places[n++] = {0, 3, false};
+            if (a == 1 && packing.normal != GxMeshLayout::Absent) places[n++] = {packing.normal, 3, false};
+            if (a == 2) places[n++] = {packing.color, 1, false};
+            for (const GxMeshLayout::Unit& unit : packing.unit)
+                if (unit.input == GxMeshLayout::Stored && (unit.source < 2 ? unit.source : unit.source - 1u) == a) places[n++] = {unit.at, 2, unit.floats == 3};
+            const unsigned width = planned[a] ? plan.width[a] : 0;
+            if (planned[a]) fetches[fetched++] = {planned[a]->run, planned[a]->attribute, planned[a]->offset, places[0].to};
+            if (width < places[0].words) patches[patched++] = {Patch::Zero, static_cast<std::uint8_t>(places[0].to + 4 * width), 0, static_cast<std::uint8_t>(places[0].words - width)};
+            for (unsigned k = 1; k < n; ++k) patches[patched++] = {Patch::Copy, places[k].to, places[0].to, places[k].words};
+            for (unsigned k = 0; k < n; ++k)
+                if (places[k].one) patches[patched++] = {Patch::One, static_cast<std::uint8_t>(places[k].to + 8), 0, 1};
+        }
+    }
+
+    // `count` vertices, each at vertices[i], into `out` a stride apart.
+    void run(const std::uint8_t* const* vertices, unsigned count, std::uint8_t* out, std::size_t stride) const {
+        for (const Fetch* fetch = fetches; fetch != fetches + fetched; ++fetch)
+            fetch->run(fetch->attribute, vertices, fetch->offset, out + fetch->to, stride, count);
+        static constexpr float One = 1;
+        static constexpr std::uint32_t Zero = 0;
+        for (const Patch* patch = patches; patch != patches + patched; ++patch) {
+            std::uint8_t* to = out + patch->to;
+            if (patch->kind == Patch::Zero)
+                for (unsigned i = 0; i < count; ++i, to += stride)
+                    for (unsigned w = 0; w < patch->words; ++w) std::memcpy(to + 4 * w, &Zero, 4);
+            else if (patch->kind == Patch::Copy)
+                for (unsigned i = 0; i < count; ++i, to += stride)
+                    for (unsigned w = 0; w < patch->words; ++w) std::memcpy(to + 4 * w, to - patch->to + patch->from + 4 * w, 4);
+            else
+                for (unsigned i = 0; i < count; ++i, to += stride) std::memcpy(to, &One, 4);
+        }
+    }
+};
+
+// Each vertex of `out` is the scratch's vertex its origin names, its slot kept from `built`. A vertex is whole words, and
+// newlib's memcpy can go a byte at a time: with the size known (Words, or 0 for any) the copy is a few ldm and stm.
+template <unsigned Words>
+bool gatherVertices(const std::uint32_t* origin, std::size_t count, std::size_t decoded, std::size_t stride, const std::uint8_t* scratch, const std::uint8_t* built,
+                    std::uint8_t* out, unsigned slot) {
+    const std::size_t bytes = Words ? 4 * Words : stride;
+    for (std::size_t i = 0; i < count; ++i, out += bytes, built += bytes) {
+        if (origin[i] >= decoded) return false;
+        const std::uint8_t* from = scratch + origin[i] * bytes;
+        std::uint8_t* to = out;
+        if constexpr (Words) {
+            std::memcpy(__builtin_assume_aligned(to, 4), __builtin_assume_aligned(from, 4), bytes);
+        } else {
+            for (std::size_t k = 0; k < bytes; k += 4) std::memcpy(to + k, from + k, 4);
+        }
+        if (slot != GxMeshLayout::Absent) std::memcpy(out + slot, built + slot, sizeof(float));
+    }
+    return true;
+}
 } // namespace
 
 bool GxVertexPipeline::refreshMesh(const std::uint8_t* list, std::uint32_t size, const GxMeshLayout& packing, const std::uint32_t* origin,
                                    const std::uint8_t* built, std::uint8_t* out, std::size_t count) const {
     const std::uint16_t mask = meshReads(packing);
-    const GxMeshPacker packer(packing);
     const std::size_t stride = packing.stride;
     // An unlit mesh keeps its list's vertices in order, decoded straight into place; a lit one's groups copy them in
     // triangle order, gathered from a scratch kept between refreshes (moving meshes refresh every frame).
     std::size_t ordered = 0;
-    while (ordered < count && origin[ordered] == ordered) ++ordered;
-    const bool inOrder = ordered == count;
-    thread_local std::vector<std::uint8_t> fresh;
-    const auto keepSlot = [&](std::size_t i) {
-        if (packing.slot != GxMeshLayout::Absent) std::memcpy(out + i * stride + packing.slot, built + i * stride + packing.slot, sizeof(float));
-    };
-    // Primitives run a few vertices, so vertices are decoded RefreshChunk at a time, from wherever each starts, in the
-    // format of the primitive that began the chunk.
-    constexpr unsigned RefreshChunk = 32;
-    alignas(GxVertex) std::uint8_t storage[RefreshChunk * sizeof(GxVertex)];
-    GxVertex* const chunk = reinterpret_cast<GxVertex*>(storage);
+    while (origin && ordered < count && origin[ordered] == ordered) ++ordered;
+    const bool inOrder = !origin || ordered == count;
+    thread_local std::vector<std::uint8_t> scratch;
+    // Vertices are fetched RefreshChunk at a time, from wherever each starts, in the format of the primitive that began the chunk.
+    constexpr unsigned RefreshChunk = 128;
     const std::uint8_t* vertices[RefreshChunk];
-    // A plan leaves the attributes its format lacks, and a narrow one's last components, as they were: they must read
-    // as zero, as the build's fresh GxVertex has them, so a new plan zeroes what the last had written and it won't.
-    constexpr std::uint8_t Components[12] = {3, 3, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2};  // a color counts as one
-    std::uint8_t zeroFrom[12];  // from this component on, each attribute is zero in every chunk vertex
-    std::copy(Components, Components + 12, zeroFrom);
-    const auto clear = [&](unsigned a, unsigned k) {
-        for (unsigned i = 0; i < RefreshChunk; ++i) {
-            if (a == 2) std::memset(chunk[i].color[0], 0, 4);
-            else (a == 0 ? chunk[i].position : a == 1 ? chunk[i].normal : chunk[i].texcoord[a - 4])[k] = 0;
-        }
-    };
     const GxVertexLayout* layouts[8] = {};
-    GxVertexLayout::Plan plan;
+    MeshFetch fetch;
     unsigned format = 8, filled = 0;
     std::size_t decoded = 0;
     const auto flush = [&] {
         if (!filled) return;
-        if (!inOrder && fresh.size() < (decoded + filled) * stride) fresh.resize((decoded + filled) * stride);
-        std::uint8_t* const into = (inOrder ? out : fresh.data()) + decoded * stride;
-        layouts[format]->read(vertices, chunk, filled, plan);
-        packer.pack(chunk, filled, into);
-        if (inOrder)
-            for (unsigned k = 0; k < filled; ++k) keepSlot(decoded + k);
+        if (!inOrder && scratch.size() < (decoded + filled) * stride) scratch.resize((decoded + filled) * stride);
+        std::uint8_t* const into = (inOrder ? out : scratch.data()) + decoded * stride;
+        fetch.run(vertices, filled, into, stride);
+        if (inOrder && packing.slot != GxMeshLayout::Absent) {
+            std::uint8_t* to = out + decoded * stride + packing.slot;
+            const std::uint8_t* from = built + decoded * stride + packing.slot;
+            for (unsigned k = 0; k < filled; ++k, to += stride, from += stride) std::memcpy(to, from, sizeof(float));
+        }
         decoded += filled, filled = 0;
     };
     for (std::uint32_t at = 0; at < size;) {
@@ -1525,37 +1593,33 @@ bool GxVertexPipeline::refreshMesh(const std::uint8_t* list, std::uint32_t size,
         const std::uint16_t primitive = static_cast<std::uint16_t>(list[at + 1] << 8 | list[at + 2]);
         const unsigned f = op & 7;
         if (!layouts[f]) layouts[f] = &gpu_->layout(static_cast<std::uint8_t>(f));
-        const GxVertexLayout& layout = *layouts[f];
-        if (at + 3 + std::uint32_t(primitive) * layout.size > size) return false;
+        const std::uint32_t vertexSize = layouts[f]->size;  // read once: the stores below could alias it
+        if (at + 3 + std::uint32_t(primitive) * vertexSize > size) return false;
         std::size_t take = inOrder ? std::min<std::size_t>(primitive, count - decoded - filled) : primitive;
         if (take && f != format) {
             flush();
-            plan = layout.plan(mask);
-            for (unsigned a = 0; a < 12; ++a) {
-                if (!(mask >> a & 1)) continue;
-                for (unsigned k = plan.width[a]; k < zeroFrom[a]; ++k) clear(a, k);
-                zeroFrom[a] = plan.width[a];
-            }
+            fetch.make(*layouts[f], packing, mask);
             format = f;
         }
         for (const std::uint8_t* vertex = list + at + 3; take;) {
             const std::size_t run = std::min<std::size_t>(take, RefreshChunk - filled);
-            for (std::size_t k = 0; k < run; ++k, vertex += layout.size) vertices[filled + k] = vertex;
+            for (std::size_t k = 0; k < run; ++k, vertex += vertexSize) vertices[filled + k] = vertex;
             filled += static_cast<unsigned>(run), take -= run;
             if (filled == RefreshChunk) flush();
         }
-        at += 3 + std::uint32_t(primitive) * layout.size;
+        at += 3 + std::uint32_t(primitive) * vertexSize;
     }
     flush();
     if (inOrder) return decoded >= count;
-    for (std::size_t i = 0; i < count; ++i) {
-        if (origin[i] >= decoded) return false;
-        const std::uint8_t* from = fresh.data() + origin[i] * stride;
-        std::uint8_t* to = out + i * stride;
-        for (std::size_t k = 0; k < stride; k += 4) std::memcpy(to + k, from + k, 4);  // a vertex is whole words: newlib's memcpy can go a byte at a time
-        keepSlot(i);
+    const std::uint8_t* const from = scratch.data();
+    switch (stride / 4) {
+    case 6: return gatherVertices<6>(origin, count, decoded, stride, from, built, out, packing.slot);
+    case 8: return gatherVertices<8>(origin, count, decoded, stride, from, built, out, packing.slot);
+    case 9: return gatherVertices<9>(origin, count, decoded, stride, from, built, out, packing.slot);
+    case 10: return gatherVertices<10>(origin, count, decoded, stride, from, built, out, packing.slot);
+    case 11: return gatherVertices<11>(origin, count, decoded, stride, from, built, out, packing.slot);
+    default: return gatherVertices<0>(origin, count, decoded, stride, from, built, out, packing.slot);
     }
-    return true;
 }
 
 GxMeshLayout GxVertexPipeline::meshLayout() const {
