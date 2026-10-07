@@ -1370,6 +1370,8 @@ for relative, replacements in [
     ]),
     ("Game/Enemy/BegomanBase.cpp", [
         ('    if (MR::getWaterAreaObj(&info, mPosition) != nullptr) {\n', '    if (MR::getWaterAreaObj(&info, mPosition) != false) {\n', 1),
+        # Not a nullptr: two flags the constructor never set, read on a Topman's first frames (UBSan, Battlerock).
+        ('      mCanTrySetReturn() {\n', '      mIsTouchElectricRail(), mCanTrySetReturn(), mInvertSideVec() {\n', 1),
     ]),
     ("Game/Enemy/HammerHeadPackun.cpp", [
         ('    return jmap->mData ? jmap->mData->mNumEntries : nullptr;\n', '    return jmap->mData ? jmap->mData->mNumEntries : 0;\n', 1),
