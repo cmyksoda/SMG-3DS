@@ -2543,9 +2543,16 @@ struct Renderer {
         // Queued behind the draws so far, as the pass is behind it. Split here with the flush: C3D_SyncTextureCopy's split
         // leaves its part of the command list in the CPU's cache, and a real GPU then read stale words and froze.
         C3D_FrameSplit(GX_CMDLIST_FLUSH);
-        GX_TextureCopy(static_cast<u32*>(copy.depth ? target->frameBuf.depthBuf : target->frameBuf.colorBuf), GX_BUFFER_DIM(TargetTileRow / 16, 0),
-                       static_cast<u32*>(scratch.data), GX_BUFFER_DIM(TargetTileRow / 16, (ScratchTileRow - TargetTileRow) / 16),
-                       TargetTileRow * 50, GX_TRANSFER_RAW_COPY(1));
+        // Only the target's tile rows (8 screen columns each) the copy samples, a column either side for the filter.
+        const float left = float(copy.x) * 400.0f / frame.width, right = float(copy.x + copy.width) * 400.0f / frame.width;
+        // Never none: a transfer of no bytes freezes a real 3DS.
+        const unsigned firstRow = std::min(49u, unsigned(std::clamp(left - 1.0f, 0.0f, 400.0f)) / 8);
+        const unsigned endRow = std::max(firstRow + 1, std::min(50u, (unsigned(std::clamp(right + 1.0f, 0.0f, 400.0f)) + 7) / 8));
+        u8* const from = static_cast<u8*>(copy.depth ? target->frameBuf.depthBuf : target->frameBuf.colorBuf) + firstRow * TargetTileRow;
+        GX_TextureCopy(reinterpret_cast<u32*>(from), GX_BUFFER_DIM(TargetTileRow / 16, 0),
+                       reinterpret_cast<u32*>(static_cast<u8*>(scratch.data) + firstRow * ScratchTileRow),
+                       GX_BUFFER_DIM(TargetTileRow / 16, (ScratchTileRow - TargetTileRow) / 16), TargetTileRow * (endRow - firstRow),
+                       GX_TRANSFER_RAW_COPY(1));
 
         // Three bands, so the taps that reach past the copy's first and last rows can be clamped as the PE clamps them.
         const float step = copy.halfScale ? 2.0f : 1.0f, edge = 2.0f / float(copy.texHeight);
