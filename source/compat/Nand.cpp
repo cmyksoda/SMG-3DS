@@ -65,6 +65,9 @@ struct Locked {
 };
 } // namespace
 
+// The app ending: a save file being written finishes first, and none starts after (source/compat/OsReset.cpp).
+extern "C" void smgNandHold() { LightLock_Lock(&sLock); }
+
 extern "C" {
 s32 NANDGetHomeDir(char path[NAND_MAX_PATH]) {
     std::strcpy(path, home());
