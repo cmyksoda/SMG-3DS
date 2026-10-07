@@ -1190,13 +1190,12 @@ void GxVertexPipeline::texcoords(const GxVertex* v, unsigned n, GxDrawVertex* d)
 }
 
 namespace {
-bool inGuardBand(const float* p) {
-    const float g = GxVertexPipeline::GuardBand * p[3];
-    return p[0] <= g && -p[0] <= g && p[1] <= g && -p[1] <= g;
-}
+bool behindNear(const float* p) { return p[2] < -p[3]; }
 
-// The four planes of the guard band, each as distance = GuardBand * w + sign * (x or y), kept where it isn't negative.
-float guardDistance(const float* p, int plane) {
+// The near plane (z = -w), then the guard band's four (GuardBand * w + sign * (x or y)), each kept where its distance
+// isn't negative.
+float clipDistance(const float* p, int plane) {
+    if (plane == 4) return p[2] + p[3];
     return GxVertexPipeline::GuardBand * p[3] + (plane & 1 ? p[plane >> 1] : -p[plane >> 1]);
 }
 
@@ -1209,24 +1208,24 @@ GxDrawVertex between(const GxDrawVertex& a, const GxDrawVertex& b, float t) {
     return v;
 }
 
-// A triangle cut to the guard band (Sutherland-Hodgman, in clip space, so the PICA's perspective-correct interpolation
-// of each attribute is unchanged): up to seven corners, a convex polygon.
-unsigned clipToGuardBand(const GxDrawVertex& a, const GxDrawVertex& b, const GxDrawVertex& c, GxDrawVertex (&out)[7]) {
-    GxDrawVertex buffers[2][7] = {{a, b, c}};
-    unsigned n = 3;
-    for (int plane = 0; plane < 4; ++plane) {
-        const GxDrawVertex* from = buffers[plane & 1];
-        GxDrawVertex* to = buffers[~plane & 1];
+// A triangle cut at the near plane and to the guard band (Sutherland-Hodgman, in clip space, so the PICA's
+// perspective-correct interpolation of each attribute is unchanged): up to eight corners, a convex polygon.
+unsigned clipToGuardBand(const GxDrawVertex& a, const GxDrawVertex& b, const GxDrawVertex& c, GxDrawVertex (&out)[8]) {
+    GxDrawVertex buffers[2][8] = {{a, b, c}};
+    unsigned n = 3, k = 0;
+    for (int plane : {4, 0, 1, 2, 3}) {
+        const GxDrawVertex* from = buffers[k & 1];
+        GxDrawVertex* to = buffers[++k & 1];
         unsigned m = 0;
         for (unsigned i = 0; i < n; ++i) {
             const GxDrawVertex& p = from[i], &q = from[(i + 1) % n];
-            const float dp = guardDistance(p.position, plane), dq = guardDistance(q.position, plane);
+            const float dp = clipDistance(p.position, plane), dq = clipDistance(q.position, plane);
             if (dp >= 0) to[m++] = p;
             if ((dp >= 0) != (dq >= 0)) to[m++] = between(p, q, dp / (dp - dq));
         }
         if ((n = m) < 3) return 0;
     }
-    std::copy(buffers[0], buffers[0] + n, out);
+    std::copy(buffers[k & 1], buffers[k & 1] + n, out);
     return n;
 }
 } // namespace
@@ -1240,14 +1239,15 @@ std::size_t GxVertexPipeline::triangles(GxDrawVertex* vertices, std::uint16_t co
         const float det = pa[0] * (pb[1] * pc[3] - pc[1] * pb[3]) - pb[0] * (pa[1] * pc[3] - pc[1] * pa[3]) + pc[0] * (pa[1] * pb[3] - pb[1] * pa[3]);
         return reject_ == 3 || (reject_ == 1 && det > 0) || (reject_ == 2 && det < 0);
     };
+    // Only a triangle the PICA would cut at the near plane is cut here: its new corners are what land far off the screen.
     bool outside = false;
-    for (std::uint16_t i = 0; i < count && !outside; ++i) outside = !inGuardBand(vertices[i].position);
+    for (std::uint16_t i = 0; i < count && !outside; ++i) outside = behindNear(vertices[i].position);
     const std::size_t room = maxVertices(kind_, count);
     std::size_t corners = count;  // where a cut triangle's corners go
     const auto emit = [&](int a, int b, int c) {
         const float* pa = vertices[a].position, *pb = vertices[b].position, *pc = vertices[c].position;
-        if (outside && !(inGuardBand(pa) && inGuardBand(pb) && inGuardBand(pc)) && corners + 7 <= room) {
-            GxDrawVertex cut[7];
+        if (outside && (behindNear(pa) || behindNear(pb) || behindNear(pc)) && corners + 8 <= room) {
+            GxDrawVertex cut[8];
             const unsigned m = clipToGuardBand(vertices[a], vertices[b], vertices[c], cut);
             ++trianglesCut;
             const std::size_t at = corners;

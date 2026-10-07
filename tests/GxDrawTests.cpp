@@ -1014,8 +1014,8 @@ void foldedTexgens() {
                         for (float& f : v) f = static_cast<float>(random.below(2000)) / 100 - 10;
                     for (auto& v : in)
                         for (float f : v) vertices.f32(f);
-                    smg::GxDrawVertex fromBytes[8] = {}, fromDecoded[8] = {};
-                    std::uint16_t indices[24];
+                    smg::GxDrawVertex fromBytes[smg::GxVertexPipeline::maxVertices(0x90, 8)] = {}, fromDecoded[smg::GxVertexPipeline::maxVertices(0x90, 8)] = {};
+                    std::uint16_t indices[smg::GxVertexPipeline::maxIndices(0x90, 8)];
                     pipeline.run(vertices.bytes.data(), 8, fromBytes, 0, indices);
                     smg::GxVertex decoded[8];
                     for (int i = 0; i < 8; ++i) decoded[i] = gpu.readVertex(vertices.bytes.data() + i * 32, 0);
@@ -1864,42 +1864,43 @@ void drawStateKey() {
     check(!(markers & 1) && (after != before || std::memcmp(key, base, after * 4)), "and one that can't changes it");
 }
 
-// A quad reaching twenty screens to the right is cut at the guard band: every corner within it, the screen covered as
-// before, and the texture coordinate at the cut where the quad had it.
+// A quad from in front of the camera to behind it is cut at the near plane and to the guard band, its texture coordinates
+// with it; a quad far past the screen with nothing behind the near plane (a 2D draw) reaches the PICA uncut.
 void guardBand() {
     auto owned = std::make_unique<smg::GxCommandProcessor>(host());
     smg::GxCommandProcessor& gpu = *owned;
     Stream s;
     clearState(s);
     s.bp(0xC008FFF8);  // color (0, 0, 0, TEXC)
-    s.u8(0x80), s.u16(4);
-    for (unsigned c : {0u, 1u, 3u, 2u}) s.u16(c & 1 ? 6400 : 0), s.u16(c & 2 ? 480 : 0), s.u8(c & 1), s.u8(c >> 1);
+    const float n = 1, f = 10;
+    s.xff(0x1020, {1, 0, 1, 0, -n / (f - n), -f * n / (f - n)}), s.xf(0x1026, {0});
+    s.xff(0x000, {0.01f, 0, 0, -3.2f, 0, 0.01f, 0, -2.4f, 0.01f, 0, 0, -4});  // view z from -4 at the left edge to 2.4 at the right
+    quad(s, {0, 1, 3, 2});
     drawn.clear();
     gpu.put(s.bytes.data(), static_cast<std::uint32_t>(s.bytes.size()));
     smg::GxDraw d;
     smg::buildGxDraw(gpu, drawn[0].kind, drawn[0].format, drawn[0].count, drawn[0].data.data(), {}, d);
     const float g = smg::GxVertexPipeline::GuardBand;
-    bool within = !d.triangles.empty(), cutAtTheBand = false;
+    bool within = !d.triangles.empty(), onNear = false, coordinates = true;
     for (const smg::GxDrawVertex& v : d.triangles) {
         const float* p = v.position;
-        within &= std::fabs(p[0]) <= g * p[3] * 1.0001f && std::fabs(p[1]) <= g * p[3] * 1.0001f;
-        if (near(p[0] / p[3], g)) cutAtTheBand = true, within &= std::fabs(v.texcoord[0][0] - (g + 1) / 20) < 1e-3f;
-    }
-    check(within && cutAtTheBand, "a quad far past the screen is cut at the guard band, its texture coordinates with it");
-    // Every point of the screen is covered by one of the cut triangles, as by the quad.
-    const auto covered = [&](float x, float y) {
-        for (std::size_t t = 0; t + 2 < d.triangles.size(); t += 3) {
-            const float* a = d.triangles[t].position, *b = d.triangles[t + 1].position, *c = d.triangles[t + 2].position;
-            const auto side = [&](const float* p, const float* q) { return (q[0] / q[3] - p[0] / p[3]) * (y - p[1] / p[3]) - (q[1] / q[3] - p[1] / p[3]) * (x - p[0] / p[3]); };
-            const float s0 = side(a, b), s1 = side(b, c), s2 = side(c, a);
-            if ((s0 >= -1e-5f && s1 >= -1e-5f && s2 >= -1e-5f) || (s0 <= 1e-5f && s1 <= 1e-5f && s2 <= 1e-5f)) return true;
+        within &= p[2] >= -p[3] * 1.0001f && std::fabs(p[0]) <= g * p[3] * 1.0001f && std::fabs(p[1]) <= g * p[3] * 1.0001f;
+        if (std::fabs(p[2] + p[3]) < 1e-4f) {
+            // On the near plane w = 1 = -z_view, so z_view = x_view * 0.01 - 4 puts x at 300 (of 640) in the list's units.
+            onNear = true, coordinates &= std::fabs(v.texcoord[0][0] - 300.0f / 640) < 2e-3f;
         }
-        return false;
-    };
-    bool all = true;
-    for (float x = -0.95f; x < 1; x += 0.1f)
-        for (float y = -0.95f; y < 1; y += 0.1f) all &= covered(x, y);
-    check(all, "and the screen stays covered");
+    }
+    check(within && onNear && coordinates, "a quad crossing behind the camera is cut at the near plane and the guard band, its texture coordinates with it");
+
+    Stream flat;
+    clearState(flat);
+    flat.u8(0x80), flat.u16(4);
+    for (unsigned c : {0u, 1u, 3u, 2u}) flat.u16(c & 1 ? 6400 : 0), flat.u16(c & 2 ? 480 : 0), flat.u8(c & 1), flat.u8(c >> 1);
+    drawn.clear();
+    gpu.put(flat.bytes.data(), static_cast<std::uint32_t>(flat.bytes.size()));
+    smg::GxDraw wide;
+    smg::buildGxDraw(gpu, drawn[0].kind, drawn[0].format, drawn[0].count, drawn[0].data.data(), {}, wide);
+    check(wide.triangles.size() == 6, "a 2D quad twenty screens wide reaches the PICA as two triangles, uncut");
 }
 
 int runGxDrawTests() {

@@ -1494,12 +1494,13 @@ until these held:
   finishes, then `ndspExit`, `aptExit` (the farewell HOME waits for) and `svcExitProcess`. The game's own power-off
   is not waited for, as it needs the GPU, which HOME holds. (Still open: the app's steps all finish within ~45 ms, yet
   the system then reports an error or hangs, from HOME and from the power menu alike.)
-- Triangles drawn through the CPU path that reach more than four screens past the screen's center are cut there first
-  (`GxVertexPipeline::GuardBand`, in clip space, so every attribute interpolates as before; a triangle's cut corners
-  follow its primitive's vertices). Azahar's PC GPU takes a triangle of any size, while a real PICA likely garbles
-  corners far off the screen: the shooting stars' trails (JPA stripes, drawn unclipped on the Wii) became giant
-  streaks there. At the castle about 10 to 40 triangles a frame are cut. Not yet confirmed on the console; the sky, a
-  cached mesh around the camera whose near-cut corners land 190,000 pixels off, is the next candidate.
+- A triangle drawn through the CPU path with a corner behind the near plane is cut there and to a guard band four
+  screens around the screen first (`GxVertexPipeline::GuardBand`, in clip space, so every attribute interpolates as
+  before; the cut corners follow the primitive's vertices). The PICA cuts such a triangle itself, and its new corners
+  can land thousands of screens off, which Azahar's PC GPU takes and a real PICA likely garbles: the shooting stars'
+  trails (JPA stripes, drawn unclipped on the Wii) became giant streaks there. Nothing else is touched (a 2D draw far
+  past the screen reaches the PICA as before). Not yet confirmed on the console; the sky, a cached mesh around the
+  camera whose near-cut corners land 190,000 pixels off, is the next candidate.
 - The game's mip levels stay off (`dev.gx_mips=1` turns them on). Azahar never samples a texture's smaller levels (each
   level tinted a flat shade shows nowhere, near or far), while a real 3DS does and showed them wrong: stray polygons in
   Peach's letter and glitches on the file select, gone with the first level alone, and a chessboard on the title's floor,

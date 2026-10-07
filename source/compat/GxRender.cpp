@@ -2409,8 +2409,8 @@ struct Renderer {
             std::fprintf(stderr, "gx perf: mesh draws through citro3d after a change of: combiner %.0f, fragment ops %.0f, cull %.0f, scissor %.0f, "
                          "textures %.0f, fixed attributes %.0f, CPU-path buffers %.0f, mesh layout %.0f, fog %.0f, command list %.0f\n", why[0] / n,
                          why[1] / n, why[2] / n, why[3] / n, why[4] / n, why[5] / n, why[6] / n, why[7] / n, why[8] / n, why[9] / n);
-            std::fprintf(stderr, "gx perf: pipeline per frame: %.0f prepares read whole, %.0f folds made, %.0f lighting reads, %.1f triangles cut to the "
-                         "guard band; vertex layouts %.0f read, "
+            std::fprintf(stderr, "gx perf: pipeline per frame: %.0f prepares read whole, %.0f folds made, %.0f lighting reads, %.1f triangles cut at the "
+                         "near plane; vertex layouts %.0f read, "
                          "%.0f reused; unfolded texgen vertices: matrix the position's %.0f, its pair %.0f, another %.0f, the last again %.0f, normalized %.0f\n",
                          pipeline.fullPrepares / n, pipeline.foldsMade / n, pipeline.lightingReads / n, pipeline.trianglesCut / n, lastGpu->layoutsRead / n,
                          lastGpu->layoutsReused / n, pipeline.texMatrixShared / n, pipeline.texMatrixPaired / n, pipeline.texMatrixOwn / n,
