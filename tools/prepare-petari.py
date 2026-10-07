@@ -1990,6 +1990,14 @@ adapt("src/Game/Screen/FileSelectButton.cpp", "Game/Screen/FileSelectButton.cpp"
      "    for (int i = 0; i < ARRAY_SIZE(mButtonCtrl); i++) {\n        mButtonCtrl[i]->_22 = false;\n    }\n\n"
      "    mButtonCtrl[4]->forceToHide();\n    MR::hidePaneRecursive(this, \"P2ManualButton\");\n", 1),
 ])
+# A stopped star bunny keeps only its velocity along the ground's normal. With no ground within ten units (mid-hop) the
+# lookup leaves the normal unwritten, and the stack's garbage multiplied the velocity a hundredfold a frame until the
+# bunny left Gateway at infinity (UBSan, Binder::findBindedPos); the gravity axis stands in for the ground there.
+adapt("src/Game/NPC/DemoRabbit.cpp", "Game/NPC/DemoRabbit.cpp", [
+    ("    TVec3f normal;\n    MR::getFirstPolyNormalOnLineToMap(&normal, mPosition, mGravity * 10.0f, nullptr, nullptr);\n",
+     "    TVec3f normal;\n    if (!MR::getFirstPolyNormalOnLineToMap(&normal, mPosition, mGravity * 10.0f, nullptr, nullptr)) {\n"
+     "        normal = -mGravity;\n    }\n", 1),
+])
 # The 3DS has no remote to shake: the remote's swing is also on while a spin button is held, and starts when one is pressed.
 adapt("src/Game/System/WPadHVSwing.cpp", "Game/System/WPadHVSwing.cpp", [
     ('#include "Game/System/WPadHVSwing.hpp"\n',
