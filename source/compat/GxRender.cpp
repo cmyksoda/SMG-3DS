@@ -239,6 +239,7 @@ struct Renderer {
         int loaders = 0;  // its place in meshLoaders
         u32 vertexCount = 0, indexCount = 0;
         u32 vertexPhysical = 0, indexPhysical = 0;
+        float center[3] = {};  // of its positions' bounds, where its texgens are kept small
         std::uint16_t slots = 0;
         std::vector<GxMesh::Group> groups;
         u32 lastFrame = 0;  // framesShown when last drawn
@@ -1808,6 +1809,13 @@ struct Renderer {
             cached.vertexPhysical = osConvertVirtToPhys(block), cached.indexPhysical = osConvertVirtToPhys(static_cast<std::uint8_t*>(block) + vertexBytes);
             cached.slots = mesh.slots;
             cached.groups = std::move(mesh.groups);
+            float low[3] = {INFINITY, INFINITY, INFINITY}, high[3] = {-INFINITY, -INFINITY, -INFINITY};
+            for (u32 v = 0; v < cached.vertexCount; ++v) {
+                float position[3];
+                std::memcpy(position, static_cast<const std::uint8_t*>(block) + v * mesh.layout.stride, sizeof position);
+                for (int c = 0; c < 3; ++c) low[c] = std::min(low[c], position[c]), high[c] = std::max(high[c], position[c]);
+            }
+            for (int c = 0; c < 3; ++c) cached.center[c] = cached.vertexCount ? (low[c] + high[c]) / 2 : 0;
             // Apart: a list and its arrays sit in different heaps, and one span over both would take in whatever lies between.
             cached.range[0][0] = reinterpret_cast<std::uintptr_t>(list), cached.range[0][1] = cached.range[0][0] + size;
             cached.range[1][0] = reinterpret_cast<std::uintptr_t>(mesh.arraysLo), cached.range[1][1] = reinterpret_cast<std::uintptr_t>(mesh.arraysHi);
@@ -1964,6 +1972,26 @@ struct Renderer {
         }
     }
 
+    // The PICA carries texture coordinates as 24-bit floats, and at a few thousand they lose whole texels (the castle
+    // lake's ripples, generated from world position): a repeating texture's move by whole periods to stay small.
+    void keepTexgensSmall(const CachedMesh& mesh, GxMeshUniforms& u) const {
+        for (unsigned unit = 0; unit < u.units; ++unit) {
+            const C3D_Tex* texture = sent.bound[unit];
+            if (!texture || u.projective[unit] || u.slotTexgen[unit]) continue;
+            const GxMeshLayout::Unit& input = mesh.layout.unit[unit];
+            const float* at = input.input == GxMeshLayout::OfPosition ? mesh.center : nullptr;  // other inputs stay near zero
+            for (int axis = 0; axis < 2; ++axis) {
+                const unsigned wrap = texture->param >> (axis ? 8 : 12) & 3;
+                const float period = wrap == GPU_REPEAT ? 1 : wrap == GPU_MIRRORED_REPEAT ? 2 : 0;
+                if (!period) continue;
+                float* row = u.texgen[unit][axis];
+                float value = row[3];
+                if (at) value += row[0] * at[0] + row[1] * at[1] + (input.floats == 3 ? row[2] * at[2] : 0);
+                row[3] -= period * std::floor(value / period);
+            }
+        }
+    }
+
     void drawMesh(const CachedMesh& mesh) {
         drawing = true;
         const struct Release { bool& flag; ~Release() { flag = false; } } release{drawing};
@@ -1975,6 +2003,7 @@ struct Renderer {
         const u64 uniforms = stepStart();
         GxMeshUniforms u;
         pipeline.meshUniforms(mesh.layout, mesh.slots, mesh.groups[0], u);
+        keepTexgensSmall(mesh, u);
         if (dumping) dumpMesh(mesh, u);
         if (u.reject == 3) return;  // GX culls every triangle
         slotUniforms(u);
