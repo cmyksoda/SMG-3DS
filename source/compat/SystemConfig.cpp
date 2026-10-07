@@ -33,11 +33,12 @@ u8 SCGetLanguage() {
 // (compat/smg/Screen.hpp).
 u8 SCGetAspectRatio() { return SC_ASPECT_RATIO_16x9; }
 
-// The 3DS's sound setting (config block 0x70001) has the Wii's three modes in the same order.
+// The 3DS's sound setting (config block 0x70001) has the Wii's three modes in the same order. Surround is stereo here:
+// the port's DSP mixes out only the front buffers, and surround puts most of a sound at the listener (Mario's) behind.
 u8 SCGetSoundMode() {
     u8 mode = SC_SOUND_MODE_STEREO;
     if (configReady()) CFGU_GetConfigInfoBlk2(sizeof mode, 0x70001, &mode);
-    return mode <= SC_SOUND_MODE_SURROUND ? mode : SC_SOUND_MODE_STEREO;
+    return mode == SC_SOUND_MODE_MONO ? mode : SC_SOUND_MODE_STEREO;
 }
 
 // TV output modes: the 3DS's screens are neither progressive component video nor PAL.
