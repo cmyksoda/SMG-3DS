@@ -1976,6 +1976,18 @@ adapt("src/Game/System/WPadPointer.cpp", "Game/System/WPadPointer.cpp", [
     ("    static const s32 sIsValidInScreenTime = 5;", "    static const s32 sIsValidInScreenTime = 0;", 1),
     ("    static const s32 sIsInValidOutScreenTime = 10;", "    static const s32 sIsInValidOutScreenTime = 0;", 1),
 ])
+# No Co-Star mode on the 3DS (Jaxi's call, 2026-10-07): the file select's P2 button, which opens its manual, is hidden
+# and never chosen.
+adapt("src/Game/Screen/FileSelectButton.cpp", "Game/Screen/FileSelectButton.cpp", [
+    ("    for (int i = 0; i < ARRAY_SIZE(mButtonCtrl); i++) {\n        mButtonCtrl[i]->appear();\n    }\n",
+     "    for (int i = 0; i < ARRAY_SIZE(mButtonCtrl); i++) {\n        if (i != 4) mButtonCtrl[i]->appear();\n    }\n", 1),
+    ("    for (int i = 0; i < ARRAY_SIZE(mButtonCtrl); i++) {\n        if (mButtonCtrl[i]->isPointingTrigger()) {\n",
+     "    for (int i = 0; i < ARRAY_SIZE(mButtonCtrl); i++) {\n        if (i == 4) continue;\n        if (mButtonCtrl[i]->isPointingTrigger()) {\n", 1),
+    ("\n    if (mButtonCtrl[4]->isPointing()) {\n        _48->show(MR::getGameMessageDirect(\"2PGuidanceIcon\"), \"P2Button\");\n    }\n", "\n", 1),
+    ("    for (int i = 0; i < ARRAY_SIZE(mButtonCtrl); i++) {\n        mButtonCtrl[i]->_22 = false;\n    }\n",
+     "    for (int i = 0; i < ARRAY_SIZE(mButtonCtrl); i++) {\n        mButtonCtrl[i]->_22 = false;\n    }\n\n"
+     "    mButtonCtrl[4]->forceToHide();\n    MR::hidePaneRecursive(this, \"P2ManualButton\");\n", 1),
+])
 # The 3DS has no remote to shake: the remote's swing is also on while a spin button is held, and starts when one is pressed.
 adapt("src/Game/System/WPadHVSwing.cpp", "Game/System/WPadHVSwing.cpp", [
     ('#include "Game/System/WPadHVSwing.hpp"\n',
