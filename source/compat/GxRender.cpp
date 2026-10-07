@@ -2540,10 +2540,12 @@ struct Renderer {
         }
         roomInQueue(2);
         roomFor(18);
-        // Queued behind the draws so far (inside a frame citro3d's "sync" copy does not wait), as the pass is behind it.
-        C3D_SyncTextureCopy(static_cast<u32*>(copy.depth ? target->frameBuf.depthBuf : target->frameBuf.colorBuf), GX_BUFFER_DIM(TargetTileRow / 16, 0),
-                            static_cast<u32*>(scratch.data),
-                            GX_BUFFER_DIM(TargetTileRow / 16, (ScratchTileRow - TargetTileRow) / 16), TargetTileRow * 50, GX_TRANSFER_RAW_COPY(1));
+        // Queued behind the draws so far, as the pass is behind it. Split here with the flush: C3D_SyncTextureCopy's split
+        // leaves its part of the command list in the CPU's cache, and a real GPU then read stale words and froze.
+        C3D_FrameSplit(GX_CMDLIST_FLUSH);
+        GX_TextureCopy(static_cast<u32*>(copy.depth ? target->frameBuf.depthBuf : target->frameBuf.colorBuf), GX_BUFFER_DIM(TargetTileRow / 16, 0),
+                       static_cast<u32*>(scratch.data), GX_BUFFER_DIM(TargetTileRow / 16, (ScratchTileRow - TargetTileRow) / 16),
+                       TargetTileRow * 50, GX_TRANSFER_RAW_COPY(1));
 
         // Three bands, so the taps that reach past the copy's first and last rows can be clamped as the PE clamps them.
         const float step = copy.halfScale ? 2.0f : 1.0f, edge = 2.0f / float(copy.texHeight);
