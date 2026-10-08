@@ -2989,6 +2989,10 @@ adapt("src/Game/Camera/CameraViewInterpolator.cpp", "Game/Camera/CameraViewInter
 adapt("src/Game/Screen/ImageEffectLocalUtil.cpp", "Game/Screen/ImageEffectLocalUtil.cpp", [
     ('#include "Game/Screen/ImageEffectLocalUtil.hpp"\n', '#include "Game/Screen/ImageEffectLocalUtil.hpp"\n#include <smg/Screen.hpp>\n', 1),
     ("    f32 aspect = MR::isScreen16Per9() ? 1.333f : 1.0f;", "    f32 aspect = MR::isScreen16Per9() ? smg::screen::PixelAspect : 1.0f;", 1),
+    # FallOutFieldDraw captures with 0 divisions: the Wii's divw by zero gives 0, so that capture starts at the corner.
+    ("void ImageEffectLocalUtil::capture(JUTTexture* pTexture, s32 divisions, s32 tile, GXTexFmt format, bool clear, u8 filter) {\n",
+     "void ImageEffectLocalUtil::capture(JUTTexture* pTexture, s32 divisions, s32 tile, GXTexFmt format, bool clear, u8 filter) {\n"
+     "    if (divisions == 0) {\n        pTexture->capture(0, 0, format, clear, filter);\n        return;\n    }\n", 1),
 ])
 # The HOME Button Menu never opens here (source/compat/HomeButtonMenu.cpp); its adjust still follows the screen.
 adapt("src/Game/Screen/HomeButtonLayout.cpp", "Game/Screen/HomeButtonLayout.cpp", [
