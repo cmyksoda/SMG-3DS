@@ -2031,6 +2031,22 @@ adapt("src/Game/Screen/StarPointerLayout.cpp", "Game/Screen/StarPointerLayout.cp
      "        mAnimType = HiddenPose;\n", 1),
 ])
 
+# One player: the second remote never connects (Kpad.cpp reads no samples for it), yet its pad ran every step, resetting
+# its pointer and pushing zero samples through its swing detector.
+adapt("src/Game/System/WPadHolder.cpp", "Game/System/WPadHolder.cpp", [
+    ("void WPadHolder::updateProjectPadData() {\n    for (u32 i = 0; i < ARRAY_SIZE(mPad); i++) {\n        mPad[i]->update();\n    }\n}\n",
+     "void WPadHolder::updateProjectPadData() {\n    mPad[0]->update();\n}\n", 1),
+])
+
+# One player: player 2's star bit shooter never shot, yet as an actor it moved every step, its failing aim dropping and
+# rescaling its charge effect by name each time, a sensor parked at the origin.
+adapt("src/Game/MapObj/StarPieceDirector.cpp", "Game/MapObj/StarPieceDirector.cpp", [
+    ("    for (int i = 0; i < ARRAY_SIZE(mStarPieceShooters); i++) {\n        mStarPieceShooters[i] = new StarPieceShooter(i, \"発射用アクター\");\n"
+     "        mStarPieceShooters[i]->initWithoutIter();\n    }\n",
+     "    mStarPieceShooters[0] = new StarPieceShooter(0, \"発射用アクター\");\n    mStarPieceShooters[0]->initWithoutIter();\n"
+     "    mStarPieceShooters[1] = nullptr;\n", 1),
+])
+
 # The 3DS has no remote to shake: the remote's swing is also on while a spin button is held, and starts when one is pressed.
 adapt("src/Game/System/WPadHVSwing.cpp", "Game/System/WPadHVSwing.cpp", [
     ('#include "Game/System/WPadHVSwing.hpp"\n',
