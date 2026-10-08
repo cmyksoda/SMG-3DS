@@ -2712,6 +2712,21 @@ adapt("src/Game/Screen/StarPointerDirector.cpp", "Game/Screen/StarPointerDirecto
      "    static f32 mtx_identity[4][4] = {{1.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f, 0.0f}, {}};", 1),
     ("        if (MR::isInRange(mInfos[channel]->mPos.x, 0.0f, MR::getScreenWidth() - 1) &&",
      "        if (mInfos[channel]->mInScreen && MR::isInRange(mInfos[channel]->mPos.x, 0.0f, MR::getScreenWidth() - 1) &&", 1),
+    # One player: player 2's pointer layout, never connected and hidden, is neither run nor drawn.
+    ("        for (s32 channel = 0; channel < StarPointerFunction::getNumStarPointer(); channel++) {\n            getStarPointerLayout(channel)->hideBlur();\n",
+     "        for (s32 channel = 0; channel < 1; channel++) {\n            getStarPointerLayout(channel)->hideBlur();\n", 1),
+    ("    for (s32 channel = 0; channel < StarPointerFunction::getNumStarPointer(); channel++) {\n        if (MR::isConnectedWPad(channel)) {\n",
+     "    for (s32 channel = 0; channel < 1; channel++) {\n        if (MR::isConnectedWPad(channel)) {\n", 1),
+    ("        for (s32 channel = 0; channel < StarPointerFunction::getNumStarPointer(); channel++) {\n            getStarPointerLayout(channel)->draw();\n",
+     "        for (s32 channel = 0; channel < 1; channel++) {\n            getStarPointerLayout(channel)->draw();\n", 1),
+])
+
+# One player: player 2's pointer never points at anything; its checks (65 places, each star bit's every step) stop at once.
+adapt("src/Game/Util/StarPointerUtil.cpp", "Game/Util/StarPointerUtil.cpp", [
+    ("                                   StarPointerFunc2 checkUpdateChannelFunc, bool enableTouch, bool disableShoot, bool singleTouch) {\n"
+     "        if (!getStarPointerLayout(channel)->mIsPointerValid) {\n",
+     "                                   StarPointerFunc2 checkUpdateChannelFunc, bool enableTouch, bool disableShoot, bool singleTouch) {\n"
+     "        if (channel != WPAD_CHAN0) {\n            return false;\n        }\n\n        if (!getStarPointerLayout(channel)->mIsPointerValid) {\n", 1),
 ])
 
 # Last: everything above may adapt a file these build on.
