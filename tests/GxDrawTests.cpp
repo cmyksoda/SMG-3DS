@@ -1892,6 +1892,15 @@ void guardBand() {
     }
     check(within && onNear && coordinates, "a quad crossing behind the camera is cut at the near plane and the guard band, its texture coordinates with it");
 
+    Stream behind;
+    behind.xff(0x000, {0.01f, 0, 0, -3.2f, 0, 0.01f, 0, -2.4f, 0.001f, 0, 0, 2});  // view z from 2 to 2.64: all behind the camera
+    quad(behind, {0, 1, 3, 2});
+    drawn.clear();
+    gpu.put(behind.bytes.data(), static_cast<std::uint32_t>(behind.bytes.size()));
+    smg::GxDraw gone;
+    smg::buildGxDraw(gpu, drawn[0].kind, drawn[0].format, drawn[0].count, drawn[0].data.data(), {}, gone);
+    check(gone.triangles.empty(), "a quad wholly behind the camera reaches the PICA as nothing");
+
     Stream flat;
     clearState(flat);
     flat.u8(0x80), flat.u16(4);
