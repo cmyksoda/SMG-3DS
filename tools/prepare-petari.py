@@ -1631,6 +1631,10 @@ for relative, replacements in [
         ('        if (selectTask() == nullptr) {\n', '        if (selectTask() == false) {\n', 1),
         ('            if (selectTask() != nullptr) {\n', '            if (selectTask() != false) {\n', 1),
     ]),
+    ("Game/Screen/ButtonPaneController.cpp", [
+        # A flag the constructor never set, read by update() on a button that never appeared (UBSan, the file select).
+        ("_22(true), _23(false), mAppearAnimName", "_22(true), _23(false), _24(false), mAppearAnimName", 1),
+    ]),
     ("Game/Screen/GalaxyMapSelectButton.cpp", [
         ('    return mPaneCtrl->mIsSelected != nullptr && mPaneCtrl->isDecidedWait();\n', '    return mPaneCtrl->mIsSelected != false && mPaneCtrl->isDecidedWait();\n', 1),
     ]),
