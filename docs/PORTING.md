@@ -1683,6 +1683,23 @@ the walk stops at the first block with any hit although that hit lies beyond it.
 One file has no attribute table (`CocoTree`) and one triangle of `BigBigFly` names a missing row; the
 game ignores both.
 
+**The ray cast, counted.** Shadows, ground checks and most of Mario's probes reach `KCollisionServer::checkArrow` through
+`CollisionParts::checkStrikeLine`, which collects every hit along the ray: the walk does not stop at the first block with one. A
+prism is listed in every block it touches, so the walk meets it again in the next block and tests it again (53% of the tests of
+Buoy Base's and the castle's shadow rays; 65% of the hits), and each repeated hit cost a full `Triangle::fillData`, about 520
+instructions, for a triangle already in the list. `source/compat/KCollisionArrow.cpp` holds the originals' `checkArrow` and
+`KCHitArrow` (left out of the adapted `KCollision.cpp`) with the same arithmetic in the same order, so every result and every
+write to the caller's arrays is the same to the bit: a prism already tested in the cast is looked up (a 128-slot table on the
+stack) instead of tested again, the dot products are not calls, the edge classification, which a collecting cast never reads, is
+not worked out, and the walk keeps its state in registers. `CollisionParts::checkStrikeLine` copies the triangle of a prism it
+has already filled in (without a triangle filter, the only case where hit number and slot agree). On an ARM11 build with the 3DS
+flags, over 7,200 shadow-like rays through Buoy Base's planet and parts and the castle's garden planet (Unicorn, instructions
+counted): the collecting cast takes 4,049 instructions instead of 7,325 (-45%), a part's strike with the pick of the nearest hit
+5,198 instead of 9,450 (-45%), the first-hit cast of `StageCollision` 1,861 instead of 2,595 (-28%). `collision_tests` holds
+Petari's `checkArrow` as an oracle (`tests/KclRayOracle.hpp`) and compares casts and part strikes over the floor, to the bit.
+Note `pFlags` is never written by a collecting cast, so `HitInfo::_88` reads uninitialized stack, as in Petari. On Azahar, Buoy Base 2 standing still (t=216..240), the animation share of a logic step (where shadows
+update) went 8.0-8.8 to 7.4-8.2 ms, the picture the same.
+
 All 1,758 BMD/BDL models load under ASan and UBSan (5,053,844 triangles), and 7,266 of their
 7,780 materials translate to the combiner exactly. Good Egg scenario 1 places 296 objects
 across 12 zones; the preview draws 56 rigid models in 172 placements.

@@ -146,6 +146,7 @@ add_library(petari_scene STATIC
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Util/StringUtilCompare.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Map/KCollision.cpp"
   "${PETARI}/src/Game/Map/KCollisionPlus.cpp"
+  source/compat/KCollisionArrow.cpp
   "${PETARI}/src/Game/Map/CollisionCode.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/LiveActor/RailRider.cpp"
   "${PETARI}/src/Game/Map/BezierRail.cpp"
@@ -172,7 +173,7 @@ add_library(petari_scene STATIC
   "${PETARI}/src/Game/Map/HitInfo.cpp"
   "${PETARI}/src/Game/Map/CollisionDirector.cpp"
   "${PETARI}/src/Game/Map/CollisionCategorizedKeeper.cpp"
-  "${PETARI}/src/Game/Map/CollisionParts.cpp"
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Map/CollisionParts.cpp"
   "${PETARI}/src/Game/LiveActor/LiveActorGroup.cpp"
   "${PETARI}/src/Game/LiveActor/AllLiveActorGroup.cpp"
   "${PETARI}/src/Game/LiveActor/SensorHitChecker.cpp"

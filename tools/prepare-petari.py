@@ -56,6 +56,9 @@ NATIVE = {
     "src/JSystem/JKernel/JKRHeap.cpp": ("the port's (source/compat/GameHeap.cpp)", [
         "void* operator new(size_t size) {", "void* operator new[](size_t size) {", "void operator delete(void* pData) {",
         "void operator delete[](void* pData) {"]),
+    # The ray cast skips prisms it has already met and calls no vector helper; the same results to the bit.
+    "src/Game/Map/KCollision.cpp": ("the port's (source/compat/KCollisionArrow.cpp)", [
+        "KC_PrismData* KCollisionServer::checkArrow(const TVec3f& rOrigin", "bool KCollisionServer::KCHitArrow(KC_PrismData* pPrism"]),
 }
 written = {}  # source -> (target, text) for each adapted copy, which remainders build on
 extracted = {}  # source -> first lines copied into extracts
@@ -551,6 +554,20 @@ adapt("src/Game/Map/KCollision.cpp", "Game/Map/KCollision.cpp", [
      "    // Wii pointers have the top bit set and file offsets never do; anywhere, a pointer into the image\n"
      "    // is no smaller than the image's own address, which no offset reaches.\n"
      "    return reinterpret_cast< uintptr_t >(static_cast< const KCLFile* >(pData)->mPos) >= reinterpret_cast< uintptr_t >(pData);", 1),
+])
+# A prism listed in several blocks comes back once for each; its repeats copy the first hit's triangle instead of filling it again.
+adapt("src/Game/Map/CollisionParts.cpp", "Game/Map/CollisionParts.cpp", [
+    ("    mServer->checkArrow(localPos, localDirection, distances, classifications, &count, prisms, maxHits);\n    u32 hitCount = 0;\n\n"
+     "    for (u32 i = 0; i < count; i++) {\n        HitInfo& hit = pHitInfo[hitCount];\n"
+     "        TVec3f position(localPos + localDirection * distances[i]);\n        mBaseMatrix.mult(position, position);\n"
+     "        hit.mParentTriangle.fillData(this, mServer->toIndex(prisms[i]), mHitSensor);\n",
+     "    mServer->checkArrow(localPos, localDirection, distances, classifications, &count, prisms, maxHits);\n    u32 hitCount = 0;\n\n"
+     "    for (u32 i = 0; i < count; i++) {\n        HitInfo& hit = pHitInfo[hitCount];\n"
+     "        TVec3f position(localPos + localDirection * distances[i]);\n        mBaseMatrix.mult(position, position);\n"
+     "        // Without a filter every hit is kept, so an earlier one of the same prism sits in the slot of its own number.\n"
+     "        u32 first = 0;\n\n        while (pFilter == nullptr && first < i && prisms[first] != prisms[i]) {\n            first++;\n        }\n\n"
+     "        if (pFilter == nullptr && first < i) {\n            hit.mParentTriangle = pHitInfo[first].mParentTriangle;\n        } else {\n"
+     "            hit.mParentTriangle.fillData(this, mServer->toIndex(prisms[i]), mHitSensor);\n        }\n", 1),
 ])
 # CollisionCode compiles as it is now that Triangle has come with CollisionParts.
 
