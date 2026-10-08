@@ -23,6 +23,7 @@ int runAnimationTests();
 int runActorTests();
 int runJ3DTransformTests();
 int runJ3DSkeletonTests();
+int runJ3DAnimTests();
 int runGxCommandTests();
 int runBmgTests();
 int runColorTests();
@@ -51,6 +52,7 @@ int main() {
     runActorTests();
     runJ3DTransformTests();
     runJ3DSkeletonTests();
+    runJ3DAnimTests();
     runGxCommandTests();
     runGxDrawTests();
     runGxCopyTests();

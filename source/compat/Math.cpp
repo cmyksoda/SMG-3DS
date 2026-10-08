@@ -43,15 +43,102 @@ void PSMTXRotAxisRad(Mtx m, const Vec* axis, f32 radians) {
                          {t*a.x*a.z - s*a.y, t*a.y*a.z + s*a.x, t*a.z*a.z + c, 0}};
     for (int row = 0; row < 3; ++row) for (int col = 0; col < 4; ++col) m[row][col] = rows[row][col];
 }
-void PSMTXConcat(const Mtx a, const Mtx b, Mtx out) {
-    f32 r[3][4];
+#if defined(__arm__) && defined(__VFP_FP__) && !defined(__SOFTFP__)
+// out = a b on s0-s15 alone, so no callee-saved pair is pushed and popped: a's 3x3 stays in s0-s8 and b goes by column.
+// The operations and their order are the C++ below's; every input is read before its place is stored to.
+asm(R"(
+    .arm
+    .fpu vfpv2
+    .macro CONCAT_LOAD_A
+        vldr s0, [r0]
+        vldr s1, [r0, #4]
+        vldr s2, [r0, #8]
+        vldr s3, [r0, #16]
+        vldr s4, [r0, #20]
+        vldr s5, [r0, #24]
+        vldr s6, [r0, #32]
+        vldr s7, [r0, #36]
+        vldr s8, [r0, #40]
+        mov ip, #0
+        vmov s13, ip
+    .endm
+    .macro CONCAT_COLUMN col, fourth, tee
+        vldr s9, [r1, #(4 * \col)]
+        vldr s10, [r1, #(16 + 4 * \col)]
+        vldr s11, [r1, #(32 + 4 * \col)]
+        vmul.f32 s12, s0, s9
+        vmul.f32 s14, s3, s9
+        vmul.f32 s15, s6, s9
+        vmla.f32 s12, s1, s10
+        vmla.f32 s14, s4, s10
+        vmla.f32 s15, s7, s10
+        vmla.f32 s12, s2, s11
+        vmla.f32 s14, s5, s11
+        vmla.f32 s15, s8, s11
+        .if \fourth
+        vldr s13, [r0, #12]
+        vadd.f32 s12, s12, s13
+        vldr s13, [r0, #28]
+        vadd.f32 s14, s14, s13
+        vldr s13, [r0, #44]
+        vadd.f32 s15, s15, s13
+        .else
+        vadd.f32 s12, s12, s13
+        vadd.f32 s14, s14, s13
+        vadd.f32 s15, s15, s13
+        .endif
+        vstr s12, [r2, #(4 * \col)]
+        vstr s14, [r2, #(16 + 4 * \col)]
+        vstr s15, [r2, #(32 + 4 * \col)]
+        .if \tee
+        vstr s12, [r3, #(4 * \col)]
+        vstr s14, [r3, #(16 + 4 * \col)]
+        vstr s15, [r3, #(32 + 4 * \col)]
+        .endif
+    .endm
+    .text
+    .align 2
+    .global PSMTXConcat
+    .type PSMTXConcat, %function
+PSMTXConcat:
+    CONCAT_LOAD_A
+    CONCAT_COLUMN 0, 0, 0
+    CONCAT_COLUMN 1, 0, 0
+    CONCAT_COLUMN 2, 0, 0
+    CONCAT_COLUMN 3, 1, 0
+    bx lr
+    .size PSMTXConcat, . - PSMTXConcat
+    .global smgMTXConcatTee
+    .type smgMTXConcatTee, %function
+smgMTXConcatTee:
+    CONCAT_LOAD_A
+    CONCAT_COLUMN 0, 0, 1
+    CONCAT_COLUMN 1, 0, 1
+    CONCAT_COLUMN 2, 0, 1
+    CONCAT_COLUMN 3, 1, 1
+    bx lr
+    .size smgMTXConcatTee, . - smgMTXConcatTee
+)");
+#else
+static inline void concat(const Mtx a, const Mtx b, f32 (&r)[3][4]) {
     for (int row = 0; row < 3; ++row) {
         for (int col = 0; col < 4; ++col) {
             r[row][col] = a[row][0]*b[0][col] + a[row][1]*b[1][col] + a[row][2]*b[2][col] + (col == 3 ? a[row][3] : 0);
         }
     }
+}
+void PSMTXConcat(const Mtx a, const Mtx b, Mtx out) {
+    f32 r[3][4];
+    concat(a, b, r);
     for (int row = 0; row < 3; ++row) for (int col = 0; col < 4; ++col) out[row][col] = r[row][col];
 }
+// PSMTXConcat(a, b, out), then PSMTXCopy(out, copy): the product is stored once from the registers into both.
+void smgMTXConcatTee(const Mtx a, const Mtx b, Mtx out, Mtx copy) {
+    f32 r[3][4];
+    concat(a, b, r);
+    for (int row = 0; row < 3; ++row) for (int col = 0; col < 4; ++col) out[row][col] = copy[row][col] = r[row][col];
+}
+#endif
 void PSMTXMultVecSR(const Mtx m, const Vec* src, Vec* dst) {
     const Vec v = *src;
     *dst = {m[0][0]*v.x + m[0][1]*v.y + m[0][2]*v.z,
@@ -62,12 +149,14 @@ void PSMTXMultVecArraySR(const Mtx m, const Vec* src, Vec* dst, u32 count) {
     for (u32 i = 0; i < count; ++i) PSMTXMultVecSR(m, &src[i], &dst[i]);
 }
 void PSMTXScale(Mtx m, f32 x, f32 y, f32 z) {
-    const f32 rows[3][4]{{x, 0, 0, 0}, {0, y, 0, 0}, {0, 0, z, 0}};
-    std::memcpy(m, rows, sizeof(rows));
+    m[0][0] = x, m[0][1] = 0, m[0][2] = 0, m[0][3] = 0;
+    m[1][0] = 0, m[1][1] = y, m[1][2] = 0, m[1][3] = 0;
+    m[2][0] = 0, m[2][1] = 0, m[2][2] = z, m[2][3] = 0;
 }
 void PSMTXTrans(Mtx m, f32 x, f32 y, f32 z) {
-    const f32 rows[3][4]{{1, 0, 0, x}, {0, 1, 0, y}, {0, 0, 1, z}};
-    std::memcpy(m, rows, sizeof(rows));
+    m[0][0] = 1, m[0][1] = 0, m[0][2] = 0, m[0][3] = x;
+    m[1][0] = 0, m[1][1] = 1, m[1][2] = 0, m[1][3] = y;
+    m[2][0] = 0, m[2][1] = 0, m[2][2] = 1, m[2][3] = z;
 }
 // The Apply forms put the scale or translation after src: each output row is src's row scaled, or moved.
 void PSMTXScaleApply(const Mtx src, Mtx dst, f32 x, f32 y, f32 z) {

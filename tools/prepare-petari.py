@@ -690,10 +690,74 @@ for header, fix in [("libs/JSystem/include/JSystem/J3DGraphAnimator/J3DAnimation
         mTranslationY = other.mTranslationY;
 #endif
     }""", 1))
+    if header.endswith("J3DAnimation.hpp"):
+        extra.append(("    void calcTransform(f32, u16, J3DTransformInfo*) const;\n\n    virtual ~J3DAnmTransformKey() {",
+                      "    // The same transform; `hints` remembers each channel's key between calls.\n"
+                      "    void calcTransformHinted(f32, u16, J3DTransformInfo*, u16* hints) const;\n"
+                      "    void calcTransform(f32 frame, u16 jointNo, J3DTransformInfo* pTransform) const {\n"
+                      "        u16 hints[9] = {};\n        calcTransformHinted(frame, jointNo, pTransform, hints);\n    }\n\n"
+                      "    virtual ~J3DAnmTransformKey() {", 1))
     if header.endswith("J3DTransform.hpp"):
         extra.append(("        return *this;\n    }\n#endif\n};", "        return *this;\n    }\n#else\n"
                       "    // GCC's implicit copy assigns every member, which is what the paired singles did.\n#endif\n};", 1))
     adapt(header, header.replace("libs/JSystem/include/", "include/"), [("#include <revolution.h>", fix, 1)] + extra)
+# A player reads a channel frame after frame, so its key is the last one or the next. The hint is used only when the
+# table confirms it, which for ascending times is the key the search over the whole table ends on.
+HINTED_SEARCH = """template < u32 Stride, typename T, typename Time >
+inline f32 J3DKeyHinted(f32 frame, Time when, u32 count, T* pData, u16* hint) {
+    // `when`: the frame as the key times are held (the s16 times are whole numbers, so its whole part).
+    if (when < pData[0]) {
+        return pData[1];
+    }
+
+    const u32 last = count - 1;
+    if (pData[last * Stride] <= when) {
+        return pData[last * Stride + 1];
+    }
+
+    u32 key = *hint;
+    if (!(key < last && pData[key * Stride] <= when && when < pData[(key + 1) * Stride])) {
+        key++;
+        if (!(key < last && pData[key * Stride] <= when && when < pData[(key + 1) * Stride])) {
+            u32 remaining = count;
+            key = 0;
+            while (remaining > 1) {
+                u32 half = remaining >> 1;
+                if (when >= pData[(key + half) * Stride]) {
+                    key += half;
+                    remaining -= half;
+                } else {
+                    remaining = half;
+                }
+            }
+        }
+        *hint = key;
+    }
+
+    pData += key * Stride;
+    if (Stride == 3) {
+        return J3DHermiteInterpolation(frame, &pData[0], &pData[1], &pData[2], &pData[3], &pData[4], &pData[5]);
+    }
+    return J3DHermiteInterpolation(frame, &pData[0], &pData[1], &pData[3], &pData[4], &pData[5], &pData[6]);
+}
+
+inline f32 J3DGetKeyFrameInterpolationHinted(f32 frame, J3DAnmKeyTableBase* pKeyTable, f32* pData, u16* hint) {
+    if (pKeyTable->mType == 0) {
+        return J3DKeyHinted< 3 >(frame, frame, pKeyTable->mMaxFrame, pData, hint);
+    }
+    return J3DKeyHinted< 4 >(frame, frame, pKeyTable->mMaxFrame, pData, hint);
+}
+
+inline f32 J3DGetKeyFrameInterpolationHinted(f32 frame, J3DAnmKeyTableBase* pKeyTable, s16* pData, u16* hint) {
+    if (!(frame >= 0.0f)) {
+        return J3DGetKeyFrameInterpolation(frame, pKeyTable, pData);
+    }
+    const s32 whole = frame < 32768.0f ? static_cast< s32 >(frame) : 32768;
+    if (pKeyTable->mType == 0) {
+        return J3DKeyHinted< 3 >(frame, whole, pKeyTable->mMaxFrame, pData, hint);
+    }
+    return J3DKeyHinted< 4 >(frame, whole, pKeyTable->mMaxFrame, pData, hint);
+}"""
 extract("src/JSystem/J3DGraphAnimator/J3DAnimation.cpp", "JSystem/J3DGraphAnimator/J3DAnimationKeys.cpp",
         '#include "JSystem/J3DGraphAnimator/J3DAnimation.hpp"\n#include "JSystem/J3DGraphBase/J3DStruct.hpp"\n'
         '#include "JSystem/JMath/JMath.hpp"\n#include <revolution/os.h>\n',
@@ -714,7 +778,14 @@ extract("src/JSystem/J3DGraphAnimator/J3DAnimation.cpp", "JSystem/J3DGraphAnimat
                 "    return value;\n#else\n    return JMAHermiteInterpolation(pp1, *pp2, *pp3, *pp4, *pp5, *pp6, *pp7);\n#endif\n}"),
                ("f32 J3DGetKeyFrameInterpolation(f32 frame", "template < typename T >\nf32 J3DGetKeyFrameInterpolation(f32 frame"),
                # Rotations are often negative; shifting one left is undefined before C++20 (slw just scales it).
-               ("<< mDecShift", "* (1 << mDecShift)", 8)],
+               ("<< mDecShift", "* (1 << mDecShift)", 8),
+               ("void J3DAnmTransformKey::calcTransform(f32 frame, u16 jointNo, J3DTransformInfo* pTransform) const {",
+                HINTED_SEARCH + "\n\nvoid J3DAnmTransformKey::calcTransformHinted(f32 frame, u16 jointNo, J3DTransformInfo* pTransform, u16* hints) const {", 1)]
+              + [(f"pTransform->{field}.{axis.lower()} = {cast}J3DGetKeyFrameInterpolation(frame, &entry{axis}->m{info}Info, &m{data}Data[entry{axis}->m{info}Info.mOffset])",
+                  f"pTransform->{field}.{axis.lower()} = {cast}J3DGetKeyFrameInterpolationHinted(frame, &entry{axis}->m{info}Info, &m{data}Data[entry{axis}->m{info}Info.mOffset], "
+                  f"&hints[{3 * a + c}])", 1)
+                 for a, axis in enumerate("XYZ") for c, (field, cast, info, data) in enumerate(
+                     [("mScale", "", "Scale", "Scale"), ("mRotation", "(int)", "Rotation", "Rot"), ("mTranslate", "", "Translate", "Trans")])],
         rest_fixes=[("    return value;\n#endif\n}",
                      "    return value;\n#else\n    return JMAHermiteInterpolation(pp1, *pp2, *pp3, *pp4, *pp5, *pp6, *pp7);\n#endif\n}"),
                     ("<< mDecShift", "* (1 << mDecShift)")])
@@ -1145,6 +1216,102 @@ adapt("src/Game/Player/J3DModelX.cpp", "Game/Player/J3DModelX.cpp", [
     ("        GXCallDisplayList(_1B4, _1BC);", "        smgGXCallDisplayListNow(_1B4, _1BC);", 1),
     ("        GXCallDisplayList(_1C4[index], _1CC[index]);", "        smgGXCallDisplayListNow(_1C4[index], _1CC[index]);", 1),
 ])
+# A last child without a callback skips its save and restore of J3DSys' matrix and scales: an ancestor restores them
+# before anything reads them.
+adapt("src/JSystem/J3DGraphAnimator/J3DJoint.cpp", "JSystem/J3DGraphAnimator/J3DJoint.cpp", [
+    ('#include "JSystem/J3DGraphBase/J3DSys.hpp"\n', '#include "JSystem/J3DGraphBase/J3DSys.hpp"\n#include <smg/AnimFast.hpp>\n', 1),
+    ("    PSMTXConcat(J3DSys::mCurrentMtx, anmMtx, J3DSys::mCurrentMtx);\n    PSMTXCopy(J3DSys::mCurrentMtx, anmMtx);",
+     "    smgMTXConcatTee(J3DSys::mCurrentMtx, anmMtx, J3DSys::mCurrentMtx, anmMtx);", 2),
+    ("""void J3DJoint::recursiveCalc() {
+    Mtx currentMtx;
+    Vec currentScale;
+    Vec parentScale;
+    J3DJointCallBack callback;
+    J3DMtxCalc* previousCalc = NULL;
+    PSMTXCopy(J3DSys::mCurrentMtx, currentMtx);
+    currentScale = J3DSys::mCurrentS;
+    parentScale = J3DSys::mParentS;
+    J3DMtxCalc* calc = mMtxCalc;
+    if (calc != NULL) {
+        previousCalc = mCurrentMtxCalc;
+        J3DMtxCalc::setJoint(this);
+        mCurrentMtxCalc = calc;
+        calc->calc();
+    } else if (mCurrentMtxCalc != NULL) {
+        J3DMtxCalc::setJoint(this);
+        mCurrentMtxCalc->calc();
+    }
+    callback = mCallBack;
+    if (callback != NULL) {
+        callback(this, 0);
+    }
+    if (mChild != NULL) {
+        mChild->recursiveCalc();
+    }
+    PSMTXCopy(currentMtx, J3DSys::mCurrentMtx);
+    J3DSys::mCurrentS = currentScale;
+    J3DSys::mParentS = parentScale;
+    if (previousCalc != NULL) {
+        mCurrentMtxCalc = previousCalc;
+    }
+    if (callback != NULL) {
+        callback(this, 1);
+    }
+    if (mYounger != NULL) {
+        mYounger->recursiveCalc();
+    }
+}
+""", """// `parentRestores`: an ancestor restores the matrix and scales after this sibling list, so a last child without a
+// callback keeps no copy of them.
+static void recursiveCalcJoint(J3DJoint* joint, bool parentRestores) {
+    J3DJointCallBack callback = joint->mCallBack;
+    const bool restore = !(parentRestores && joint->mYounger == NULL && callback == NULL);
+    Mtx currentMtx;
+    Vec currentScale;
+    Vec parentScale;
+    J3DMtxCalc* previousCalc = NULL;
+    if (restore) {
+        PSMTXCopy(J3DSys::mCurrentMtx, currentMtx);
+        currentScale = J3DSys::mCurrentS;
+        parentScale = J3DSys::mParentS;
+    }
+    J3DMtxCalc* calc = joint->mMtxCalc;
+    if (calc != NULL) {
+        previousCalc = J3DJoint::mCurrentMtxCalc;
+        J3DMtxCalc::setJoint(joint);
+        J3DJoint::mCurrentMtxCalc = calc;
+        calc->calc();
+    } else if (J3DJoint::mCurrentMtxCalc != NULL) {
+        J3DMtxCalc::setJoint(joint);
+        J3DJoint::mCurrentMtxCalc->calc();
+    }
+    if (callback != NULL) {
+        callback(joint, 0);
+    }
+    if (joint->mChild != NULL) {
+        recursiveCalcJoint(joint->mChild, true);
+    }
+    if (restore) {
+        PSMTXCopy(currentMtx, J3DSys::mCurrentMtx);
+        J3DSys::mCurrentS = currentScale;
+        J3DSys::mParentS = parentScale;
+    }
+    if (previousCalc != NULL) {
+        J3DJoint::mCurrentMtxCalc = previousCalc;
+    }
+    if (callback != NULL) {
+        callback(joint, 1);
+    }
+    if (joint->mYounger != NULL) {
+        recursiveCalcJoint(joint->mYounger, parentRestores);
+    }
+}
+
+void J3DJoint::recursiveCalc() {
+    recursiveCalcJoint(this, false);
+}
+""", 1),
+])
 # Each weighted envelope is its joints' animated matrices times their inverse binds, weighted; its scale flag
 # holds only if every joint in the mix is unscaled.
 adapt("src/JSystem/J3DGraphAnimator/J3DMtxBuffer.cpp", "JSystem/J3DGraphAnimator/J3DMtxBuffer.cpp", [
@@ -1161,33 +1328,71 @@ void J3DMtxBuffer::calcWeightEnvelopeMtx() {
     const u16 max = mJointTree->getWEvlpMtxNum();
     const u16* indices = mJointTree->getWEvlpMixMtxIndex();
     const f32* weights = mJointTree->getWEvlpMixWeight();
+    // A joint's animated matrix times its inverse bind is the same in every envelope that mixes it: made once.
+    constexpr u32 cached = 64;
+    Mtx products[cached];
+    u8 made[cached] = {};
     for (u16 i = 0; i < max; i++) {
         u8* pScale = &mpEvlpScaleFlagArr[i];
         *pScale = 1;
-        f32 sum[3][4] = {};
+        f32 sum[12];
         const u8 mixNum = mJointTree->getWEvlpMixMtxNum(i);
         for (u8 j = 0; j < mixNum; j++) {
             const u16 idx = *indices++;
             const f32 weight = *weights++;
-            Mtx product;
-            PSMTXConcat(mpAnmMtx[idx], mJointTree->getInvJointMtx(idx), product);
-            for (int row = 0; row < 3; row++) {
-                for (int column = 0; column < 4; column++) {
-                    sum[row][column] += product[row][column] * weight;
+            Mtx spare;
+            Mtx* product = &spare;
+            if (idx < cached) {
+                product = &products[idx];
+                if (!made[idx]) {
+                    PSMTXConcat(mpAnmMtx[idx], mJointTree->getInvJointMtx(idx), *product);
+                    made[idx] = 1;
+                }
+            } else {
+                PSMTXConcat(mpAnmMtx[idx], mJointTree->getInvJointMtx(idx), spare);
+            }
+            const f32* p = &(*product)[0][0];
+            // The first mix adds to zero, as before: a negative zero turns positive.
+            if (j == 0) {
+#pragma GCC unroll 12
+                for (int k = 0; k < 12; k++) {
+                    sum[k] = 0.0f + p[k] * weight;
+                }
+            } else {
+#pragma GCC unroll 12
+                for (int k = 0; k < 12; k++) {
+                    sum[k] += p[k] * weight;
                 }
             }
             *pScale &= mpScaleFlagArr[idx];
         }
-        MtxPtr weightAnmMtx = mpWeightEvlpMtx[i];
-        for (int row = 0; row < 3; row++) {
-            for (int column = 0; column < 4; column++) {
-                weightAnmMtx[row][column] = sum[row][column];
+        if (mixNum == 0) {
+            for (int k = 0; k < 12; k++) {
+                sum[k] = 0.0f;
             }
+        }
+        f32* weightAnmMtx = &mpWeightEvlpMtx[i][0][0];
+#pragma GCC unroll 12
+        for (int k = 0; k < 12; k++) {
+            weightAnmMtx[k] = sum[k];
         }
     }
 }
 #endif
 """, 1),
+])
+# Each joint remembers, for two tracks, where in each channel the key animation was last read (calcTransformHinted).
+adapt("include/Game/Animation/XanimeCore.hpp", "include/Game/Animation/XanimeCore.hpp", [
+    ("    /* 0x60 */ f32 _60;\n};", "    /* 0x60 */ f32 _60;\n    u16 mHints[2][9] = {};\n};", 1),
+])
+adapt("src/Game/Animation/XanimeCore.cpp", "Game/Animation/XanimeCore.cpp", [
+    ("    PSMTXConcat(J3DSys::mCurrentMtx, pMtx, J3DSys::mCurrentMtx);\n    PSMTXCopy(J3DSys::mCurrentMtx, pMtx);",
+     "    smgMTXConcatTee(J3DSys::mCurrentMtx, pMtx, J3DSys::mCurrentMtx, pMtx);", 2),
+    ('#include "Game/Animation/XanimeCore.hpp"\n', '#include "Game/Animation/XanimeCore.hpp"\n#include <smg/AnimFast.hpp>\n', 1),
+    ("            pTrack->_0->getTransform(joint, &transform);",
+     "            smgGetTransform(pTrack->_0, joint, &transform, mJointList[joint].mHints[i < 2 ? i : 1]);", 2),
+    ("    mTrackList[0]._0->getTransform(joint, &transform);",
+     "    smgGetTransform(mTrackList[0]._0, joint, &transform, mJointList[joint].mHints[0]);", 1),
 ])
 # Vertex color index tables: a base pointer plus an index held in the pointer field, through intptr_t so a
 # 64-bit host keeps the whole address.

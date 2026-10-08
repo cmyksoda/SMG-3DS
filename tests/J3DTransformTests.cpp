@@ -69,8 +69,10 @@ int runJ3DTransformTests() {
 
 #ifndef SMG_TEST_RUNNER
 int runJ3DSkeletonTests();
+int runJ3DAnimTests();
 int main() {
     runJ3DTransformTests();
+    runJ3DAnimTests();
     return runJ3DSkeletonTests();
 }
 #endif

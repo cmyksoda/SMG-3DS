@@ -90,7 +90,7 @@ target_link_libraries(petari_gravity PUBLIC petari_core)
 # JSystem's J3D: the model loader, joints, matrices and materials, as the game builds its models.
 set(J3D "${PETARI}/src/JSystem")
 add_library(petari_j3d STATIC
-  "${CMAKE_CURRENT_BINARY_DIR}/petari/JSystem/J3DGraphAnimator/J3DCluster.cpp" "${J3D}/J3DGraphAnimator/J3DJoint.cpp" "${J3D}/J3DGraphAnimator/J3DJointTree.cpp"
+  "${CMAKE_CURRENT_BINARY_DIR}/petari/JSystem/J3DGraphAnimator/J3DCluster.cpp" "${CMAKE_CURRENT_BINARY_DIR}/petari/JSystem/J3DGraphAnimator/J3DJoint.cpp" "${J3D}/J3DGraphAnimator/J3DJointTree.cpp"
   "${J3D}/J3DGraphAnimator/J3DMaterialAnm.cpp" "${J3D}/J3DGraphAnimator/J3DMaterialAttach.cpp" "${J3D}/J3DGraphAnimator/J3DModel.cpp"
   "${J3D}/J3DGraphAnimator/J3DModelData.cpp" "${CMAKE_CURRENT_BINARY_DIR}/petari/JSystem/J3DGraphAnimator/J3DMtxBuffer.cpp"
   "${J3D}/J3DGraphAnimator/J3DShapeTable.cpp" "${J3D}/J3DGraphAnimator/J3DSkinDeform.cpp"
@@ -119,12 +119,13 @@ if(NOT NINTENDO_3DS)
   set_source_files_properties("${J3D}/J3DGraphAnimator/J3DModel.cpp" "${J3D}/J3DGraphAnimator/J3DSkinDeform.cpp"
     PROPERTIES COMPILE_OPTIONS "-fno-sanitize=vptr")
 endif()
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${J3D}/J3DGraphBase/J3DTransform.cpp"
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${J3D}/J3DGraphBase/J3DTransform.cpp" "${J3D}/J3DGraphAnimator/J3DJoint.cpp"
   "${J3D}/J3DGraphAnimator/J3DMtxBuffer.cpp" "${J3D}/J3DGraphBase/J3DShape.cpp" "${J3D}/J3DGraphLoader/J3DAnmLoader.cpp"
   "${J3D}/J3DGraphLoader/J3DModelLoader.cpp")
 
 # The game's own animation core: blended BCK tracks as the joints' matrix calc.
-add_library(petari_anim STATIC "${PETARI}/src/Game/Animation/XanimeCore.cpp")
+add_library(petari_anim STATIC "${CMAKE_CURRENT_BINARY_DIR}/petari/Game/Animation/XanimeCore.cpp")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PETARI}/src/Game/Animation/XanimeCore.cpp" "${PETARI}/include/Game/Animation/XanimeCore.hpp")
 target_link_libraries(petari_anim PUBLIC petari_j3d)
 
 add_library(petari_scene STATIC
@@ -386,7 +387,7 @@ if(NINTENDO_3DS)
   if(SMG_BUILD_VALIDATION)
     add_executable(native_validation source/platform/PureVirtual.cpp tests/NativeTests.cpp tests/MathTests.cpp tests/PadTests.cpp tests/BcsvTests.cpp
       tests/ModelTests.cpp tests/CombinerTests.cpp tests/GravityTests.cpp tests/Etc1Tests.cpp tests/GpuTests.cpp
-      tests/NameObjTests.cpp tests/SceneTests.cpp tests/CollisionTests.cpp tests/AnimationTests.cpp tests/ActorTests.cpp tests/J3DTransformTests.cpp tests/J3DSkeletonTests.cpp
+      tests/NameObjTests.cpp tests/SceneTests.cpp tests/CollisionTests.cpp tests/AnimationTests.cpp tests/ActorTests.cpp tests/J3DTransformTests.cpp tests/J3DSkeletonTests.cpp tests/J3DAnimTests.cpp
       tests/GxCommandTests.cpp tests/BmgTests.cpp tests/ColorTests.cpp tests/LayoutTests.cpp tests/WideTests.cpp tests/GxDrawTests.cpp tests/GxFogTests.cpp tests/GxCopyTests.cpp tests/WiiDspTests.cpp tests/AudioDataTests.cpp tests/ThpTests.cpp)
     set_target_properties(native_validation PROPERTIES SUFFIX ".elf")
     smg_no_missing_weak(native_validation)
@@ -480,7 +481,7 @@ else()
   target_link_libraries(actor_tests PRIVATE smg_native_scene smg_platform)
   target_compile_options(actor_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME original_actor COMMAND actor_tests)
-  add_executable(j3d_transform_tests tests/J3DTransformTests.cpp tests/J3DSkeletonTests.cpp)
+  add_executable(j3d_transform_tests tests/J3DTransformTests.cpp tests/J3DSkeletonTests.cpp tests/J3DAnimTests.cpp)
   target_link_libraries(j3d_transform_tests PRIVATE smg_native_scene smg_platform)
   target_compile_options(j3d_transform_tests PRIVATE -Wall -Wextra -Werror)
   add_test(NAME j3d_transforms COMMAND j3d_transform_tests)

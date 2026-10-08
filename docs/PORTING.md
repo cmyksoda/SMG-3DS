@@ -1235,6 +1235,28 @@ that frame ("from arrays already refreshed this frame": an instance drawn twice)
 Azahar, Gusty Garden's daredevil run (CosmosGardenGalaxy 4, 136 refreshes a frame, standing still): the refresh zone
 21.1 to 12.1 ms a frame, the render thread 44.0 to 34.7.
 
+**Animation steps, counted.** The same ARM11 counting over `J3DModel::calc` for skeletons played by `XanimeCore`, the real code
+with the 3DS build's flags: fifteen sets of models and key animations from the disc, from a goomba (6 joints) and a train (5) to
+Mario (30 joints, 13 envelopes) and Koopa (70, 66 envelopes), alone or blended with a second track, sixteen whole frames each
+(`tools/mkblob.py` of the helper's bench). A step took 301,189 instructions over the set; now 247,660 (-17.8%; counting a
+multi-word load or store as its words and a division as 15, 363,476 to 287,119, -21.0%), from -7.6% (the train) to -28.6% (a
+model of 41 envelopes). By change, each cutting what the one before left: the envelope matrices make each joint's animated matrix
+times its inverse bind once for every envelope that mixes it, and sum in registers (-6.9%); a key animation finds each channel's
+key from where its player last read it, the hints kept in `XjointInfo`, trusted only when the table confirms them (-4.7%); a
+joint that is its parent's last child and has no callback keeps no copy of the traversal's matrix and scales, since an ancestor
+restores them before anything reads them, and the matrix times the joint's own is stored into both of its places at once
+(-4.1%); `PSMTXConcat` in VFP assembly on `s0-s15` alone, with no callee-saved pair to push and pop (-0.6% of instructions,
+-3.7% of the weighted count); a byte array for the envelope cache's flags and a scale matrix stored directly (-1.4%).
+Every byte is as it was: the matrices, scale flags and bookkeeping of all fifteen sets hash the same on both builds; so do 1,478
+sets across the disc's models and key animations (24 frames from frame 0), 4,000 random scenes on the ARM11 build (trees, joint callbacks, envelopes of more than 64
+joints, blends, stale hints, animations swapped under a player, equal neighboring key times) and 1,200 more with infinities,
+NaNs, denormals and negative zeros fed in (equal with every NaN taken as one: which NaN a product of two comes out as depends
+on the operand order the compiler picked, and the assembly's differs from the old code's); `tests/J3DAnimTests.cpp` holds the same comparisons against plain copies of the old arithmetic
+(on the device too). The hints rely on a table's key times never going down, which holds for all 97,413 animated key tables
+of the disc's 3,231 BCKs (199 have equal neighbors, which the test and the scenes include). On Azahar, standing still (t=216..240), the
+animation share of a logic step went 10.0-10.5 to 9.6-9.8 ms in Toy Time 5 and 8.0-8.7 to 7.4-8.0 ms in Buoy Base 2, the pictures
+the same.
+
 **The Comet Observatory at 30.** At the session 8 build the Observatory ran 26 to 29 frames a second with the render
 thread busy 34.2 ms a frame. In order, each measured on the same standing-still route: the commonest commands are read
 without a call (`GxCommandProcessor::command` takes BP runs, CP and XF loads itself; BP runs keep the mask and change
