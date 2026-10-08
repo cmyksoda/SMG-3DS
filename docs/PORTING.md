@@ -538,6 +538,15 @@ It can't see every returned local: `SimpleEffectObj::getClippingCenterOffset` re
 effect (Gateway) crashed in `SimpleEffectObj::init`. A local static holds it now, as for the temporaries in
 `MorphItemObjNeo.hpp` and `EffectObjGravityDust`; a search of the decomp for `return &name;` after a local
 declaration finds no other.
+**Undefined behavior at run time.** A 3DS build with UBSan in trap mode (`-fsanitize=undefined -fsanitize-trap`, no
+runtime; the workspace's `tools/build-ubsan.sh`) turns each check into an undefined instruction, which the fault handler
+names; the castle route and the galaxies' first scenarios run under it on Azahar. What it found is adapted to do what the Wii's code did, not
+what gcc may: a divide by zero gives what the Broadway's `divw` and `divwu` give (0 for a dividend that isn't
+negative; Dolphin's interpreter does the same), so `ImageEffectLocalUtil::capture` asked for 0 divisions (Matter
+Splatter's fall-out field) captures from the corner, and a `FlipPanel` whose glow animation has no frames (Flipswitch)
+takes the sync step itself as its frame. A field no constructor sets is set as the Wii's memory most likely held it
+(`ButtonPaneController`'s update flag, read for the file select's hidden player 2 button; earlier a Topman's flags).
+
 `SpinDriverPathStorage` keeps each galaxy's launch-star path ranges in one slot per scenario, sized by
 `getScenarioNum`, which skips hidden scenarios. That is safe: the game never plays a hidden scenario's own row (below,
 `dev.galaxy`). When `dev.galaxy` did, Freezeflame's sixth indexed one slot past the array and Space Junk's, whose row
