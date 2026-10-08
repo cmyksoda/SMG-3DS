@@ -2273,6 +2273,11 @@ adapt("src/Game/MapObj/StarPieceDirector.cpp", "Game/MapObj/StarPieceDirector.cp
      "    mStarPieceShooters[1] = nullptr;\n", 1),
 ])
 
+# A panel whose bloom animation has no frames divides by zero: the Wii's divwu gives 0, so its frame is the sync step itself.
+adapt("src/Game/MapObj/FlipPanel.cpp", "Game/MapObj/FlipPanel.cpp", [
+    ("u32 val = ::sBloomSyncStep / frameMax;", "u32 val = frameMax ? ::sBloomSyncStep / frameMax : 0;", 3),
+])
+
 # The 3DS has no remote to shake: the remote's swing is also on while a spin button is held, and starts when one is pressed.
 adapt("src/Game/System/WPadHVSwing.cpp", "Game/System/WPadHVSwing.cpp", [
     ('#include "Game/System/WPadHVSwing.hpp"\n',
