@@ -1501,10 +1501,11 @@ until these held:
   trails (JPA stripes, drawn unclipped on the Wii) became giant streaks there. Nothing else is touched (a 2D draw far
   past the screen reaches the PICA as before). Not yet confirmed on the console; the sky, a cached mesh around the
   camera whose near-cut corners land 190,000 pixels off, is the next candidate.
-- The game's mip levels stay off (`dev.gx_mips=1` turns them on). Azahar never samples a texture's smaller levels (each
-  level tinted a flat shade shows nowhere, near or far), while a real 3DS does and showed them wrong: stray polygons in
-  Peach's letter and glitches on the file select, gone with the first level alone, and a chessboard on the title's floor,
-  whose snapshot came out right that way.
+- The game's mip levels stay off (`dev.gx_mips=1` turns them on). A real 3DS showed them wrong: stray polygons in
+  Peach's letter and glitches on the file select, gone with the first level alone, and a chessboard on the title's
+  floor, whose snapshot came out right that way. Azahar samples them too (each smaller level tinted a flat color shows
+  on the file select's planets and the castle's ground), so a console's tinted picture can be set against Azahar's,
+  level by level, to see where they part.
 
 Timing there (being worked on; the castle, render thread on core 2): about 70 ms a frame. The renderer's CPU work
 matches Azahar's model or beats it, stage by stage; the GPU takes 50 to 60 ms (the castle's twelve EFB copies a frame,
