@@ -1699,4 +1699,4 @@ The portable math tests check tolerances and conventions, not bit-identical Gekk
 The native validation app passes 1,069 math, 37 WPad, 190 BCSV, 1,043 J3D model/texture,
 8,810 TEV combiner, 27 original gravity, 27 NameObj, 89 scene and gravity creator, 48 collision, 21 J3D animation, 13 original actor, 6 J3D transform, 6 J3D skeleton, 14 GX command processor, 19 BMG text, 9 color, TEV and display list word, 7 ETC1 and 8 GPU texture checks on emulated ARM
 in Azahar; the GPU checks compare the hardware's ETC1 decoding against ours. Of the disc's
-7,780 materials, 6,987 translate to the combiner exactly. No physical console has been tested.
+7,780 materials, 6,987 translate to the combiner exactly. The validation app has not yet run on a physical console; the game has (see "On a real 3DS").
