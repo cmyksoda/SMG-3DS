@@ -1,173 +1,49 @@
 # SMG-3DS
 
-A native Nintendo 3DS port project based on [SMGCommunity/Petari](https://github.com/SMGCommunity/Petari).
+An unfinished native port of *Super Mario Galaxy* to the New Nintendo 3DS, built on
+[Petari](https://github.com/SMGCommunity/Petari), the SMGCommunity's decompilation of the game.
 
-**Status: renderer bring-up. The current executable previews Galaxy stages; it does not run gameplay.**
-It builds for ARM11 using devkitARM, libctru, Citro3D, and Citro2D. Eleven Petari
-source files provide the running state machine, original button/stick handling, field hashing,
-level-table lookup, and trigonometric tables. Nine compile unchanged; JMapInfo and the
-trigonometric table source have adaptations applied to generated copies outside the checkout.
-Mario/actor simulation, collision, animation, audio, saves, and game menus still need integration.
-The target is the New Nintendo 3DS and New 2DS family.
+> **This project is archived.** Nobody is working on it, and it is not a finished or fully playable port.
+> The code is left here as it was when work stopped in October 2026, for anyone who wants to study it or pick it back up.
 
-## Controls
+## Status
 
-The layout follows the Switch release of Super Mario Galaxy, so anyone who played it in
-3D All-Stars or the Galaxy 1+2 collection already knows it. SMG-3DS targets the New
-Nintendo 3DS and New 2DS family; the original models lack ZL, ZR and the C-Stick.
+- **The game's own code runs on the 3DS.** All 1,803 of Petari's source files compile for the 3DS's ARM11 CPU,
+  running on a port of the Wii SDK layers the game calls: threads, the disc, video, the GX graphics API translated
+  to the 3DS's PICA200 GPU, and the Wii's audio DSP in software.
+- **In the Azahar emulator** it boots through the title screen, the file select and the storybook into the game.
+  Every galaxy loads and runs without crashing, most of them at 30 fps.
+- **On a real New 2DS XL** it boots and plays, but slowly: about 14 fps, mostly waiting on the GPU. The sky and some
+  textures draw wrong there, and closing it from the HOME Menu ends in an error or a hang.
+- **New 3DS and New 2DS only.** It needs ZL, ZR, the C-Stick and the faster CPU.
+- **Only the USA disc (RMGE01) was tested.** No game data is included. The port reads your own disc image from the SD card.
 
-| Action | New 3DS |
-| --- | --- |
-| Move | Circle Pad |
-| Camera | C-Stick, unless it drives the pointer |
-| Jump / swim | A or B |
-| Spin | X or Y |
-| Crouch / ground pound | ZL |
-| Shoot star bits | ZR |
-| Reset camera | L |
-| Recenter the pointer | R |
-| First-person view and camera nudges | D-pad |
-| Pause | Start |
-
-The star pointer has three modes, chosen on the bottom screen's **Options** page:
-
-- **Motion** (default) — tilt and turn the console, like handheld mode in the Switch
-  release. Sideways movement follows turns about the real vertical, measured against
-  gravity, so it works at any holding angle. A resting gyro offset is learned while the
-  console is still. R recenters.
-- **C-Stick** — the nub moves the pointer, with fine control near the center. R recenters.
-- **Stylus** — touching the bottom screen aims at the matching spot on the top screen,
-  and the pointer disappears the moment the stylus lifts. ZR shoots; the bottom-right
-  button toggles touch-to-shoot. A touch that starts on a button belongs to that button
-  until release, and a drag can cross any button without pressing it. The corner buttons
-  turn 50% transparent while aiming.
-
-Options also sets motion and C-Stick speed, inverts either axis, and restores the Switch
-layout. **Remap...** lists every action: tap one, press the button or buttons it should use,
-then tap again. Settings are saved to `sdmc:/3ds/SMG-3DS/settings.ini`, whose `bind.` lines
-can also be edited by hand, for example `bind.shoot=ZR+R`. The bottom screen's corner
-buttons reset the camera and recenter the pointer, and it lists the current bindings.
-
-The current build streams in Good Egg's first scenario as a stage preview: every rigid model
-its layers place, drawn with the game's own materials translated to the 3DS combiner. Fly
-with the Circle Pad, look with the C-Stick or D-pad, rise with A, sink with ZL, hold X to
-go faster, and press L to step through views of the start: behind it, close in front, level with
-Mario's head, and close behind him.
-Mario's own model stands where his start's pull meets the collision, idling through his wait
-animation; he is a model and an animation only, so none of these inputs reach him, the game's
-camera, or star bits yet. A `preview=` line in `settings.ini` opens another
-galaxy's scenario, named by its `StageData` folder: `preview=HeavenlyBeachGalaxy 2`.
-Original game icons load from the SD card once imported; until then the screens use text
-labels and a plain reticle. The diagnostic build exits with Start + Select.
-
-## Build
-
-Initialize the pinned upstream checkout:
+## Building
 
 ```sh
-git submodule update --init
-tools/build-3ds.sh
+git clone --recursive https://github.com/cmyksoda/SMG-3DS.git
+cd SMG-3DS
+tools/build-3ds.sh    # builds in Docker with a pinned devkitARM image, into ~/.cache/smg-3ds/3ds/
+tools/test-host.sh    # runs the host tests under ASan and UBSan
 ```
 
-The build script uses a pinned devkitPro Docker image and writes to
-`~/.cache/smg-3ds/3ds/SMG-3DS.3dsx`. Set `SMG_BUILD_DIR` to choose another **external** build directory.
-The source tree is mounted read-only. A normal devkitPro installation can instead build with:
+The game is `mario_probe.3dsx`. It kept the name from when it was a bring-up probe.
+[docs/HANDOFF.md](docs/HANDOFF.md) covers setting up the SD card, the controls, and running it in Azahar or on a console.
 
-```sh
-cmake -S . -B /path/outside/checkout/3ds -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE=tools/3ds-toolchain.cmake -DCMAKE_BUILD_TYPE=Release
-cmake --build /path/outside/checkout/3ds
-```
+## Picking it up
 
-For portable math, input, archive, model, and original core tests:
+Start with [docs/HANDOFF.md](docs/HANDOFF.md). It explains how the port is put together, how it was tested, what is
+known to be broken, and what was being worked on when it stopped. [docs/PORTING.md](docs/PORTING.md) holds the
+detailed notes on every part of the port.
 
-```sh
-cmake -S . -B /path/outside/checkout/host -G Ninja -DCMAKE_BUILD_TYPE=Debug
-cmake --build /path/outside/checkout/host
-ctest --test-dir /path/outside/checkout/host --output-on-failure
-```
+## Made with
 
-Configure the 3DS build with `-DSMG_BUILD_VALIDATION=ON` to also build
-`native_validation.3dsx`. This separate app runs the math, original controller, BCSV, and model
-tests on ARM and displays their result; it exits with Start.
+- [Petari](https://github.com/SMGCommunity/Petari) by the SMGCommunity, the decompilation all of this runs on (CC0)
+- [devkitPro](https://devkitpro.org/): devkitARM, libctru, citro3d and citro2d
+- [Azahar](https://azahar-emu.org/), the 3DS emulator, for everyday testing
+- [Wiimms ISO Tools](https://wit.wiimm.de/), [Dolphin](https://dolphin-emu.org/) and [3dbrew](https://www.3dbrew.org/)
+  as references for Wii discs, the Wii's hardware and the 3DS's
+- AI coding assistants: OpenAI's Codex did the first bring-up, and Anthropic's Claude (in Claude Code) wrote most of
+  the code after that, directed by cmyksoda and tested on real hardware
 
-The 3DS build also makes `mario_probe.3dsx`, a bring-up app that runs the game's own boot on the port's
-Wii OS, disc, video and memory layers until it reaches something not brought up yet, and names that in
-the log (Azahar: log filter `Debug.Emulated:Debug`, instant debug log on). It shows nothing of the game
-yet; `docs/PORTING.md` ("Running the game's own boot") says where it stands.
-
-## Game assets
-
-Petari contains no game assets. Keep your extracted disc data outside this checkout.
-No copyrighted textures, models, levels, or audio are included in this project.
-
-For an ISO, [Wiimms ISO Tools](https://wit.wiimm.de/wit/cmd-extract.html) can extract
-the data partition into a new external directory:
-
-```sh
-wit extract /path/to/galaxy.iso /path/to/extracted --psel data --pmode none
-```
-
-The resulting `files` directory is the game-data root. The host `resource_audit`
-tool checks its RARC archives and `.bcsv` files; extensionless stage tables are not
-included in that audit. Currently it reports the four U8-format
-Wii HOME Menu archives as unsupported.
-
-The runtime expects the contents of the disc's `files` directory at:
-
-```text
-sdmc:/3ds/SMG-3DS/game/
-  LayoutData/
-  ObjectData/
-  StageData/
-  ...
-```
-
-The game's own boot (`mario_probe.3dsx`) also reads the disc's file table and two tables linked into the game's
-program, from the `sys` directory `wit` extracts beside `files`:
-
-```text
-sdmc:/3ds/SMG-3DS/sys/fst.bin
-sdmc:/3ds/SMG-3DS/sys/main.dol
-```
-
-On boot, it validates `LayoutData/StarPieceCounter.arc` using the native Yaz0/RARC
-reader. If `StageData/EggStarGalaxy/EggStarGalaxyScenario.arc` is also present, it reads
-`ScenarioData.bcsv` through the original JMapInfo and reports the record count.
-These are resource probes, not a full-game data validation or playable stage.
-The readers decode big-endian fields explicitly and check bounds before use.
-
-Build `archive_tool` with the host build above to list archive contents:
-
-```sh
-/path/to/host/archive_tool /path/to/game/LayoutData/StarPieceCounter.arc
-/path/to/host/archive_tool /path/to/game/LayoutData/CameraInfo.arc
-```
-
-Select the actual star-bit and camera textures from those listings after visual inspection.
-Import each exact texture with `tools/import-icon.py`; do not guess an icon's provenance.
-The importer requires Python 3.11+, Wiimms Image Tool (`wimgt`), and Docker:
-
-```sh
-python3 tools/import-icon.py star-bit /path/to/archive.arc exact/texture.tpl \
-  --archive-tool /path/to/host/archive_tool --output /path/to/sd-staging/3ds/SMG-3DS/ui
-```
-
-For the USA disc, the visually verified selections are:
-
-| Kind | Archive in LayoutData | Entry |
-| --- | --- | --- |
-| `star-bit` | `StarPieceCounter.arc` | `timg/myiconstarpiece.tpl` |
-| `camera` | `CameraInfo.arc` | `timg/myiconcamera.tpl` |
-| `pointer` | `DPDPointer.arc` | `timg/dpdpointer.tpl` |
-
-The pointer renderer mirrors the 16×32 half-star horizontally, matching the original
-layout's texture addressing, and tints it blue or amber for the selected touch mode.
-The importer preserves a PNG preview and source hashes next to each `.t3x` texture.
-Copy `ui/star-bit.t3x`, `ui/camera.t3x`, and `ui/pointer.t3x` to the same paths under
-`sdmc:/3ds/SMG-3DS/`. Original textures must come from your game data.
-
-## Port architecture
-
-See [PORTING.md](docs/PORTING.md) for the engine boundaries, upstream revision,
-and work that remains. A successful build or host test is not proof of real 3DS performance.
+Super Mario Galaxy is © Nintendo. This is an unofficial fan project, not affiliated with or endorsed by Nintendo.
