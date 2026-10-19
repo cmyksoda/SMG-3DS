@@ -5,6 +5,9 @@ An unfinished native port of *Super Mario Galaxy* to the New Nintendo 3DS, built
 
 > **This project is archived.** Nobody is working on it, and it is not a finished or fully playable port.
 > The code is left here as it was when work stopped in October 2026, for anyone who wants to study it or pick it back up.
+>
+> **Want to pick it up?** Start with [docs/HANDOFF.md](docs/HANDOFF.md): where the port stands, how to build and test it,
+> and what was being worked on.
 
 ## Status
 
