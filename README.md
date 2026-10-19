@@ -49,4 +49,8 @@ detailed notes on every part of the port.
 - AI coding assistants: OpenAI's Codex did the first bring-up, and Anthropic's Claude (in Claude Code) wrote most of
   the code after that, directed by cmyksoda and tested on real hardware
 
+## License
+
+SMG-3DS is released under the [GNU General Public License v3.0](LICENSE). Petari, which it builds on, is CC0.
+
 Super Mario Galaxy is © Nintendo. This is an unofficial fan project, not affiliated with or endorsed by Nintendo.
